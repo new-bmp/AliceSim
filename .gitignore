@@ -1,0 +1,27 @@
+# Local Python and tool runtimes
+.venv/
+.vendor/
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Large optional model assets
+Alicepose-21points/
+
+# Local editor and OS metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Generated simulation/build output
+build/
+dist/
+out/
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+*.o
+*.obj

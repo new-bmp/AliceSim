@@ -1,0 +1,18 @@
+#MicroXplorer Configuration settings - do not modify
+File.Version=6
+KeepUserPlacement=false
+Mcu.CPN=STM32F103C8T6
+Mcu.Family=STM32F1
+Mcu.Name=STM32F103C8Tx
+Mcu.Package=LQFP48
+Mcu.Pin0=PC13-TAMPER-RTC
+Mcu.PinsNb=1
+Mcu.UserName=STM32F103C8Tx
+PC13-TAMPER-RTC.GPIOParameters=GPIO_Label
+PC13-TAMPER-RTC.GPIO_Label=STATUS_LED
+PC13-TAMPER-RTC.Locked=true
+PC13-TAMPER-RTC.Signal=GPIO_Output
+ProjectManager.ProjectName=CppStdlibBlink
+ProjectManager.ToolChain=Makefile
+board=custom
+isbadioc=false

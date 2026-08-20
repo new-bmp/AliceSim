@@ -1,0 +1,315 @@
+{
+  "schemaVersion": 2,
+  "libraryId": "alicesim-peripherals",
+  "name": "AliceSIM STM32 HAL 外设驱动库",
+  "version": "2.0.0",
+  "target": "STM32F103 HAL",
+  "attributionPolicy": "libdriver 制作 · AliceSIM 适配",
+  "commonFiles": [
+    "Drivers/AliceSIM/Inc/alicesim_peripherals.h"
+  ],
+  "drivers": [
+    {
+      "id": "ssd1306",
+      "name": "AliceSIM SSD1306 OLED",
+      "description": "128×64 I²C OLED 显存与绘图驱动。",
+      "componentTypes": ["oled"],
+      "files": [
+        "Drivers/AliceSIM/Inc/alicesim_ssd1306.h",
+        "Drivers/AliceSIM/Src/alicesim_ssd1306.c"
+      ],
+      "halModules": ["I2C"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {
+        "author": "libdriver",
+        "repository": "ssd1306",
+        "url": "https://github.com/libdriver/ssd1306",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "light-sensor",
+      "name": "AliceSIM 光敏传感器",
+      "description": "AO ADC 采样、照度换算与 DO 阈值读取。",
+      "componentTypes": ["lightSensor"],
+      "files": [
+        "Drivers/AliceSIM/Inc/alicesim_light_sensor.h",
+        "Drivers/AliceSIM/Src/alicesim_light_sensor.c"
+      ],
+      "halModules": ["ADC", "GPIO"],
+      "attribution": "AliceSIM 制作"
+    },
+    {
+      "id": "dht11",
+      "name": "AliceSIM DHT11 温湿度传感器",
+      "description": "单总线温湿度读取、校验与超时处理。",
+      "componentTypes": ["dht11"],
+      "files": [
+        "Drivers/AliceSIM/Inc/alicesim_dht11.h",
+        "Drivers/AliceSIM/Inc/alicesim_timing.h",
+        "Drivers/AliceSIM/Src/alicesim_dht11.c"
+      ],
+      "halModules": ["GPIO"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {
+        "author": "libdriver",
+        "repository": "dht11",
+        "url": "https://github.com/libdriver/dht11",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "hcsr04",
+      "name": "AliceSIM HC-SR04 超声波测距",
+      "description": "触发脉冲、回波计时与毫米距离换算。",
+      "componentTypes": ["hcsr04"],
+      "files": [
+        "Drivers/AliceSIM/Inc/alicesim_hcsr04.h",
+        "Drivers/AliceSIM/Inc/alicesim_timing.h",
+        "Drivers/AliceSIM/Src/alicesim_hcsr04.c"
+      ],
+      "halModules": ["GPIO", "TIM"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {
+        "author": "libdriver",
+        "repository": "hcsr04",
+        "url": "https://github.com/libdriver/hcsr04",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "sg90",
+      "name": "AliceSIM SG90 舵机",
+      "description": "PWM 脉宽、角度换算与校准。",
+      "componentTypes": ["sg90"],
+      "files": [
+        "Drivers/AliceSIM/Inc/alicesim_sg90.h",
+        "Drivers/AliceSIM/Src/alicesim_sg90.c"
+      ],
+      "halModules": ["TIM"],
+      "attribution": "AliceSIM 制作"
+    },
+    {
+      "id": "buzzer",
+      "name": "AliceSIM PWM 无源蜂鸣器",
+      "description": "PWM 音调、占空比与音符序列播放。",
+      "componentTypes": ["buzzer"],
+      "files": [
+        "Drivers/AliceSIM/Inc/alicesim_buzzer.h",
+        "Drivers/AliceSIM/Src/alicesim_buzzer.c"
+      ],
+      "halModules": ["TIM"],
+      "attribution": "AliceSIM 制作"
+    },
+    {
+      "id": "tm1637",
+      "name": "AliceSIM TM1637 四位数码管",
+      "description": "两线时序、亮度、数字与段码显示。",
+      "componentTypes": ["tm1637"],
+      "files": [
+        "Drivers/AliceSIM/Inc/alicesim_tm1637.h",
+        "Drivers/AliceSIM/Src/alicesim_tm1637.c"
+      ],
+      "halModules": ["GPIO"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {
+        "author": "libdriver",
+        "repository": "tm1637",
+        "url": "https://github.com/libdriver/tm1637",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "bmp280",
+      "name": "AliceSIM BMP280 气压温度传感器",
+      "description": "芯片识别、寄存器配置和原始温度/气压采样。",
+      "componentTypes": ["bmp280"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_bmp280.h", "Drivers/AliceSIM/Src/alicesim_bmp280.c"],
+      "halModules": ["I2C"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {"author": "libdriver", "repository": "bmp280", "url": "https://github.com/libdriver/bmp280", "license": "MIT"}
+    },
+    {
+      "id": "mpu6050",
+      "name": "AliceSIM MPU6050 六轴 IMU",
+      "description": "设备唤醒、身份校验及 14 字节运动数据读取。",
+      "componentTypes": ["mpu6050"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_mpu6050.h", "Drivers/AliceSIM/Src/alicesim_mpu6050.c"],
+      "halModules": ["I2C"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {"author": "libdriver", "repository": "mpu6050", "url": "https://github.com/libdriver/mpu6050", "license": "MIT"}
+    },
+    {
+      "id": "bh1750",
+      "name": "AliceSIM BH1750 数字照度传感器",
+      "description": "测量模式设置及照度原始值换算。",
+      "componentTypes": ["bh1750"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_bh1750.h", "Drivers/AliceSIM/Src/alicesim_bh1750.c"],
+      "halModules": ["I2C"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {"author": "libdriver", "repository": "bh1750fvi", "url": "https://github.com/libdriver/bh1750fvi", "license": "MIT"}
+    },
+    {
+      "id": "sht30",
+      "name": "AliceSIM SHT30 高精度温湿度",
+      "description": "单次测量、CRC 校验和温湿度定点换算。",
+      "componentTypes": ["sht30"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_sht30.h", "Drivers/AliceSIM/Src/alicesim_sht30.c"],
+      "halModules": ["I2C"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {"author": "libdriver", "repository": "sht30", "url": "https://github.com/libdriver/sht30", "license": "MIT"}
+    },
+    {
+      "id": "ds3231",
+      "name": "AliceSIM DS3231 实时时钟",
+      "description": "BCD 时间寄存器的读取与写入。",
+      "componentTypes": ["ds3231"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_ds3231.h", "Drivers/AliceSIM/Src/alicesim_ds3231.c"],
+      "halModules": ["I2C"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {"author": "libdriver", "repository": "ds3231", "url": "https://github.com/libdriver/ds3231", "license": "MIT"}
+    },
+    {
+      "id": "pcf8574",
+      "name": "AliceSIM PCF8574 八位 IO 扩展",
+      "description": "端口读写、输出锁存和单引脚更新。",
+      "componentTypes": ["pcf8574"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_pcf8574.h", "Drivers/AliceSIM/Src/alicesim_pcf8574.c"],
+      "halModules": ["I2C", "GPIO"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {"author": "libdriver", "repository": "pcf8574", "url": "https://github.com/libdriver/pcf8574", "license": "MIT"}
+    },
+    {
+      "id": "pca9685",
+      "name": "AliceSIM PCA9685 16 路 PWM 控制器",
+      "description": "PWM 频率配置和 16 路通道计数写入。",
+      "componentTypes": ["pca9685"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_pca9685.h", "Drivers/AliceSIM/Src/alicesim_pca9685.c"],
+      "halModules": ["I2C", "TIM"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {"author": "libdriver", "repository": "pca9685", "url": "https://github.com/libdriver/pca9685", "license": "MIT"}
+    },
+    {
+      "id": "ina219",
+      "name": "AliceSIM INA219 电压电流监测",
+      "description": "配置寄存器、总线电压和电流采样。",
+      "componentTypes": ["ina219"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_ina219.h", "Drivers/AliceSIM/Src/alicesim_ina219.c"],
+      "halModules": ["I2C", "ADC"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {"author": "libdriver", "repository": "ina219", "url": "https://github.com/libdriver/ina219", "license": "MIT"}
+    },
+    {
+      "id": "ds18b20",
+      "name": "AliceSIM DS18B20 单总线温度传感器",
+      "description": "可移植 OneWire 传输回调、温度转换和原始值读取。",
+      "componentTypes": ["ds18b20"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_ds18b20.h", "Drivers/AliceSIM/Src/alicesim_ds18b20.c"],
+      "halModules": ["GPIO"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {"author": "libdriver", "repository": "ds18b20", "url": "https://github.com/libdriver/ds18b20", "license": "MIT"}
+    },
+    {
+      "id": "max7219",
+      "name": "AliceSIM MAX7219 LED 点阵",
+      "description": "SPI 寄存器写入、亮度、行数据和清屏。",
+      "componentTypes": ["max7219"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_max7219.h", "Drivers/AliceSIM/Src/alicesim_max7219.c"],
+      "halModules": ["SPI", "GPIO"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {"author": "libdriver", "repository": "max7219", "url": "https://github.com/libdriver/max7219", "license": "MIT"}
+    },
+    {
+      "id": "w25qxx",
+      "name": "AliceSIM W25Qxx SPI Flash",
+      "description": "JEDEC ID、连续读取和页编程。",
+      "componentTypes": ["w25qxx"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_w25qxx.h", "Drivers/AliceSIM/Src/alicesim_w25qxx.c"],
+      "halModules": ["SPI", "GPIO"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {"author": "libdriver", "repository": "w25qxx", "url": "https://github.com/libdriver/w25qxx", "license": "MIT"}
+    },
+    {
+      "id": "ws2812",
+      "name": "AliceSIM WS2812B 灯带",
+      "description": "RGB 到 GRB 脉冲编码及可移植传输回调。",
+      "componentTypes": ["ws2812"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_ws2812.h", "Drivers/AliceSIM/Src/alicesim_ws2812.c"],
+      "halModules": ["TIM", "DMA"],
+      "attribution": "libdriver 制作 · AliceSIM 适配",
+      "upstream": {"author": "libdriver", "repository": "ws2812b", "url": "https://github.com/libdriver/ws2812b", "license": "MIT"}
+    },
+    {
+      "id": "rotary-encoder",
+      "name": "AliceSIM EC11 旋转编码器",
+      "description": "正交相位解码、位置累计和按键读取。",
+      "componentTypes": ["rotaryEncoder"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_rotary_encoder.h", "Drivers/AliceSIM/Src/alicesim_rotary_encoder.c"],
+      "halModules": ["GPIO"],
+      "attribution": "AliceSIM 制作"
+    },
+    {
+      "id": "potentiometer",
+      "name": "AliceSIM 电位器模拟输入",
+      "description": "ADC 原始值、电压和百分比读取。",
+      "componentTypes": ["potentiometer"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_potentiometer.h", "Drivers/AliceSIM/Src/alicesim_potentiometer.c"],
+      "halModules": ["ADC"],
+      "attribution": "AliceSIM 制作"
+    },
+    {
+      "id": "relay",
+      "name": "AliceSIM 单路继电器模块",
+      "description": "高低电平触发、吸合和翻转控制。",
+      "componentTypes": ["relay"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_relay.h", "Drivers/AliceSIM/Src/alicesim_relay.c"],
+      "halModules": ["GPIO"],
+      "attribution": "AliceSIM 制作"
+    },
+    {
+      "id": "pir",
+      "name": "AliceSIM HC-SR501 人体红外传感器",
+      "description": "可配置极性的运动检测输入。",
+      "componentTypes": ["pir"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_pir.h", "Drivers/AliceSIM/Src/alicesim_pir.c"],
+      "halModules": ["GPIO"],
+      "attribution": "AliceSIM 制作"
+    },
+    {
+      "id": "mq2",
+      "name": "AliceSIM MQ-2 气体传感器",
+      "description": "AO ADC 采样、电压换算和 DO 阈值读取。",
+      "componentTypes": ["mq2"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_mq2.h", "Drivers/AliceSIM/Src/alicesim_mq2.c"],
+      "halModules": ["ADC", "GPIO"],
+      "attribution": "AliceSIM 制作"
+    },
+    {
+      "id": "joystick",
+      "name": "AliceSIM 双轴摇杆模块",
+      "description": "双 ADC 轴采样和按键读取。",
+      "componentTypes": ["joystick"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_joystick.h", "Drivers/AliceSIM/Src/alicesim_joystick.c"],
+      "halModules": ["ADC", "GPIO"],
+      "attribution": "AliceSIM 制作"
+    },
+    {
+      "id": "mosfet",
+      "name": "AliceSIM N 沟道 MOSFET",
+      "description": "GPIO 栅极初始化、开关和翻转控制。",
+      "componentTypes": ["mosfet"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_mosfet.h", "Drivers/AliceSIM/Src/alicesim_mosfet.c"],
+      "halModules": ["GPIO"],
+      "attribution": "AliceSIM 制作"
+    },
+    {
+      "id": "dc-dc-converter",
+      "name": "AliceSIM 可调 DC-DC 电源转换模块",
+      "description": "输出电压、使能、额定电流与仿真过载状态接口。",
+      "componentTypes": ["dcDcConverter"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_dc_dc_converter.h", "Drivers/AliceSIM/Src/alicesim_dc_dc_converter.c"],
+      "halModules": ["GPIO"],
+      "attribution": "AliceSIM 制作"
+    }
+  ]
+}

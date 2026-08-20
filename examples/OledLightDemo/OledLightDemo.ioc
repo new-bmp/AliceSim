@@ -1,0 +1,17 @@
+#MicroXplorer Configuration settings - do not modify
+Mcu.CPN=STM32F103C8T6
+Mcu.Name=STM32F103C8Tx
+Mcu.Pin0=PB6
+Mcu.Pin1=PB7
+Mcu.Pin2=PA0-WKUP
+PB6.Mode=I2C
+PB6.Signal=I2C1_SCL
+PB7.Mode=I2C
+PB7.Signal=I2C1_SDA
+PA0-WKUP.Signal=ADC1_IN0
+I2C1.ClockSpeed=100000
+I2C1.DutyCycle=I2C_DUTYCYCLE_2
+I2C1.AddressingMode=I2C_ADDRESSINGMODE_7BIT
+ADC1.Channel-0\#ChannelRegularConversion=ADC_CHANNEL_0
+ADC1.Rank-0\#ChannelRegularConversion=1
+ADC1.SamplingTime-0\#ChannelRegularConversion=ADC_SAMPLETIME_55CYCLES_5

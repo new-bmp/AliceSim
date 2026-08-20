@@ -1,0 +1,33 @@
+#ifndef ALICESIM_PERIPHERALS_H
+#define ALICESIM_PERIPHERALS_H
+
+#include "alicesim_bh1750.h"
+#include "alicesim_bmp280.h"
+#include "alicesim_buzzer.h"
+#include "alicesim_dht11.h"
+#include "alicesim_dc_dc_converter.h"
+#include "alicesim_ds18b20.h"
+#include "alicesim_ds3231.h"
+#include "alicesim_hcsr04.h"
+#include "alicesim_ina219.h"
+#include "alicesim_joystick.h"
+#include "alicesim_light_sensor.h"
+#include "alicesim_max7219.h"
+#include "alicesim_mosfet.h"
+#include "alicesim_mpu6050.h"
+#include "alicesim_mq2.h"
+#include "alicesim_pca9685.h"
+#include "alicesim_pcf8574.h"
+#include "alicesim_pir.h"
+#include "alicesim_potentiometer.h"
+#include "alicesim_relay.h"
+#include "alicesim_rotary_encoder.h"
+#include "alicesim_sg90.h"
+#include "alicesim_sht30.h"
+#include "alicesim_ssd1306.h"
+#include "alicesim_timing.h"
+#include "alicesim_tm1637.h"
+#include "alicesim_w25qxx.h"
+#include "alicesim_ws2812.h"
+
+#endif

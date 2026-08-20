@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80">
+  <rect x="10" y="4" width="100" height="67" rx="7" fill="#3685bc" stroke="#1a547a" stroke-width="3"/>
+  <g fill="#d8effa"><rect x="20" y="14" width="12" height="8" rx="2"/><rect x="38" y="14" width="12" height="8" rx="2"/><rect x="56" y="14" width="12" height="8" rx="2"/><rect x="74" y="14" width="12" height="8" rx="2"/><rect x="88" y="14" width="12" height="8" rx="2"/><rect x="20" y="28" width="12" height="8" rx="2"/><rect x="38" y="28" width="12" height="8" rx="2"/><rect x="56" y="28" width="12" height="8" rx="2"/><rect x="74" y="28" width="12" height="8" rx="2"/><rect x="88" y="28" width="12" height="8" rx="2"/><rect x="20" y="42" width="12" height="8" rx="2"/><rect x="38" y="42" width="12" height="8" rx="2"/><rect x="56" y="42" width="12" height="8" rx="2"/><rect x="74" y="42" width="12" height="8" rx="2"/><rect x="88" y="42" width="12" height="8" rx="2"/></g>
+  <g stroke="#77602c" stroke-width="4"><path d="M36 70v10M60 70v10M84 70v10"/></g>
+</svg>

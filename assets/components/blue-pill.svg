@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 150 194">
+  <rect x="3" y="3" width="144" height="188" rx="5" fill="#eef3f5" stroke="#48616d" stroke-width="3"/>
+  <rect x="13" y="10" width="124" height="174" rx="3" fill="#287ba3" stroke="#15516d" stroke-width="2"/>
+  <rect x="51" y="15" width="48" height="20" rx="3" fill="#d9e1e4" stroke="#52636b" stroke-width="2"/><rect x="60" y="18" width="30" height="14" fill="#65737a"/>
+  <rect x="45" y="68" width="60" height="58" rx="3" fill="#26343a" stroke="#11191c" stroke-width="3"/><circle cx="53" cy="76" r="3" fill="#b7c5ca"/>
+  <rect x="51" y="138" width="48" height="18" rx="2" fill="#d5dadd" stroke="#68777d"/><rect x="59" y="141" width="32" height="12" fill="#78909a"/>
+  <g fill="#d09b36" stroke="#704d18"><path d="M8 20h12v12H8zM8 40h12v12H8zM8 60h12v12H8zM8 80h12v12H8zM8 100h12v12H8zM8 120h12v12H8zM8 140h12v12H8zM8 160h12v12H8z"/><path d="M130 20h12v12h-12zM130 40h12v12h-12zM130 60h12v12h-12zM130 80h12v12h-12zM130 100h12v12h-12zM130 120h12v12h-12zM130 140h12v12h-12zM130 160h12v12h-12z"/></g>
+  <text x="75" y="52" text-anchor="middle" font-family="Arial,sans-serif" font-size="10" font-weight="700" fill="#eaf5fa">BLUE PILL</text>
+</svg>
