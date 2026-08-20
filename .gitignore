@@ -25,3 +25,8 @@ out/
 *.lst
 *.o
 *.obj
+
+# Local competition material (not part of the public repository)
+docs/seed-cup-embedded-dual-adc-task.md
+docs/seed-cup-embedded-dual-adc-task.docx
+docs/build_seed_cup_task_doc.py
