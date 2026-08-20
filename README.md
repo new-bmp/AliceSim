@@ -65,6 +65,8 @@ Windows 下直接双击项目根目录的 `AliceSIM.cmd`。启动器会：
 [`examples/CppStdlibBlink`](examples/CppStdlibBlink) 是一套可运行的 C++ LED 示例：`main.cpp` 包含 `<stdc++.h>`，同时演示 `for`、`switch`、`break`、`continue`、`return` 与 `malloc/free` 的 C++ 语法检查；配套电路文件已连接 PC13 → 330 Ohm → LED → GND。打开工程后通过“打开电路”导入 [`CppStdlibBlink.alice-sch.json`](examples/CppStdlibBlink/CppStdlibBlink.alice-sch.json)，即可与代码联动运行。
 仓库还包含 [`tests/fixtures/uart_rgb`](tests/fixtures/uart_rgb) 工程夹具，用于验证 USART2 与 PA6/PA7/PB0 三路 RGB 控制的一致性。
 
+面向“种子杯”嵌入式赛道的题面、验收场景和评分细则见 [`docs/seed-cup-embedded-dual-adc-task.md`](docs/seed-cup-embedded-dual-adc-task.md)，对应的 Word 发布稿为 [`docs/seed-cup-embedded-dual-adc-task.docx`](docs/seed-cup-embedded-dual-adc-task.docx)。
+
 数据手册草稿接口及安全边界见 [`docs/datasheet-import-api.md`](docs/datasheet-import-api.md)。
 
 ## 保存与外设驱动
