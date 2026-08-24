@@ -1097,18 +1097,51 @@
       applyHistory(historyIndex + 1);
     }
 
+    function schematicHistoryApi() {
+      const api = window.AliceSchematic;
+      return api && typeof api.undo === "function" && typeof api.redo === "function" ? api : null;
+    }
+
+    function isSchematicContext() {
+      return document.body.classList.contains("app-page-simulation")
+        || document.activeElement?.closest?.("#schematicViewport,.simulator-panel");
+    }
+
+    function undoActive() {
+      const api = isSchematicContext() ? schematicHistoryApi() : null;
+      if (api) {
+        if (!api.undo()) toast("没有可撤销的电路编辑", "error");
+        return;
+      }
+      undoEditor();
+    }
+
+    function redoActive() {
+      const api = isSchematicContext() ? schematicHistoryApi() : null;
+      if (api) {
+        if (!api.redo()) toast("没有可重做的电路编辑", "error");
+        return;
+      }
+      redoEditor();
+    }
+
     const quickSave = $('.quick-access button[title="保存代码"]');
     const quickUndo = $('.quick-access button[title="撤销"]');
     const quickRedo = $('.quick-access button[title="重做"]');
 
     function updateUndoButtons() {
+      const api = isSchematicContext() ? schematicHistoryApi() : null;
+      const canUndo = api ? Boolean(api.canUndo?.()) : historyIndex > 0;
+      const canRedo = api ? Boolean(api.canRedo?.()) : historyIndex < history.length - 1;
       if (quickUndo) {
-        quickUndo.disabled = historyIndex <= 0;
-        quickUndo.setAttribute("aria-disabled", String(historyIndex <= 0));
+        quickUndo.disabled = !canUndo;
+        quickUndo.setAttribute("aria-disabled", String(!canUndo));
+        quickUndo.title = api ? "撤销电路编辑" : "撤销";
       }
       if (quickRedo) {
-        quickRedo.disabled = historyIndex >= history.length - 1;
-        quickRedo.setAttribute("aria-disabled", String(historyIndex >= history.length - 1));
+        quickRedo.disabled = !canRedo;
+        quickRedo.setAttribute("aria-disabled", String(!canRedo));
+        quickRedo.title = api ? "重做电路编辑" : "重做";
       }
     }
 
@@ -1116,14 +1149,16 @@
     $("#saveCircuitButton")?.addEventListener("click", saveCurrentCircuit);
     $("#openCircuitButton")?.addEventListener("click", openCircuitPicker);
     $("#saveAsComponentButton")?.addEventListener("click", openSaveComponentDialog);
-    quickUndo?.addEventListener("click", undoEditor);
-    quickRedo?.addEventListener("click", redoEditor);
+    quickUndo?.addEventListener("click", undoActive);
+    quickRedo?.addEventListener("click", redoActive);
     editor.addEventListener("input", recordHistory);
     window.addEventListener("alice-editor-file-open", handleEditorFileOpen);
     // project-folder.js emits this event for hosts that provide their own
     // editor.  Supporting both events keeps the fallback and host paths in
     // sync without recording a synthetic edit.
     window.addEventListener("alice-project-file-open", handleEditorFileOpen);
+    document.addEventListener("alice:schematic-history-change", updateUndoButtons);
+    document.addEventListener("alice:workspace-page-change", updateUndoButtons);
     resetHistory();
 
     function syncSplitEditor() {
@@ -1344,8 +1379,8 @@
         { icon: "▣", label: "导出 AliceSIM 工程", action: exportProject }
       ]);
       addRibbonGroup(ribbon, "code-edit", "编辑", [
-        { icon: "↶", label: "撤销", action: undoEditor },
-        { icon: "↷", label: "重做", action: redoEditor }
+        { icon: "↶", label: "撤销", action: undoActive },
+        { icon: "↷", label: "重做", action: redoActive }
       ]);
       addRibbonGroup(ribbon, "code-view", "编辑器视图", [
         { icon: "⇄", label: "拆分编辑器", action: () => toggleEditorSplit() },
@@ -1894,16 +1929,23 @@
         return;
       }
       const editorFocused = document.activeElement === editor || document.activeElement === splitEditor;
+      if (modifier && isSchematicContext() && !editorFocused && (key === "z" || key === "y")) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (key === "y" || event.shiftKey) redoActive();
+        else undoActive();
+        return;
+      }
       if (!editorFocused || !modifier) return;
       if (key === "z") {
         event.preventDefault();
         event.stopPropagation();
-        if (event.shiftKey) redoEditor();
-        else undoEditor();
+        if (event.shiftKey) redoActive();
+        else undoActive();
       } else if (key === "y") {
         event.preventDefault();
         event.stopPropagation();
-        redoEditor();
+        redoActive();
       }
     }, true);
 

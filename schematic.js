@@ -279,7 +279,10 @@
     tick: 0,
     powerCalculationEnabled: true,
     showComponentLabels: true,
-    powerAlertFingerprint: ""
+    powerAlertFingerprint: "",
+    circuitHistory: [],
+    circuitHistoryIndex: -1,
+    applyingCircuitHistory: false
   };
 
   var referenceCounters = {
@@ -4222,6 +4225,7 @@
       renderWires();
       setStatus("工程电路已同步 · " + report.pins.length + " 个 IO · " + report.outputs.length + " 个代码输出");
       if (!schematicState.userView) requestAnimationFrame(function () { fitToContent(false); });
+      resetCircuitHistory();
     }
     return Object.assign(report, {
       applied: true,
@@ -4244,6 +4248,7 @@
 
   function emitSchematicChange(kind, component) {
     if (!schematicState.initialized || !component) return;
+    recordCircuitHistory();
     document.dispatchEvent(new CustomEvent("alice:schematic-change", {
       detail: {
         kind: kind,
@@ -5027,10 +5032,12 @@
       setStatus("已取消导线");
       return;
     }
+    var wireCountBefore = schematicState.wires.length;
     var wire = createWire(schematicState.wireStart, endpoint);
     cancelWire();
     if (wire) {
       selectEntity("wire", wire.id);
+      if (schematicState.wires.length > wireCountBefore) emitSchematicChange("add-wire", wire);
       setStatus("导线已连接 · " + (wire.signal || "未命名网络"));
     }
   }
@@ -5039,6 +5046,7 @@
     var selection = schematicState.selection;
     if (!selection) return false;
     var removedComponent = selection.kind === "component" ? schematicState.components.get(selection.id) : null;
+    var removedWire = selection.kind === "wire" ? findWire(selection.id) : null;
     if (schematicState.editingComponentId === selection.id) closeComponentProperties(false);
     cancelActiveInteraction(false);
     if (selection.kind === "wire") {
@@ -5058,6 +5066,7 @@
     updateComponentActionState();
     renderWires();
     if (removedComponent) emitSchematicChange("delete-component", removedComponent);
+    else if (removedWire) emitSchematicChange("delete-wire", removedWire);
     setStatus("已删除选中对象");
     return true;
   }
@@ -5205,7 +5214,9 @@
       pointerId: event.pointerId,
       componentId: component.id,
       offsetX: point.x - component.x,
-      offsetY: point.y - component.y
+      offsetY: point.y - component.y,
+      originalX: component.x,
+      originalY: component.y
     };
     capturePointer(event.pointerId);
     componentElement.classList.add("dragging");
@@ -5311,6 +5322,7 @@
       releasePointer(interaction.pointerId);
       schematicState.interaction = null;
       renderWires();
+      if (!cancelled && interaction.moved && wire) emitSchematicChange("move-wire", wire);
       setStatus(cancelled ? "导线移动已取消" : (interaction.moved ? "导线已重新布线 · 拖动线段或拐点可继续调整" : "已选择导线 · 拖动线段或拐点，Delete 删除"));
       return;
     }
@@ -5318,6 +5330,7 @@
       var element = schematicState.componentElements.get(interaction.componentId);
       if (element) element.classList.remove("dragging");
       var component = schematicState.components.get(interaction.componentId);
+      if (component && (component.x !== interaction.originalX || component.y !== interaction.originalY)) emitSchematicChange("move-component", component);
       if (component) setStatus("已选择 " + component.ref + " · R 旋转 · F2 修改数值");
     }
     if (interaction.kind === "pan" && schematicNodes.viewport) schematicNodes.viewport.classList.remove("is-panning");
@@ -5813,6 +5826,78 @@
     };
   }
 
+  function cloneCircuitSnapshot(snapshot) {
+    return JSON.parse(JSON.stringify(snapshot));
+  }
+
+  function circuitHistoryFingerprint(snapshot) {
+    return JSON.stringify(snapshot);
+  }
+
+  function announceCircuitHistory() {
+    if (!schematicState.initialized) return;
+    document.dispatchEvent(new CustomEvent("alice:schematic-history-change", {
+      detail: {
+        canUndo: schematicState.circuitHistoryIndex > 0,
+        canRedo: schematicState.circuitHistoryIndex >= 0 && schematicState.circuitHistoryIndex < schematicState.circuitHistory.length - 1,
+        index: schematicState.circuitHistoryIndex,
+        length: schematicState.circuitHistory.length
+      }
+    }));
+  }
+
+  function resetCircuitHistory() {
+    if (!schematicState.initialized) return false;
+    var snapshot = exportCircuit();
+    schematicState.circuitHistory = [cloneCircuitSnapshot(snapshot)];
+    schematicState.circuitHistoryIndex = 0;
+    announceCircuitHistory();
+    return true;
+  }
+
+  function recordCircuitHistory() {
+    if (!schematicState.initialized || schematicState.applyingCircuitHistory) return false;
+    var snapshot = exportCircuit();
+    var current = schematicState.circuitHistory[schematicState.circuitHistoryIndex];
+    if (current && circuitHistoryFingerprint(current) === circuitHistoryFingerprint(snapshot)) {
+      announceCircuitHistory();
+      return false;
+    }
+    if (schematicState.circuitHistoryIndex < schematicState.circuitHistory.length - 1) {
+      schematicState.circuitHistory.splice(schematicState.circuitHistoryIndex + 1);
+    }
+    schematicState.circuitHistory.push(cloneCircuitSnapshot(snapshot));
+    if (schematicState.circuitHistory.length > 120) schematicState.circuitHistory.shift();
+    schematicState.circuitHistoryIndex = schematicState.circuitHistory.length - 1;
+    announceCircuitHistory();
+    return true;
+  }
+
+  function applyCircuitHistory(index) {
+    var snapshot = schematicState.circuitHistory[index];
+    if (!snapshot) return false;
+    schematicState.applyingCircuitHistory = true;
+    try {
+      var result = importCircuit(cloneCircuitSnapshot(snapshot), { fromHistory: true });
+      if (!result || result.ok === false) return false;
+      schematicState.circuitHistoryIndex = index;
+      announceCircuitHistory();
+      return true;
+    } finally {
+      schematicState.applyingCircuitHistory = false;
+    }
+  }
+
+  function undoCircuit() {
+    if (schematicState.circuitHistoryIndex <= 0) return false;
+    return applyCircuitHistory(schematicState.circuitHistoryIndex - 1);
+  }
+
+  function redoCircuit() {
+    if (schematicState.circuitHistoryIndex < 0 || schematicState.circuitHistoryIndex >= schematicState.circuitHistory.length - 1) return false;
+    return applyCircuitHistory(schematicState.circuitHistoryIndex + 1);
+  }
+
   function serializeCircuit(payload, spacing) {
     var source = payload;
     var indentation = spacing;
@@ -6225,7 +6310,8 @@
     });
   }
 
-  function importCircuit(input) {
+  function importCircuit(input, options) {
+    options = options && typeof options === "object" ? options : {};
     var plan;
     try {
       plan = prepareCircuitImport(normalizeCircuitDocument(input));
@@ -6294,6 +6380,7 @@
       document.dispatchEvent(new CustomEvent("alice:schematic-loaded", { detail: result }));
       document.dispatchEvent(new CustomEvent("alice:schematic-change", { detail: Object.assign({ kind: "load-circuit" }, result) }));
     }
+    if (schematicState.initialized && !options.fromHistory) resetCircuitHistory();
     return result;
   }
 
@@ -6356,11 +6443,13 @@
       if (bendHandle) {
         var removed = removeWireBend(wire, Number(bendHandle.dataset.pointIndex));
         renderWires();
+        if (removed) emitSchematicChange("remove-wire-bend", wire);
         setStatus(removed ? "已删除导线拐点 · 路径保持正交" : "该拐点不能继续简化");
         return;
       }
       var added = insertWireBend(wire, Number(hit.dataset.segmentIndex), clientToWorld(event.clientX, event.clientY));
       renderWires();
+      if (added) emitSchematicChange("insert-wire-bend", wire);
       setStatus(added
         ? "已增加导线拐点 · 拖动方块调整 · 双击方块删除"
         : "线段空间不足，放大或拖长线段后再增加拐点");
@@ -6504,6 +6593,7 @@
     updateComponentActionState();
     updateTickUi();
     renderWires();
+    resetCircuitHistory();
     requestAnimationFrame(function () { fitToContent(false); });
     return true;
   }
@@ -6549,19 +6639,30 @@
     insertWireBend: function (wireId, segmentIndex, point) {
       var wire = findWire(wireId);
       var route = insertWireBend(wire, Number(segmentIndex), point);
-      if (route && schematicState.initialized) renderWires();
+      if (route && schematicState.initialized) {
+        renderWires();
+        emitSchematicChange("insert-wire-bend", wire);
+      }
       return route;
     },
     removeWireBend: function (wireId, pointIndex) {
       var wire = findWire(wireId);
       var route = removeWireBend(wire, Number(pointIndex));
-      if (route && schematicState.initialized) renderWires();
+      if (route && schematicState.initialized) {
+        renderWires();
+        emitSchematicChange("remove-wire-bend", wire);
+      }
       return route;
     },
     exportCircuit: exportCircuit,
     serializeCircuit: serializeCircuit,
     downloadCircuit: downloadCircuit,
     importCircuit: importCircuit,
+    undo: undoCircuit,
+    redo: redoCircuit,
+    canUndo: function () { return schematicState.circuitHistoryIndex > 0; },
+    canRedo: function () { return schematicState.circuitHistoryIndex >= 0 && schematicState.circuitHistoryIndex < schematicState.circuitHistory.length - 1; },
+    resetHistory: resetCircuitHistory,
     exportComponentPackage: exportComponentPackage,
     serializeComponentPackage: serializeComponentPackage,
     downloadComponentPackage: downloadComponentPackage,
