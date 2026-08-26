@@ -1,0 +1,35 @@
+{
+  "name": "AliceSIM STM32 Simulator",
+  "short_name": "AliceSIM",
+  "description": "STM32 firmware and circuit simulation workspace",
+  "lang": "zh-CN",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "orientation": "any",
+  "background_color": "#080a10",
+  "theme_color": "#080b12",
+  "categories": ["developer", "education", "utilities"],
+  "icons": [
+    {
+      "src": "./assets/pwa/192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./assets/pwa/512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./assets/alicesim-app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

@@ -74,6 +74,15 @@ test("right mouse drag pans the schematic and suppresses the context menu", () =
   assert.match(schematic, /function beginPan\(event\)/);
 });
 
+test("browser navigation gestures are bounded without disabling touch input globally", () => {
+  const rootInputRules = styles.match(/html, body \{([^}]*)\}/)?.[1] || "";
+  assert.match(html, /name="viewport" content="width=device-width, initial-scale=1\.0, viewport-fit=cover"/);
+  assert.match(rootInputRules, /overscroll-behavior: none;/);
+  assert.doesNotMatch(rootInputRules, /touch-action:/);
+  assert.match(styles, /\.visio-theme \.schematic-viewport \{[\s\S]*?touch-action: none;/);
+  assert.doesNotMatch(app, /preventBrowserGesture/);
+});
+
 test("successful Clang checks are not overridden by the local main regex", () => {
   assert.match(app, /state\.clangAvailable[\s\S]*?localDiagnostics\.filter\(item => item\.severity === "warning"\)/);
   assert.doesNotMatch(app, /state\.clangAvailable[\s\S]{0,160}item\.message\.includes\("程序入口"\)/);
@@ -154,6 +163,8 @@ test("the logic and envelope observer supports persistent vertical resizing", ()
   assert.match(panelResize, /TIME_OBSERVER_HEIGHT_KEY/);
   assert.match(panelResize, /startHeight \+ timeObserverDrag\.startY - event\.clientY/);
   assert.match(panelResize, /ArrowUp[\s\S]*?ArrowDown[\s\S]*?resetTimeObserverHeight/);
+  assert.match(panelResize, /window\.AliceObserverLayout = Object\.freeze/);
+  assert.match(panelResize, /setState:[\s\S]*?setObserverPaneCollapsed\("logic"[\s\S]*?setObserverPaneCollapsed\("envelope"/);
 });
 
 test("the logic analyzer and envelope editor fold independently and persist their state", () => {
@@ -181,6 +192,18 @@ test("the left project sidebar supports persistent horizontal resizing", () => {
   assert.match(panelResize, /body\.style\.setProperty\("--side", sidebarEffectiveWidth \+ "px"\)/);
   assert.match(panelResize, /ArrowLeft[\s\S]*?ArrowRight[\s\S]*?resetSidebarWidth/);
   assert.match(panelResize, /window\.AliceSidebarLayout = Object\.freeze/);
+});
+
+test("small screens keep the activity bar and expose the sidebar as a dismissible drawer", () => {
+  assert.match(html, /id="mobileSidebarScrim"[^>]*aria-label="关闭侧栏"/);
+  assert.match(html, /id="mobileSidebarClose"[^>]*aria-label="关闭侧栏"/);
+  assert.match(html, /data-view="project"[^>]*aria-controls="sidebar"/);
+  assert.match(app, /function setMobileSidebarOpen/);
+  assert.match(app, /repeatMobileSelection/);
+  assert.match(app, /event\.key === "Escape"[\s\S]*?mobile-sidebar-open/);
+  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*?grid-template-columns: var\(--activity\) minmax\(0, 1fr\) !important/);
+  assert.match(styles, /mobile-sidebar-open \.sidebar[\s\S]*?transform: translateX\(0\)/);
+  assert.match(styles, /mobile-sidebar-open \.mobile-sidebar-scrim/);
 });
 
 test("the application uses a compensated 90 percent scale and a non-overlapping status grid", () => {

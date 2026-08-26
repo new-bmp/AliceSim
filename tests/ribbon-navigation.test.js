@@ -19,6 +19,11 @@ test("ribbon navigation has one clear responsibility per tab", () => {
   assert.match(block, /工程与文件/);
 });
 
+test("initial ribbon selection does not open a mobile tool drawer", () => {
+  assert.match(actions, /selectRibbon\(initial, \{ runAction: false \}\)/);
+  assert.match(actions, /if \(options\.runAction !== false\) selection\.action\?\.\(\)/);
+});
+
 test("duplicate page and tool-window commands are removed from the ribbon", () => {
   assert.doesNotMatch(html, /data-pane-toggle="simulator"/);
   assert.doesNotMatch(html, /data-ribbon-tab="code"/);

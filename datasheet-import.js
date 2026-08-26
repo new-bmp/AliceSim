@@ -87,7 +87,8 @@
   }
 
   async function fetchJson(endpoint, payload) {
-    const response = await fetch(endpoint, {
+    const request = global.AlicePlatform?.fetch || global.fetch.bind(global);
+    const response = await request(endpoint, {
       method: "POST",
       cache: "no-store",
       headers: { "Content-Type": "application/json" },
@@ -528,7 +529,8 @@
     const status = query("[data-capability=local]");
     if (!status) return;
     try {
-      const response = await fetch("/api/health", { cache: "no-store" });
+      const request = global.AlicePlatform?.fetch || global.fetch.bind(global);
+      const response = await request("/api/health", { cache: "no-store" });
       const health = await response.json();
       const capability = health.datasheetImport || null;
       state.capabilities = capability;

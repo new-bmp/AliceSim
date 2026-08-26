@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="AliceSIM">
+  <rect width="512" height="512" fill="#0b1018"/>
+  <path d="M116 138h70v-34h140v34h70v70h34v140h-34v70h-70v34H186v-34h-70v-70H82V208h34z" fill="#f4f7fa" stroke="#55a9d8" stroke-width="12"/>
+  <rect x="151" y="151" width="210" height="210" fill="#172534" stroke="#293f50" stroke-width="8"/>
+  <path d="M188 316l53-120h30l53 120h-34l-10-26h-50l-10 26zm54-57h26l-13-35z" fill="#ffffff"/>
+  <path d="M188 338h136" stroke="#49c99a" stroke-width="12"/>
+  <circle cx="188" cy="338" r="10" fill="#49c99a"/>
+  <circle cx="324" cy="338" r="10" fill="#49c99a"/>
+</svg>

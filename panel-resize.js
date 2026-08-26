@@ -108,7 +108,7 @@
     ".alice-panel-layout-menu>button.active{background:#e5f1fb!important}",
     "@media(max-width:1050px){body.alice-panel-layout-active:not(.app-page-code):not(.app-page-simulation):not(.hide-simulator-pane):not(.ui-editor-focus):not(.alice-panel-focus) .app-shell{grid-template-columns:var(--activity) var(--side) minmax(280px,1fr) var(--sim)!important}}",
     "@media(max-width:820px){body.alice-panel-focus .simulator-panel{left:var(--activity)!important}body.alice-panel-focus .schematic-head::after{display:none}}",
-    "@media(max-width:640px){.alice-sidebar-resizer{display:none!important}}"
+    "@media(max-width:720px){.alice-sidebar-resizer{display:none!important}}"
   ].join("");
   document.head.appendChild(style);
 
@@ -841,6 +841,23 @@
     window.addEventListener("resize", function () {
       var savedHeight = readTimeObserverHeight();
       if (savedHeight != null) applyTimeObserverHeight(savedHeight, { save: false, signal: false });
+    });
+
+    window.AliceObserverLayout = Object.freeze({
+      getState: function () {
+        return {
+          height: timeObserver.getBoundingClientRect().height || 292,
+          logicCollapsed: Boolean(logicAnalyzerPane && logicAnalyzerPane.classList.contains("collapsed")),
+          envelopeCollapsed: Boolean(envelopePane && envelopePane.classList.contains("collapsed"))
+        };
+      },
+      setState: function (savedState) {
+        if (!savedState || typeof savedState !== "object") return false;
+        if (savedState.height != null) applyTimeObserverHeight(savedState.height);
+        if (typeof savedState.logicCollapsed === "boolean") setObserverPaneCollapsed("logic", savedState.logicCollapsed);
+        if (typeof savedState.envelopeCollapsed === "boolean") setObserverPaneCollapsed("envelope", savedState.envelopeCollapsed);
+        return true;
+      }
     });
   }
 

@@ -18,11 +18,15 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+SOURCE_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(getattr(sys, "_MEIPASS", SOURCE_ROOT))
 VENDOR_ROOT = PROJECT_ROOT / ".vendor"
+if not VENDOR_ROOT.exists():
+    VENDOR_ROOT = SOURCE_ROOT / ".vendor"
 SERVICE_NAME = "AliceSIM"
 API_VERSION = 1
-INSTANCE_ID = hashlib.sha256(os.path.normcase(str(PROJECT_ROOT)).encode("utf-8")).hexdigest()[:12]
+INSTANCE_SOURCE = "AliceSIM-packaged" if getattr(sys, "frozen", False) else os.path.normcase(str(PROJECT_ROOT))
+INSTANCE_ID = hashlib.sha256(INSTANCE_SOURCE.encode("utf-8")).hexdigest()[:12]
 if VENDOR_ROOT.exists():
     sys.path.insert(0, str(VENDOR_ROOT))
 
@@ -64,8 +68,8 @@ clang_index = None
 clang_cindex = None
 CLANG_LOCK = threading.Lock()
 
-MAX_REQUEST_BYTES = 64 * 1024 * 1024
-MAX_PROJECT_TEXT_BYTES = 48 * 1024 * 1024
+MAX_REQUEST_BYTES = 192 * 1024 * 1024
+MAX_PROJECT_TEXT_BYTES = 128 * 1024 * 1024
 MAX_PROJECT_FILES = 8_000
 MAX_PROJECT_FILE_BYTES = 4 * 1024 * 1024
 MAX_CLANG_TARGETS = 1_024
@@ -1470,6 +1474,12 @@ def clang_check(code: str, filename: str) -> dict:
 
 
 class AliceSIMHandler(SimpleHTTPRequestHandler):
+    extensions_map = {
+        **SimpleHTTPRequestHandler.extensions_map,
+        ".webmanifest": "application/manifest+json",
+        ".wasm": "application/wasm",
+    }
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(PROJECT_ROOT), **kwargs)
 
@@ -1634,6 +1644,10 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     browser_group.add_argument("--open-browser", dest="open_browser", action="store_true")
     browser_group.add_argument("--no-browser", dest="open_browser", action="store_false")
     parser.set_defaults(open_browser=environment_flag("ALICESIM_OPEN_BROWSER"))
+    display_group = parser.add_mutually_exclusive_group()
+    display_group.add_argument("--fullscreen-browser", dest="browser_fullscreen", action="store_true")
+    display_group.add_argument("--windowed-browser", dest="browser_fullscreen", action="store_false")
+    parser.set_defaults(browser_fullscreen=environment_flag("ALICESIM_BROWSER_FULLSCREEN", True))
     arguments = parser.parse_args(argv)
     if not 0 <= arguments.port <= 65535:
         parser.error("--port must be between 0 and 65535")
@@ -1664,7 +1678,77 @@ def browser_host(host: str) -> str:
     return f"[{host}]" if ":" in host and not host.startswith("[") else host
 
 
-def open_browser_when_ready(url: str, timeout: float = 10.0) -> None:
+def browser_executable() -> Path | None:
+    override = os.environ.get("ALICESIM_BROWSER", "").strip()
+    candidates: list[Path] = [Path(override)] if override else []
+    if sys.platform == "win32":
+        program_files = os.environ.get("ProgramFiles", "").strip()
+        program_files_x86 = os.environ.get("ProgramFiles(x86)", "").strip()
+        local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+        for root, relative_paths in (
+            (program_files, ("Microsoft/Edge/Application/msedge.exe", "Google/Chrome/Application/chrome.exe")),
+            (program_files_x86, ("Microsoft/Edge/Application/msedge.exe", "Google/Chrome/Application/chrome.exe")),
+            (local_app_data, ("Microsoft/Edge/Application/msedge.exe", "Google/Chrome/Application/chrome.exe")),
+        ):
+            if root:
+                candidates.extend(Path(root) / relative_path for relative_path in relative_paths)
+        executable_names = ("msedge.exe", "chrome.exe")
+    elif sys.platform == "darwin":
+        candidates.extend((
+            Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            Path("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+        ))
+        executable_names = ("google-chrome", "microsoft-edge", "chromium")
+    else:
+        executable_names = ("microsoft-edge", "google-chrome", "chromium", "chromium-browser")
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = os.path.normcase(str(candidate))
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.is_file():
+            return candidate
+    for name in executable_names:
+        located = shutil.which(name)
+        if located:
+            return Path(located)
+    return None
+
+
+def fullscreen_browser_command(url: str, executable: Path) -> list[str]:
+    command = [
+        str(executable),
+        "--kiosk",
+        "--disable-pinch",
+        "--overscroll-history-navigation=0",
+    ]
+    if executable.name.lower() == "msedge.exe":
+        command.append("--edge-kiosk-type=fullscreen")
+    command.append(url)
+    return command
+
+
+def open_alicesim_browser(url: str, fullscreen: bool = True) -> bool:
+    if fullscreen:
+        executable = browser_executable()
+        if executable is not None:
+            try:
+                subprocess.Popen(
+                    fullscreen_browser_command(url, executable),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return True
+            except OSError as exc:
+                print(f"AliceSIM could not start the fullscreen browser: {exc}", file=sys.stderr)
+        else:
+            print("AliceSIM could not find Edge or Chrome; opening the default browser in windowed mode.", file=sys.stderr)
+    return bool(webbrowser.open(url, new=2))
+
+
+def open_browser_when_ready(url: str, timeout: float = 10.0, fullscreen: bool = True) -> None:
     health_url = f"{url}/api/health"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -1673,7 +1757,7 @@ def open_browser_when_ready(url: str, timeout: float = 10.0) -> None:
             with urllib.request.urlopen(request, timeout=0.75) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             if payload.get("service") == SERVICE_NAME and payload.get("instance") == INSTANCE_ID:
-                webbrowser.open(url, new=2)
+                open_alicesim_browser(url, fullscreen=fullscreen)
                 return
         except (OSError, ValueError, json.JSONDecodeError):
             time.sleep(0.12)
@@ -1694,7 +1778,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"AliceSIM backend ready at {url} · {clang_label}", flush=True)
     print("Press Ctrl+C or close this window to stop the backend.", flush=True)
     if arguments.open_browser:
-        threading.Thread(target=open_browser_when_ready, args=(url,), daemon=True).start()
+        threading.Thread(
+            target=open_browser_when_ready,
+            args=(url,),
+            kwargs={"fullscreen": arguments.browser_fullscreen},
+            daemon=True,
+        ).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

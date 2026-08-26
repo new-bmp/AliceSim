@@ -41,6 +41,7 @@ Windows 下直接双击项目根目录的 `AliceSIM.cmd`。启动器会：
 - 复用已经运行的同一 AliceSIM 实例
 - 从 `4173` 开始自动选择可用的本机端口
 - 等待 `/api/health` 确认服务就绪后再打开浏览器
+- 默认使用 Edge 或 Chrome 的无边框全屏窗口打开 AliceSIM
 - 保持后端窗口可见，按 `Ctrl+C` 或关闭窗口即可停止服务
 
 也可以在 PowerShell 中运行：
@@ -54,11 +55,30 @@ Windows 下直接双击项目根目录的 `AliceSIM.cmd`。启动器会：
 ```powershell
 .\start.ps1 -Port 4300        # 指定首选端口
 .\start.ps1 -NoBrowser        # 不自动打开浏览器
+.\start.ps1 -Windowed         # 使用普通浏览器窗口，不进入全屏
 .\start.ps1 -SkipDependencies # 跳过 Clang 依赖准备
 ```
 
 首次启动时脚本会自动在项目的 `.vendor` 目录准备 Clang 18、PDF 数据手册解析器，以及可选的 PySpice 1.5 / NGSpice 34 直流校验器，不会修改系统 LLVM、Python 包或 SPICE 环境。
 如果依赖下载失败，后端仍会启动，编辑器会明确降级到浏览器端基础检查和内置实时直流求解。
+
+## PWA 与原生应用
+
+AliceSIM 的同一套前端可以作为浏览器/PWA 使用，也可以装进 Tauri 2 原生壳层。Windows、macOS 和 Linux 桌面包会启动随应用分发的本地 Python/Clang 服务；原生窗口不包含 Edge/Chrome 的右键手势界面。手机和平板继续使用相同的触控、鼠标和键盘交互，窄屏时左侧活动栏会打开抽屉式项目栏，不需要从屏幕边缘滑动。
+
+浏览器打开 AliceSIM 后，可使用浏览器的“安装应用”功能安装 PWA。PWA 连接正在运行的 AliceSIM 服务时具备完整的 Clang 检查与 HAL 仿真能力；静态离线页面仍可编辑工程和电路，但不会缓存或伪造 `/api/*` 编译结果。
+
+桌面开发和打包需要 Node.js 20+、pnpm、Rust stable、Python 3.10+，发布包还需要 PyInstaller。安装前端依赖后运行：
+
+```powershell
+pnpm install
+pnpm desktop:dev
+pnpm desktop:build
+```
+
+`desktop:build` 会先把 `server.py`、页面资源和可用的本地 Clang 运行库封装成当前系统架构的 sidecar，再由 Tauri 生成安装包。macOS 和 Linux 包应分别在对应系统上构建，以得到本机格式的 Python sidecar。
+
+Android 开发需要 Rust 的 Android targets、Android Studio、SDK 与 NDK；初始化后可运行 `pnpm android:dev` 或 `pnpm android:build`。iOS 只能在安装 Xcode 的 macOS 上初始化和构建。原生 Android/iOS 包不内置 Python、Clang 或 HAL 模型服务：代码编辑、工程保存、电路设计和浏览器端基础检查可以本地使用，固件构建请转到桌面版，或在浏览器中连接提供 AliceSIM 后端的地址。移动端会明确停止构建并显示这项限制，不会把基础检查显示为 Clang 编译成功。
 
 可以使用 [`examples/BluePill_Blinky.ioc`](examples/BluePill_Blinky.ioc) 测试 IOC 导入。
 [`examples/STM32F103_HAL_Init`](examples/STM32F103_HAL_Init) 是由真实 STM32CubeMX 工程整理出的完整 HAL 初始化示例，包含 72 MHz 时钟、ADC2、I²C1、TIM1 PWM 以及 USART2/USART3，可直接以工程文件夹方式导入。

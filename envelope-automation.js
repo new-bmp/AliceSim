@@ -879,6 +879,20 @@
     return result;
   }
 
+  function setState(saved) {
+    if (!saved || typeof saved !== "object") return engine.getState();
+    if (saved.durationMs != null) engine.setDuration(saved.durationMs);
+    if (saved.mode != null) engine.setMode(saved.mode);
+    if (saved.loop != null) engine.setLoop(saved.loop);
+    if (Array.isArray(saved.lanes)) uiState.lanes = saved.lanes;
+    uiState.selectedLaneId = "";
+    uiState.selectedPointId = "";
+    syncEngine();
+    saveState();
+    renderAll();
+    return engine.getState();
+  }
+
   return Object.freeze({
     mount: mount,
     open: open,
@@ -891,6 +905,7 @@
     addLane: addLane,
     removeLane: removeLane,
     getState: function () { return engine.getState(); },
+    setState: setState,
     setMode: function (mode) { var result = engine.setMode(mode); saveState(); renderModeControls(); return result; },
     setDuration: function (durationMs) { var result = engine.setDuration(durationMs); persistAndRender(); return result; },
     setLoop: function (loop) { var result = engine.setLoop(loop); saveState(); renderModeControls(); return result; },

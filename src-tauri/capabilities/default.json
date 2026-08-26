@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Minimal capabilities for the AliceSIM application window",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

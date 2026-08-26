@@ -113,7 +113,13 @@
 .visio-theme .tm1637-digits { color: #ff3d35; font: 700 15px/1 Consolas, monospace !important; letter-spacing: 1px; text-shadow: 0 0 3px rgba(255, 40, 30, .55); }
 
 * { box-sizing: border-box; }
-html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
 body { color: var(--text); background: var(--bg); font-size: 12px; }
 button, input, textarea { font: inherit; }
 button { color: inherit; }
@@ -1309,6 +1315,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px
   display: none !important;
 }
 .visio-theme .schematic-toolbar svg { width: 15px; height: 15px; stroke-width: 1.6; }
+.visio-theme .schematic-toolbar button[hidden] { display: none !important; }
 .visio-theme .toolbar-separator { width: 1px; height: 20px; margin: 0 3px; background: #c6c6c6; }
 .visio-theme .toolbar-spacer { flex: 1; }
 
@@ -4546,6 +4553,9 @@ body { zoom: var(--alice-ui-scale); }
   height: 111.111111vh;
 }
 
+.mobile-sidebar-scrim,
+.mobile-sidebar-close { display: none; }
+
 /* Office-style ribbon folding keeps the title and tab rows available while
    returning the command area to the active code or simulation workspace. */
 body.visio-theme.ribbon-collapsed { --top: 68px; }
@@ -4610,4 +4620,138 @@ body.visio-theme.ribbon-collapsed .topbar > .ribbon { display: none; }
 }
 @container (max-width: 420px) {
   .visio-theme .status-right { display: none; }
+}
+
+/* Phone and small-tablet layout. The activity bar stays visible and opens the
+   selected tool in a real drawer, so project navigation never depends on a
+   browser gesture or an invisible edge swipe. */
+@media (max-width: 720px) {
+  body.visio-theme {
+    --top: calc(141px + env(safe-area-inset-top));
+    --status: calc(30px + env(safe-area-inset-bottom));
+  }
+  body.visio-theme.ribbon-collapsed { --top: calc(68px + env(safe-area-inset-top)); }
+  body.visio-theme .app-shell,
+  body.visio-theme.app-page-code .app-shell,
+  body.visio-theme.app-page-simulation .app-shell,
+  body.visio-theme.app-page-code.alice-panel-layout-active .app-shell,
+  body.visio-theme.app-page-simulation.alice-panel-layout-active .app-shell {
+    grid-template-columns: var(--activity) minmax(0, 1fr) !important;
+    grid-template-rows: var(--top) minmax(0, 1fr);
+  }
+  body.visio-theme .topbar {
+    grid-template-rows: calc(36px + env(safe-area-inset-top)) 32px 73px;
+  }
+  body.visio-theme.ribbon-collapsed .topbar {
+    grid-template-rows: calc(36px + env(safe-area-inset-top)) 32px 0;
+  }
+  .visio-theme .office-titlebar {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding-top: env(safe-area-inset-top);
+    box-sizing: border-box;
+  }
+  .visio-theme .quick-access,
+  .visio-theme .project-crumbs,
+  .visio-theme .engine-state,
+  .visio-theme .icon-button[title="全局搜索"],
+  .visio-theme .user-avatar { display: none; }
+  .visio-theme .brand { min-width: 104px; padding-inline: 8px; }
+  .visio-theme .top-actions { min-width: 0; margin-left: auto; padding-inline: 3px; }
+  .visio-theme .app-page-switcher { margin-right: 2px; }
+  .visio-theme .app-page-switcher button { min-width: 52px; padding-inline: 6px; }
+  .visio-theme .ribbon-tabs {
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .visio-theme .ribbon-tabs::-webkit-scrollbar { display: none; }
+  .visio-theme .ribbon-context { display: none; }
+  .visio-theme .ribbon { height: 73px; }
+
+  .visio-theme .activity-bar {
+    position: relative;
+    z-index: 64;
+    grid-column: 1;
+    grid-row: 2;
+    padding-bottom: var(--status);
+  }
+  body.visio-theme .workspace,
+  body.visio-theme.app-page-code .workspace {
+    grid-column: 2 / -1;
+    min-width: 0;
+  }
+  body.visio-theme.app-page-simulation .simulator-panel {
+    grid-column: 2 / -1 !important;
+    min-width: 0 !important;
+  }
+  .visio-theme .workspace-tabs { overflow-x: auto; overflow-y: hidden; }
+  .visio-theme .work-tab { min-width: 124px; }
+  .visio-theme .statusbar {
+    left: var(--activity);
+    right: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    box-sizing: border-box;
+  }
+
+  body.visio-theme .sidebar,
+  body.visio-theme.hide-project-pane .sidebar {
+    position: fixed;
+    z-index: 63;
+    top: var(--top);
+    bottom: 0;
+    left: var(--activity);
+    width: min(82vw, 320px);
+    display: block;
+    padding-bottom: var(--status);
+    box-sizing: border-box;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateX(calc(-100% - 8px));
+    transition: transform .18s ease, visibility 0s linear .18s;
+    box-shadow: 8px 0 22px rgba(0, 0, 0, .2);
+  }
+  body.visio-theme.mobile-sidebar-open .sidebar {
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateX(0);
+    transition-delay: 0s;
+  }
+  .mobile-sidebar-close {
+    position: absolute;
+    z-index: 3;
+    top: 5px;
+    right: 5px;
+    width: 32px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    color: #424242;
+  }
+  .mobile-sidebar-close:hover,
+  .mobile-sidebar-close:focus-visible { color: #075a9c; background: #e5f1fb; }
+  .mobile-sidebar-close svg { width: 18px; height: 18px; }
+  .visio-theme .sidebar .panel-title { padding-right: 42px; }
+  .mobile-sidebar-scrim {
+    position: fixed;
+    z-index: 62;
+    top: var(--top);
+    right: 0;
+    bottom: 0;
+    left: var(--activity);
+    width: auto;
+    height: auto;
+    display: block;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    background: rgba(20, 24, 30, .34);
+    transition: opacity .18s ease, visibility 0s linear .18s;
+  }
+  body.mobile-sidebar-open .mobile-sidebar-scrim {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    transition-delay: 0s;
+  }
 }

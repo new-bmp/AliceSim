@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AliceSIM",
+  "version": "0.2.0",
+  "identifier": "io.alicesim.app",
+  "build": {
+    "beforeBuildCommand": "pnpm web:build",
+    "frontendDist": "../dist/web"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "AliceSIM",
+        "url": "desktop-loader.html",
+        "fullscreen": true,
+        "decorations": false,
+        "resizable": true,
+        "focus": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": ["binaries/alicesim-backend"],
+    "category": "DeveloperTool",
+    "shortDescription": "STM32 firmware and circuit simulator",
+    "longDescription": "AliceSIM provides STM32 firmware validation, deterministic HAL simulation and an interactive circuit workspace."
+  }
+}

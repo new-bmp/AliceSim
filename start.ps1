@@ -5,6 +5,7 @@ param(
   [ValidateRange(0, 100)]
   [int]$PortSpan = 20,
   [switch]$NoBrowser,
+  [switch]$Windowed,
   [switch]$SkipDependencies
 )
 
@@ -226,11 +227,53 @@ function Find-RunningAliceSim {
   return $null
 }
 
+function Open-AliceSimBrowser {
+  param([string]$Url)
+  if ($Windowed) {
+    Start-Process $Url
+    return
+  }
+
+  $browserCandidates = @(
+    $(if ($env:ALICESIM_BROWSER) { $env:ALICESIM_BROWSER }),
+    $(if ($env:ProgramFiles) { Join-Path $env:ProgramFiles "Microsoft\Edge\Application\msedge.exe" }),
+    $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} "Microsoft\Edge\Application\msedge.exe" }),
+    $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "Microsoft\Edge\Application\msedge.exe" }),
+    $(if ($env:ProgramFiles) { Join-Path $env:ProgramFiles "Google\Chrome\Application\chrome.exe" }),
+    $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} "Google\Chrome\Application\chrome.exe" }),
+    $(if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "Google\Chrome\Application\chrome.exe" })
+  ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -Unique
+
+  $browserExecutable = $browserCandidates | Select-Object -First 1
+  if ($browserExecutable) {
+    try {
+      $browserArguments = @(
+        "--kiosk",
+        "--disable-pinch",
+        "--overscroll-history-navigation=0"
+      )
+      if ([System.IO.Path]::GetFileName($browserExecutable) -ieq "msedge.exe") {
+        $browserArguments += "--edge-kiosk-type=fullscreen"
+      }
+      $browserArguments += $Url
+      Start-Process -FilePath $browserExecutable -ArgumentList $browserArguments
+      return
+    } catch {
+      Write-Warning "The fullscreen browser could not be started. AliceSIM will use the default browser instead."
+    }
+  }
+
+  if (-not $browserExecutable) {
+    Write-Warning "Edge or Chrome was not found. AliceSIM will open in the default browser without fullscreen mode."
+  }
+  Start-Process $Url
+}
+
 try {
   $existingUrl = Find-RunningAliceSim -ExpectedInstance (Get-AliceInstanceId)
   if ($existingUrl) {
     Write-Host "AliceSIM is already running at $existingUrl" -ForegroundColor Cyan
-    if (-not $NoBrowser) { Start-Process $existingUrl }
+    if (-not $NoBrowser) { Open-AliceSimBrowser -Url $existingUrl }
     exit 0
   }
 
@@ -273,6 +316,7 @@ try {
     "server.py", "--host", "127.0.0.1", "--port", [string]$Port, "--port-span", [string]$PortSpan
   )
   $serverArguments += $(if ($NoBrowser) { "--no-browser" } else { "--open-browser" })
+  $serverArguments += $(if ($Windowed) { "--windowed-browser" } else { "--fullscreen-browser" })
   Invoke-AlicePython -PythonArguments $serverArguments
   exit $LASTEXITCODE
 } catch {

@@ -13,6 +13,12 @@ Alicepose-21points/
 Thumbs.db
 .idea/
 .vscode/
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/*
+!src-tauri/binaries/.gitkeep
+.tauri-sidecar/
 
 # Generated simulation/build output
 build/

@@ -304,7 +304,8 @@ async function runDiagnostics(force = false) {
       activeCode: editor.value,
       all: force
     });
-    const response = await fetch("/api/clang-check", {
+    const request = window.AlicePlatform?.fetch || fetch;
+    const response = await request("/api/clang-check", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(workspacePayload || { code: editor.value, filename: state.currentFile })
@@ -411,11 +412,57 @@ function switchBottom(name) {
 
 $$("[data-bottom]").forEach(btn => btn.addEventListener("click", () => switchBottom(btn.dataset.bottom)));
 
+const mobileSidebarMedia = typeof window.matchMedia === "function"
+  ? window.matchMedia("(max-width: 720px)")
+  : { matches: false, addEventListener() {} };
+
+function setMobileSidebarOpen(open, options = {}) {
+  const mobileLayout = mobileSidebarMedia.matches;
+  const visible = mobileLayout && Boolean(open);
+  document.body.classList.toggle("mobile-sidebar-open", visible);
+  const sidebar = $("#sidebar");
+  if (sidebar) sidebar.setAttribute("aria-hidden", String(mobileLayout && !visible));
+  $$(".activity-item[data-view]").forEach(item => {
+    item.setAttribute("aria-expanded", String(visible && item.classList.contains("active")));
+  });
+  if (!visible && options.restoreFocus) {
+    $(".activity-item[data-view].active")?.focus({ preventScroll: true });
+  }
+}
+
+function syncMobileSidebarLayout() {
+  if (!mobileSidebarMedia.matches) document.body.classList.remove("mobile-sidebar-open");
+  setMobileSidebarOpen(document.body.classList.contains("mobile-sidebar-open"));
+}
+
 $$(".activity-item[data-view]").forEach(btn => btn.addEventListener("click", () => {
+  const repeatMobileSelection = mobileSidebarMedia.matches
+    && btn.classList.contains("active")
+    && document.body.classList.contains("mobile-sidebar-open");
   $$(".activity-item[data-view]").forEach(item => item.classList.remove("active"));
   btn.classList.add("active");
   $$(".side-view").forEach(view => view.classList.toggle("active", view.dataset.panel === btn.dataset.view));
+  if (mobileSidebarMedia.matches) {
+    document.body.classList.remove("hide-project-pane");
+    const projectPaneToggle = $('[data-pane-toggle="project"]');
+    if (projectPaneToggle) projectPaneToggle.checked = true;
+    setMobileSidebarOpen(!repeatMobileSelection);
+  }
 }));
+
+$("#mobileSidebarScrim")?.addEventListener("click", () => setMobileSidebarOpen(false, { restoreFocus: true }));
+$("#mobileSidebarClose")?.addEventListener("click", () => setMobileSidebarOpen(false, { restoreFocus: true }));
+mobileSidebarMedia.addEventListener?.("change", syncMobileSidebarLayout);
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && document.body.classList.contains("mobile-sidebar-open")) {
+    event.preventDefault();
+    setMobileSidebarOpen(false, { restoreFocus: true });
+  }
+});
+window.addEventListener("alice-editor-file-open", () => {
+  if (mobileSidebarMedia.matches) setMobileSidebarOpen(false);
+});
+syncMobileSidebarLayout();
 
 $$(".work-tab").forEach(btn => btn.addEventListener("click", event => {
   if (event.target.tagName === "SMALL") return;
@@ -456,8 +503,9 @@ async function buildProject() {
   $("#buildButton").classList.add("busy");
   const startedAt = performance.now();
   appendTerminal("[1/4] Parsing IOC, GPIO aliases and UART configuration", "info");
-  appendTerminal("[2/4] Running Clang 18 across the uploaded C project", "");
+  appendTerminal("[2/4] Checking uploaded C/C++ sources (Clang 18 when the local backend is available)", "");
   const diagnostics = await runDiagnostics(true);
+  const syntaxChecker = state.clangAvailable ? "Clang syntax check" : "Browser C structure check";
   const errors = diagnostics.filter(item => item.severity === "error");
   if (errors.length) {
     errors.slice(0, 6).forEach(item => appendTerminal(`${normalizeProjectPath(item.file) || state.currentFile}:${item.line}:${item.column}: error: ${item.message}`, "error"));
@@ -466,10 +514,21 @@ async function buildProject() {
     state.buildBusy = false;
     $("#buildButton").classList.remove("busy");
     switchBottom("problems");
-    showToast(`Clang 检测到 ${errors.length} 个编译问题`, "error");
+    showToast(`${state.clangAvailable ? "Clang" : "基础检查"}检测到 ${errors.length} 个问题`, "error");
     return false;
   }
-  appendTerminal(`Clang syntax check: passed (${diagnostics.filter(item => item.severity === "warning").length} warnings)`, "success");
+  appendTerminal(`${syntaxChecker}: passed (${diagnostics.filter(item => item.severity === "warning").length} warnings)`, state.clangAvailable ? "success" : "warn");
+  const platform = window.AlicePlatform;
+  if (platform?.kind === "tauri-mobile" && !platform.getBackendState?.().available) {
+    const mobileMessage = platform.getBackendState?.().detail || "手机和平板版本不包含本地 Clang/HAL 编译服务";
+    appendTerminal(`[3/4] ${mobileMessage}`, "error");
+    appendTerminal("Build stopped: source editing, project files and circuit design remain available.", "warn");
+    state.built = false;
+    state.buildBusy = false;
+    $("#buildButton").classList.remove("busy");
+    showToast("移动端未提供本地固件编译，请使用桌面版", "error");
+    return false;
+  }
   appendTerminal("[3/4] Compiling supported HAL calls into deterministic IR", "");
   let simulationBuild;
   try {
@@ -1597,6 +1656,10 @@ $$('[data-pane-toggle]').forEach(toggle => toggle.addEventListener("change", () 
     project: "hide-project-pane",
     output: "hide-output-pane"
   }[toggle.dataset.paneToggle];
+  if (toggle.dataset.paneToggle === "project" && mobileSidebarMedia.matches) {
+    setMobileSidebarOpen(toggle.checked);
+    return;
+  }
   document.body.classList.toggle(bodyClass, !toggle.checked);
   setTimeout(resizeCanvas, 50);
 }));

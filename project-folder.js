@@ -4,8 +4,17 @@
   if (window.AliceProjectWorkspace) return;
 
   var MAX_FILES = 8000;
-  var MAX_TEXT_BYTES = 24 * 1024 * 1024;
+  var MAX_TEXT_MEGABYTES = 128;
+  var MAX_TEXT_BYTES = MAX_TEXT_MEGABYTES * 1024 * 1024;
   var READ_CONCURRENCY = 8;
+  var WRITE_CONCURRENCY = 4;
+  var ALICE_PROJECT_DIRECTORY = "AliceSIM";
+  var ALICE_PROJECT_FILENAME = "project.alice.json";
+  var ALICE_CIRCUIT_FILENAME = "circuit.alice-sch.json";
+  var ALICE_WORKSPACE_DIRECTORY = "workspace";
+  var RECENT_PROJECT_DATABASE = "alicesim-projects-v1";
+  var RECENT_PROJECT_STORE = "projects";
+  var RECENT_PROJECT_KEY = "recent";
   var STYLE_ID = "aliceProjectFolderStyles";
   var FOLDER_INPUT_ID = "aliceProjectFolderInput";
   var IOC_INPUT_ID = "aliceIocOnlyInput";
@@ -24,6 +33,8 @@
     importing: false,
     importSequence: 0,
     directoryHandle: null,
+    projectDirectoryHandle: null,
+    managedFilesInitialized: false,
     openMode: "empty"
   };
 
@@ -31,6 +42,16 @@
   var iocOnlyInput = null;
   var suppressEditorInput = false;
   var saveActiveCodeQueue = Promise.resolve();
+  var saveProjectQueue = Promise.resolve();
+
+  function directoryPicker() {
+    var platformPicker = window.AlicePlatform && window.AlicePlatform.files && window.AlicePlatform.files.pickDirectory;
+    if (window.AlicePlatform && window.AlicePlatform.capabilities && window.AlicePlatform.capabilities.directoryPicker && typeof platformPicker === "function") {
+      return platformPicker;
+    }
+    if (typeof window.showDirectoryPicker === "function") return window.showDirectoryPicker.bind(window);
+    return null;
+  }
 
   function $(selector, root) {
     return (root || document).querySelector(selector);
@@ -154,6 +175,10 @@
     if (/\/(?:\.git|\.svn|\.hg|\.idea|\.vscode|node_modules)\//.test(lower)) return true;
     if (/\/(?:debug|release|build|out|dist|cmake-build-[^/]+)\//.test(lower)) return true;
     return /\.(?:o|obj|a|lib|elf|axf|out|bin|hex|map|d|su|lst|crf|dep|pch|gch|log|tmp|bak|zip|7z|rar)$/i.test(path);
+  }
+
+  function isAliceManagedPath(path) {
+    return normalizePath(path).split("/")[0].toLowerCase() === ALICE_PROJECT_DIRECTORY.toLowerCase();
   }
 
   function classifyPath(path) {
@@ -529,19 +554,30 @@
   }
 
   function loadIocText(text, fileName) {
-    var viewer = window.AliceIocViewer;
-    if (viewer && typeof viewer.load === "function") {
-      var result = viewer.load(text, fileName);
-      Promise.resolve(result).then(function () { viewer.open?.(); });
-      return true;
+    try {
+      var viewer = window.AliceIocViewer;
+      if (viewer && typeof viewer.load === "function") {
+        var result = viewer.load(text, fileName);
+        Promise.resolve(result)
+          .then(function () { viewer.open?.(); })
+          .catch(function (error) {
+            console.warn("Unable to finish loading IOC " + fileName + ".", error);
+            toast("IOC 配置视图加载失败，但工程文件已保留", "error");
+          });
+        return true;
+      }
+      window.dispatchEvent(new CustomEvent("alice-ioc-open", { detail: { text: text, fileName: fileName } }));
+      if (typeof window.handleIoc === "function" && typeof File === "function") {
+        window.handleIoc(new File([text], basename(fileName), { type: "text/plain" }));
+        return true;
+      }
+      toast("IOC 查看器尚未就绪", "error");
+      return false;
+    } catch (error) {
+      console.warn("Unable to load IOC " + fileName + ".", error);
+      toast("IOC 文件读取成功，但配置解析失败；工程其余文件仍可使用", "error");
+      return false;
     }
-    window.dispatchEvent(new CustomEvent("alice-ioc-open", { detail: { text: text, fileName: fileName } }));
-    if (typeof window.handleIoc === "function" && typeof File === "function") {
-      window.handleIoc(new File([text], basename(fileName), { type: "text/plain" }));
-      return true;
-    }
-    toast("IOC 查看器尚未就绪", "error");
-    return false;
   }
 
   function chooseProjectCircuitRecord() {
@@ -594,8 +630,7 @@
     if (record.kind === "ioc") {
       workspace.iocPath = normalized;
       workspace.defines = parseDefines(Array.from(workspace.files.values()), normalized);
-      loadIocText(record.content, normalized);
-      return true;
+      return loadIocText(record.content, normalized);
     }
     if (record.kind === "circuit") {
       workspace.circuitPath = normalized;
@@ -609,13 +644,18 @@
     options = options || {};
     var sequence = ++workspace.importSequence;
     var sourceFiles = Array.from(fileList || []);
-    if (!sourceFiles.length) return null;
+    if (!sourceFiles.length) {
+      setImportBusy(false);
+      toast("所选目录中没有可读取的 STM32 源码或 IOC 文件", "error");
+      return null;
+    }
     if (sourceFiles.length > MAX_FILES) {
       toast("工程文件过多，当前上限为 " + MAX_FILES + " 个文件", "error");
       return null;
     }
 
     setImportBusy(true, "正在扫描 " + sourceFiles.length + " 个文件...");
+    var warnings = Array.isArray(options.warnings) ? options.warnings.slice() : [];
     var rootName;
     try { rootName = detectRootName(sourceFiles); } catch (error) {
       setImportBusy(false);
@@ -625,12 +665,11 @@
 
     var accepted = [];
     var casePaths = new Map();
-    var warnings = [];
     var totalBytes = 0;
     sourceFiles.forEach(function (file) {
       var path;
       try { path = relativeFilePath(file, rootName); } catch (error) { warnings.push(error.message); return; }
-      if (!path || isIgnoredPath(path)) return;
+      if (!path || isIgnoredPath(path) || (options.openMode !== "alicesim-project" && isAliceManagedPath(path))) return;
       var type = classifyPath(path);
       if (!type) return;
       var folded = path.toLocaleLowerCase("en-US");
@@ -650,7 +689,7 @@
     }
     if (totalBytes > MAX_TEXT_BYTES) {
       setImportBusy(false);
-      toast("可读取文本文件超过 24 MB，请移除大型生成目录后重试", "error");
+      toast("可读取文本文件超过 " + MAX_TEXT_MEGABYTES + " MB，请移除大型生成目录后重试", "error");
       return null;
     }
 
@@ -686,6 +725,8 @@
     workspace.circuitPath = "";
     workspace.warnings = warnings;
     workspace.directoryHandle = options.directoryHandle || null;
+    workspace.projectDirectoryHandle = options.projectDirectoryHandle || null;
+    workspace.managedFilesInitialized = Boolean(options.managedFilesInitialized);
     workspace.openMode = options.openMode || "folder-upload";
     deriveProjectMetadata();
     renderTree();
@@ -698,7 +739,9 @@
       workspace.iocPath = selectedIoc;
       workspace.defines = parseDefines(Array.from(workspace.files.values()), selectedIoc);
       var iocRecord = workspace.files.get(selectedIoc);
-      loadIocText(iocRecord.content, selectedIoc);
+      if (!loadIocText(iocRecord.content, selectedIoc)) {
+        warnings.push("IOC 配置解析失败：" + selectedIoc);
+      }
     }
 
     var circuitRecord = chooseProjectCircuitRecord();
@@ -720,7 +763,8 @@
     return getState();
   }
 
-  async function collectDirectoryFiles(directoryHandle) {
+  async function collectDirectoryFiles(directoryHandle, warnings) {
+    warnings = warnings || [];
     var rootName;
     try { rootName = normalizePath(directoryHandle.name || "STM32_Project").split("/").pop(); }
     catch (_) { rootName = "STM32_Project"; }
@@ -730,6 +774,7 @@
     async function visit(handle, parentPath) {
       for await (var entry of handle.values()) {
         var path = parentPath ? parentPath + "/" + entry.name : entry.name;
+        if (!parentPath && entry.kind === "directory" && entry.name.toLowerCase() === ALICE_PROJECT_DIRECTORY.toLowerCase()) continue;
         if (isIgnoredPath(path)) continue;
         if (entry.kind === "directory") {
           await visit(entry, path);
@@ -737,16 +782,20 @@
         }
         if (entry.kind !== "file" || !classifyPath(path)) continue;
         if (files.length >= MAX_FILES) throw new Error("工程文件过多，当前上限为 " + MAX_FILES + " 个文件");
-        var file = await entry.getFile();
-        files.push({
-          name: file.name,
-          relativePath: rootName + "/" + path,
-          size: file.size,
-          lastModified: file.lastModified,
-          type: file.type,
-          fileHandle: entry,
-          text: file.text.bind(file)
-        });
+        try {
+          var file = await entry.getFile();
+          files.push({
+            name: file.name,
+            relativePath: rootName + "/" + path,
+            size: file.size,
+            lastModified: file.lastModified,
+            type: file.type,
+            fileHandle: entry,
+            text: file.text.bind(file)
+          });
+        } catch (error) {
+          warnings.push("无法读取 " + path + "：" + (error && error.message ? error.message : String(error)));
+        }
       }
     }
 
@@ -755,7 +804,8 @@
   }
 
   async function openWritableFolder() {
-    if (typeof window.showDirectoryPicker !== "function") {
+    var pickDirectory = directoryPicker();
+    if (!pickDirectory) {
       if (folderInput) {
         folderInput.value = "";
         folderInput.click();
@@ -763,12 +813,23 @@
       return null;
     }
     try {
-      var directoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
-      setImportBusy(true, "正在读取可写工程文件夹...");
-      var files = await collectDirectoryFiles(directoryHandle);
+      var directoryHandle = await pickDirectory({ mode: "read" });
+      if (!directoryHandle) return null;
+      setImportBusy(true, "正在读取工程文件夹...");
+      var scanWarnings = [];
+      var savedProject = await readAliceProjectSnapshot(directoryHandle);
+      if (savedProject && savedProject.payload) {
+        return await loadProjectSnapshot(savedProject.payload, {
+          directoryHandle: savedProject.rootDirectoryHandle || directoryHandle,
+          projectDirectoryHandle: savedProject.projectDirectoryHandle
+        });
+      }
+      if (savedProject && savedProject.error) scanWarnings.push(savedProject.error);
+      var files = await collectDirectoryFiles(directoryHandle, scanWarnings);
       return await importFileList(files, {
         directoryHandle: directoryHandle,
-        openMode: "file-system-access"
+        openMode: "file-system-access",
+        warnings: scanWarnings
       });
     } catch (error) {
       setImportBusy(false);
@@ -778,7 +839,7 @@
     }
   }
 
-  function loadFiles(entries, rootName) {
+  function loadFiles(entries, rootName, options) {
     var pairs = Array.isArray(entries)
       ? entries.map(function (entry) { return [entry.path || entry.name, entry.content]; })
       : Object.entries(entries || {});
@@ -798,13 +859,13 @@
         text: function () { return Promise.resolve(content); }
       };
     });
-    return importFileList(virtualFiles, { openMode: "virtual" });
+    return importFileList(virtualFiles, Object.assign({ openMode: "virtual" }, options || {}));
   }
 
   function openFolder(files, options) {
     if (files && typeof files.length === "number") return importFileList(files, { openMode: "folder-upload" });
     options = options || {};
-    if (!options.useFileInput && typeof window.showDirectoryPicker === "function") return openWritableFolder();
+    if (!options.useFileInput && directoryPicker()) return openWritableFolder();
     if (!folderInput) return null;
     folderInput.value = "";
     folderInput.click();
@@ -916,6 +977,385 @@
       throw new Error("未获得原文件的写入权限");
     }
     return true;
+  }
+
+  async function readJsonFile(directoryHandle, filename) {
+    var fileHandle = await directoryHandle.getFileHandle(filename);
+    var file = await fileHandle.getFile();
+    if (Number(file.size || 0) > MAX_TEXT_BYTES) throw new Error(filename + " 超过 " + MAX_TEXT_MEGABYTES + " MB");
+    return JSON.parse(stripBom(await file.text()));
+  }
+
+  function validateProjectSnapshot(payload) {
+    if (!payload || typeof payload !== "object" || payload.format !== "AliceSIM Project") {
+      throw new Error("AliceSIM/project.alice.json 格式无效");
+    }
+    if (!payload.files || typeof payload.files !== "object" || Array.isArray(payload.files)) {
+      throw new Error("AliceSIM 工程中没有可恢复的文件");
+    }
+    var paths = Object.keys(payload.files);
+    if (!paths.length) throw new Error("AliceSIM 工程文件列表为空");
+    if (paths.length > MAX_FILES) throw new Error("AliceSIM 工程文件超过 " + MAX_FILES + " 个");
+    var totalBytes = 0;
+    paths.forEach(function (path) {
+      normalizePath(path);
+      if (typeof payload.files[path] !== "string") throw new Error("AliceSIM 工程文件内容无效：" + path);
+      totalBytes += byteLength(payload.files[path]);
+    });
+    if (totalBytes > MAX_TEXT_BYTES) throw new Error("AliceSIM 工程文本超过 " + MAX_TEXT_MEGABYTES + " MB");
+    return payload;
+  }
+
+  async function readAliceProjectSnapshot(directoryHandle) {
+    if (!directoryHandle || typeof directoryHandle.getFileHandle !== "function") return null;
+    var projectDirectoryHandle = directoryHandle;
+    var selectedAliceDirectory = String(directoryHandle.name || "").toLowerCase() === ALICE_PROJECT_DIRECTORY.toLowerCase();
+    try {
+      if (!selectedAliceDirectory) {
+        if (typeof directoryHandle.getDirectoryHandle !== "function") return null;
+        projectDirectoryHandle = await directoryHandle.getDirectoryHandle(ALICE_PROJECT_DIRECTORY);
+      }
+      var payload = validateProjectSnapshot(await readJsonFile(projectDirectoryHandle, ALICE_PROJECT_FILENAME));
+      return {
+        payload: payload,
+        rootDirectoryHandle: selectedAliceDirectory ? null : directoryHandle,
+        projectDirectoryHandle: projectDirectoryHandle
+      };
+    } catch (error) {
+      if (error && (error.name === "NotFoundError" || error.code === 8)) return null;
+      return { error: "无法恢复 AliceSIM 工程，将读取原始 CubeMX 文件：" + (error && error.message ? error.message : String(error)) };
+    }
+  }
+
+  function loadProjectSnapshot(payload, options) {
+    options = options || {};
+    var snapshot;
+    try {
+      snapshot = validateProjectSnapshot(payload);
+    } catch (error) {
+      setImportBusy(false);
+      toast("无法恢复 AliceSIM 工程：" + error.message, "error");
+      return Promise.resolve(null);
+    }
+    var files = Object.assign({}, snapshot.files);
+    var projectName = snapshot.project && snapshot.project.name || "STM32_Project";
+    var circuit = snapshot.circuit;
+    var circuitPath = snapshot.circuitPath || projectName + ".alice-sch.json";
+    if (circuit && typeof circuit === "object") files[circuitPath] = JSON.stringify(circuit, null, 2);
+    return loadFiles(files, projectName, {
+      openMode: "alicesim-project",
+      directoryHandle: options.directoryHandle || options.projectDirectoryHandle || null,
+      projectDirectoryHandle: options.projectDirectoryHandle || null,
+      managedFilesInitialized: Boolean(snapshot.storage && snapshot.storage.workspaceSync && snapshot.storage.workspaceSync.complete)
+    }).then(function (state) {
+      if (!state) return null;
+      if (snapshot.currentFile && workspace.files.has(snapshot.currentFile)) openFile(snapshot.currentFile);
+      window.dispatchEvent(new CustomEvent("alice-project-snapshot-restored", {
+        detail: { snapshot: snapshot, state: getState() }
+      }));
+      toast("已恢复 AliceSIM 工程 · " + workspace.rootName);
+      return getState();
+    });
+  }
+
+  async function writeTextFile(directoryHandle, filename, content) {
+    var fileHandle = await directoryHandle.getFileHandle(filename, { create: true });
+    var writable = await fileHandle.createWritable();
+    try {
+      await writable.write(content);
+      await writable.close();
+    } catch (error) {
+      try { if (writable && typeof writable.abort === "function") await writable.abort(); } catch (_) { /* best effort */ }
+      throw error;
+    }
+    return byteLength(content);
+  }
+
+  async function writeManagedWorkspaceFile(workspaceDirectoryHandle, path, content) {
+    var parts = normalizePath(path).split("/");
+    var filename = parts.pop();
+    var parent = workspaceDirectoryHandle;
+    for (var index = 0; index < parts.length; index += 1) {
+      parent = await parent.getDirectoryHandle(parts[index], { create: true });
+    }
+    return writeTextFile(parent, filename, content);
+  }
+
+  async function writeManagedWorkspace(projectDirectoryHandle, snapshot) {
+    if (typeof projectDirectoryHandle.getDirectoryHandle !== "function") throw new Error("当前浏览器无法创建 AliceSIM 工作副本");
+    var workspaceDirectoryHandle = await projectDirectoryHandle.getDirectoryHandle(ALICE_WORKSPACE_DIRECTORY, { create: true });
+    var circuitPath = snapshot.circuitPath ? normalizePath(snapshot.circuitPath) : "";
+    var paths = Object.keys(snapshot.files || {}).filter(function (path) {
+      var normalized = normalizePath(path);
+      return normalized !== circuitPath && !normalized.toLowerCase().endsWith(".alice-sch.json");
+    });
+    if (workspace.managedFilesInitialized) {
+      paths = paths.filter(function (path) {
+        var record = workspace.files.get(path);
+        return !record || record.dirty;
+      });
+    }
+    var bytes = 0;
+    var completed = 0;
+    emitSaveEvent("alice-project-save-progress", {
+      stage: "workspace",
+      current: 0,
+      total: paths.length,
+      message: paths.length ? "正在同步代码工作副本 · 0/" + paths.length : "代码工作副本无需更新"
+    });
+    await mapLimit(paths, WRITE_CONCURRENCY, async function (path) {
+      try {
+        bytes += await writeManagedWorkspaceFile(workspaceDirectoryHandle, path, snapshot.files[path]);
+      } catch (error) {
+        var failure = new Error("同步 " + path + " 失败：" + (error && error.message ? error.message : String(error)));
+        failure.path = path;
+        failure.completed = completed;
+        failure.total = paths.length;
+        throw failure;
+      }
+      completed += 1;
+      if (completed === paths.length || completed % 10 === 0) {
+        emitSaveEvent("alice-project-save-progress", {
+          stage: "workspace",
+          current: completed,
+          total: paths.length,
+          path: path,
+          message: "正在同步代码工作副本 · " + completed + "/" + paths.length
+        });
+      }
+    });
+    return { bytes: bytes, fileCount: paths.length };
+  }
+
+  function openRecentProjectDatabase() {
+    return new Promise(function (resolve, reject) {
+      if (!window.indexedDB) {
+        resolve(null);
+        return;
+      }
+      var request = window.indexedDB.open(RECENT_PROJECT_DATABASE, 1);
+      request.onupgradeneeded = function () {
+        var database = request.result;
+        if (!database.objectStoreNames.contains(RECENT_PROJECT_STORE)) database.createObjectStore(RECENT_PROJECT_STORE, { keyPath: "id" });
+      };
+      request.onsuccess = function () { resolve(request.result); };
+      request.onerror = function () { reject(request.error || new Error("无法打开浏览器项目存储")); };
+    });
+  }
+
+  async function rememberRecentProject(snapshot, rootDirectoryHandle, projectDirectoryHandle) {
+    var database;
+    try { database = await openRecentProjectDatabase(); }
+    catch (_) { return false; }
+    if (!database) return false;
+    function put(record) {
+      return new Promise(function (resolve, reject) {
+        var transaction = database.transaction(RECENT_PROJECT_STORE, "readwrite");
+        transaction.objectStore(RECENT_PROJECT_STORE).put(record);
+        transaction.oncomplete = function () { resolve(true); };
+        transaction.onerror = function () { reject(transaction.error || new Error("无法保存浏览器项目快照")); };
+        transaction.onabort = function () { reject(transaction.error || new Error("浏览器项目快照写入已取消")); };
+      });
+    }
+    var record = {
+      id: RECENT_PROJECT_KEY,
+      savedAt: snapshot.savedAt,
+      snapshot: snapshot,
+      rootDirectoryHandle: rootDirectoryHandle || null,
+      projectDirectoryHandle: projectDirectoryHandle || null
+    };
+    try {
+      await put(record);
+    } catch (error) {
+      // Some embedded Chromium builds cannot clone file-system handles. The
+      // full snapshot is still sufficient to restore the page after restart.
+      await put({ id: RECENT_PROJECT_KEY, savedAt: snapshot.savedAt, snapshot: snapshot });
+    } finally {
+      database.close();
+    }
+    return true;
+  }
+
+  async function readRecentProject() {
+    function localFallback() {
+      try {
+        var snapshot = JSON.parse(window.localStorage && window.localStorage.getItem("alicesim.project.autosave.v1") || "null");
+        return snapshot ? { id: RECENT_PROJECT_KEY, savedAt: snapshot.savedAt || "", snapshot: snapshot } : null;
+      } catch (_) {
+        return null;
+      }
+    }
+    var database;
+    try { database = await openRecentProjectDatabase(); }
+    catch (_) { return localFallback(); }
+    if (!database) return localFallback();
+    try {
+      var record = await new Promise(function (resolve, reject) {
+        var transaction = database.transaction(RECENT_PROJECT_STORE, "readonly");
+        var request = transaction.objectStore(RECENT_PROJECT_STORE).get(RECENT_PROJECT_KEY);
+        request.onsuccess = function () { resolve(request.result || null); };
+        request.onerror = function () { reject(request.error || new Error("无法读取浏览器项目快照")); };
+      });
+      return record || localFallback();
+    } finally {
+      database.close();
+    }
+  }
+
+  async function restoreRecentProject() {
+    if (workspace.files.size || workspace.importing) return null;
+    try {
+      var recent = await readRecentProject();
+      if (!recent || !recent.snapshot || workspace.files.size || workspace.importing) return null;
+      setImportBusy(true, "正在恢复上次保存的 AliceSIM 工程...");
+      return await loadProjectSnapshot(recent.snapshot, {
+        directoryHandle: recent.rootDirectoryHandle || recent.projectDirectoryHandle || null,
+        projectDirectoryHandle: recent.projectDirectoryHandle || null
+      });
+    } catch (error) {
+      setImportBusy(false);
+      console.warn("Unable to restore the recent AliceSIM project.", error);
+      return null;
+    }
+  }
+
+  async function saveProjectSnapshotNow(payload, options) {
+    options = options || {};
+    commitActiveBuffer();
+    emitSaveEvent("alice-project-save-progress", { stage: "prepare", current: 0, total: 1, message: "正在整理代码、电路和页面状态..." });
+    var rootHandle = workspace.directoryHandle;
+    var projectDirectoryHandle = workspace.projectDirectoryHandle;
+    if (!rootHandle && !projectDirectoryHandle) {
+      var browserSnapshot = Object.assign({}, payload || {}, {
+        format: "AliceSIM Project",
+        version: Math.max(3, Number(payload && payload.version) || 0),
+        savedAt: new Date().toISOString(),
+        storage: { mode: "browser" }
+      });
+      validateProjectSnapshot(browserSnapshot);
+      var remembered = await rememberRecentProject(browserSnapshot, null, null);
+      workspace.files.forEach(function (record) { record.dirty = false; });
+      refreshTreeSelection();
+      updateProjectChrome();
+      var browserResult = {
+        ok: true,
+        action: "browser-storage",
+        browserBackup: remembered,
+        fileCount: Object.keys(browserSnapshot.files).length,
+        message: "项目已保存在浏览器中"
+      };
+      emitSaveEvent("alice-project-save-progress", { stage: "complete", current: 1, total: 1, message: browserResult.message });
+      emitSaveEvent("alice-project-saved", browserResult);
+      return browserResult;
+    }
+
+    try {
+      var permissionHandle = rootHandle || projectDirectoryHandle;
+      emitSaveEvent("alice-project-save-progress", { stage: "permission", current: 0, total: 1, message: "正在确认 AliceSIM 文件夹写入权限..." });
+      await ensureWritePermission(permissionHandle);
+      if (!projectDirectoryHandle) {
+        if (String(rootHandle.name || "").toLowerCase() === ALICE_PROJECT_DIRECTORY.toLowerCase()) {
+          projectDirectoryHandle = rootHandle;
+        } else {
+          if (typeof rootHandle.getDirectoryHandle !== "function") throw new Error("当前浏览器无法创建 AliceSIM 项目文件夹");
+          projectDirectoryHandle = await rootHandle.getDirectoryHandle(ALICE_PROJECT_DIRECTORY, { create: true });
+        }
+      }
+
+      var snapshot = Object.assign({}, payload || {});
+      snapshot.format = "AliceSIM Project";
+      snapshot.version = Math.max(3, Number(snapshot.version) || 0);
+      snapshot.savedAt = new Date().toISOString();
+      snapshot.storage = {
+        mode: "managed-folder",
+        directory: ALICE_PROJECT_DIRECTORY,
+        workspaceDirectory: ALICE_WORKSPACE_DIRECTORY,
+        workspaceSync: { complete: false, fileCount: 0 }
+      };
+      if (!snapshot.files || typeof snapshot.files !== "object") {
+        snapshot.files = {};
+        workspace.files.forEach(function (record, path) { snapshot.files[path] = record.content; });
+      }
+      validateProjectSnapshot(snapshot);
+
+      var circuit = snapshot.circuit;
+      if ((!circuit || typeof circuit !== "object") && window.AliceSchematic && typeof window.AliceSchematic.exportCircuit === "function") {
+        circuit = window.AliceSchematic.exportCircuit();
+        snapshot.circuit = circuit;
+      }
+      var circuitContent = circuit && typeof circuit === "object" ? JSON.stringify(circuit, null, 2) : "";
+      var projectContent = JSON.stringify(snapshot, null, 2);
+      if (byteLength(projectContent) > MAX_TEXT_BYTES) throw new Error("AliceSIM 项目快照超过 " + MAX_TEXT_MEGABYTES + " MB");
+
+      emitSaveEvent("alice-project-save-progress", { stage: "circuit", current: 0, total: 1, message: "正在保存电路..." });
+      var circuitBytes = circuitContent ? await writeTextFile(projectDirectoryHandle, ALICE_CIRCUIT_FILENAME, circuitContent) : 0;
+      emitSaveEvent("alice-project-save-progress", { stage: "manifest", current: 0, total: 1, message: "正在保存项目清单..." });
+      var projectBytes = await writeTextFile(projectDirectoryHandle, ALICE_PROJECT_FILENAME, projectContent);
+      var browserBackup = false;
+      try { browserBackup = await rememberRecentProject(snapshot, rootHandle, projectDirectoryHandle); }
+      catch (storageError) { console.warn("Unable to keep the recent AliceSIM project in browser storage.", storageError); }
+      var managedWorkspace = { bytes: 0, fileCount: 0 };
+      var workspaceSyncError = "";
+      try {
+        managedWorkspace = await writeManagedWorkspace(projectDirectoryHandle, snapshot);
+        snapshot.storage.workspaceSync = { complete: true, fileCount: managedWorkspace.fileCount };
+        projectContent = JSON.stringify(snapshot, null, 2);
+        projectBytes = await writeTextFile(projectDirectoryHandle, ALICE_PROJECT_FILENAME, projectContent);
+        try { browserBackup = await rememberRecentProject(snapshot, rootHandle, projectDirectoryHandle); }
+        catch (storageError) { console.warn("Unable to refresh the completed AliceSIM project snapshot in browser storage.", storageError); }
+      } catch (workspaceError) {
+        workspaceSyncError = workspaceError && workspaceError.message ? workspaceError.message : String(workspaceError);
+        console.warn("AliceSIM workspace copy is incomplete; the complete project snapshot remains usable.", workspaceError);
+      }
+      workspace.projectDirectoryHandle = projectDirectoryHandle;
+      workspace.managedFilesInitialized = !workspaceSyncError;
+      workspace.openMode = "alicesim-project";
+      workspace.files.forEach(function (record) { record.dirty = false; });
+      refreshTreeSelection();
+      updateProjectChrome();
+      var result = {
+        ok: true,
+        action: "project-folder",
+        directory: ALICE_PROJECT_DIRECTORY,
+        projectFile: ALICE_PROJECT_DIRECTORY + "/" + ALICE_PROJECT_FILENAME,
+        circuitFile: circuitBytes ? ALICE_PROJECT_DIRECTORY + "/" + ALICE_CIRCUIT_FILENAME : "",
+        bytes: projectBytes + circuitBytes + managedWorkspace.bytes,
+        fileCount: Object.keys(snapshot.files).length,
+        changedFileCount: managedWorkspace.fileCount,
+        browserBackup: browserBackup,
+        workspaceSyncError: workspaceSyncError,
+        warning: workspaceSyncError ? "代码工作副本未完全同步，但电路和完整项目快照已保存" : "",
+        message: workspaceSyncError
+          ? "电路和项目已保存，代码工作副本稍后可重试"
+          : "项目已保存到 " + ALICE_PROJECT_DIRECTORY + " 文件夹"
+      };
+      emitSaveEvent("alice-project-save-progress", {
+        stage: workspaceSyncError ? "warning" : "complete",
+        current: result.fileCount,
+        total: result.fileCount,
+        message: result.message
+      });
+      if (options.notify !== false) toast(result.message);
+      emitSaveEvent("alice-project-saved", result);
+      return result;
+    } catch (error) {
+      var failure = {
+        ok: false,
+        action: "project-folder",
+        code: error && error.name ? error.name : "PROJECT_SAVE_FAILED",
+        error: error && error.message ? error.message : String(error)
+      };
+      if (options.notify !== false) toast("项目保存失败：" + failure.error, "error");
+      emitSaveEvent("alice-project-save-error", failure);
+      return failure;
+    }
+  }
+
+  function saveProjectSnapshot(payload, options) {
+    var run = function () { return saveProjectSnapshotNow(payload, options); };
+    var queued = saveProjectQueue.then(run, run);
+    saveProjectQueue = queued.then(function () { return undefined; }, function () { return undefined; });
+    return queued;
   }
 
   function emitSaveEvent(name, detail) {
@@ -1092,7 +1532,10 @@
       openMode: workspace.openMode,
       canWriteBack: Array.from(workspace.files.values()).some(function (record) {
         return Boolean(record.fileHandle && typeof record.fileHandle.createWritable === "function");
-      })
+      }),
+      canSaveProject: Boolean(workspace.directoryHandle || workspace.projectDirectoryHandle),
+      managedProjectDirectory: workspace.projectDirectoryHandle ? ALICE_PROJECT_DIRECTORY : "",
+      managedWorkspaceDirectory: workspace.managedFilesInitialized ? ALICE_PROJECT_DIRECTORY + "/" + ALICE_WORKSPACE_DIRECTORY : ""
     };
   }
 
@@ -1222,6 +1665,8 @@
     upsertFiles: upsertFiles,
     openFile: openFile,
     saveActiveCode: saveActiveCode,
+    saveProject: saveProjectSnapshot,
+    restoreRecentProject: restoreRecentProject,
     createClangPayload: createClangPayload,
     getState: getState
   });
@@ -1229,11 +1674,13 @@
   var projectApi = window.AliceProject && typeof window.AliceProject === "object" ? window.AliceProject : {};
   try {
     projectApi.saveActiveCode = saveActiveCode;
+    projectApi.saveProject = saveProjectSnapshot;
     projectApi.getActiveCode = getActiveCodeSnapshot;
     window.AliceProject = projectApi;
   } catch (_) {
     window.AliceProject = {
       saveActiveCode: saveActiveCode,
+      saveProject: saveProjectSnapshot,
       getActiveCode: getActiveCodeSnapshot
     };
   }
@@ -1250,4 +1697,6 @@
   window.dispatchEvent(new CustomEvent("alice-project-workspace-ready", { detail: window.AliceProjectWorkspace }));
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init, { once: true });
   else init();
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { restoreRecentProject(); }, { once: true });
+  else window.setTimeout(restoreRecentProject, 0);
 }());

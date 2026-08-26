@@ -1,0 +1,19 @@
+[package]
+name = "alicesim"
+version = "0.2.0"
+description = "AliceSIM cross-platform STM32 simulator"
+authors = ["AliceSIM contributors"]
+edition = "2021"
+
+[lib]
+name = "alicesim_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-shell = "2"

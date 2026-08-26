@@ -2,13 +2,18 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#080b12" />
+    <meta name="application-name" content="AliceSIM" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>AliceSIM — STM32 Web Simulator</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./assets/alicesim-app-icon.svg" type="image/svg+xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="./styles.css?v=20260814.8" />
+    <link rel="stylesheet" href="./styles.css?v=20260826.3" />
   </head>
   <body class="visio-theme app-page-code">
     <div class="boot-screen" id="bootScreen">
@@ -21,7 +26,7 @@
       <header class="topbar">
         <div class="office-titlebar">
         <div class="quick-access" aria-label="快速访问工具栏">
-          <button title="保存代码"><svg viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-8h8v8"/></svg></button>
+          <button title="保存项目"><svg viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-8h8v8"/></svg></button>
           <button title="撤销"><svg viewBox="0 0 24 24"><path d="M9 7 4 12l5 5"/><path d="M5 12h8a6 6 0 0 1 6 6"/></svg></button>
           <button title="重做"><svg viewBox="0 0 24 24"><path d="m15 7 5 5-5 5"/><path d="M19 12h-8a6 6 0 0 0-6 6"/></svg></button>
         </div>
@@ -95,21 +100,21 @@
         </div>
       </header>
 
-      <aside class="activity-bar">
+      <aside class="activity-bar" aria-label="工作区导航">
         <div class="activity-top">
-          <button class="activity-item active" data-view="project" data-tooltip="项目资源">
+          <button class="activity-item active" data-view="project" data-tooltip="项目资源" aria-controls="sidebar" aria-expanded="false">
             <svg viewBox="0 0 24 24"><path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h4l2 2H18.5A2.5 2.5 0 0 1 21 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5Z"/></svg>
           </button>
-          <button class="activity-item" data-view="device" data-tooltip="器件与引脚">
+          <button class="activity-item" data-view="device" data-tooltip="器件与引脚" aria-controls="sidebar" aria-expanded="false">
             <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3M10 10h4v4h-4z"/></svg>
           </button>
-          <button class="activity-item" data-view="debug" data-tooltip="调试与运行">
+          <button class="activity-item" data-view="debug" data-tooltip="调试与运行" aria-controls="sidebar" aria-expanded="false">
             <svg viewBox="0 0 24 24"><path d="M8 8h8v8a4 4 0 0 1-8 0Z"/><path d="M6 12H3M21 12h-3M6.3 17 4 19M20 19l-2.3-2M9 4l1.3 2M15 4l-1.3 2M9 11h.01M15 11h.01"/></svg>
           </button>
-          <button class="activity-item" data-view="analyzer" data-tooltip="逻辑分析仪">
+          <button class="activity-item" data-view="analyzer" data-tooltip="逻辑分析仪" aria-controls="sidebar" aria-expanded="false">
             <svg viewBox="0 0 24 24"><path d="M3 18h18M4 15l4-5 4 3 4-8 4 5"/></svg>
           </button>
-          <button class="activity-item" data-view="packages" data-tooltip="组件库">
+          <button class="activity-item" data-view="packages" data-tooltip="组件库" aria-controls="sidebar" aria-expanded="false">
             <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg>
           </button>
         </div>
@@ -120,7 +125,11 @@
         </div>
       </aside>
 
-      <aside class="sidebar" id="sidebar">
+      <button class="mobile-sidebar-scrim" id="mobileSidebarScrim" type="button" aria-label="关闭侧栏" tabindex="-1"></button>
+      <aside class="sidebar" id="sidebar" aria-label="项目与工具侧栏">
+        <button class="mobile-sidebar-close" id="mobileSidebarClose" type="button" title="关闭侧栏" aria-label="关闭侧栏">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
+        </button>
         <section class="side-view active" data-panel="project">
           <div class="panel-title"><span>PROJECT</span><button data-tooltip="新建文件">＋</button></div>
           <button class="import-card" id="importButton">
@@ -293,6 +302,9 @@
           <button data-schematic-tool="wire" title="导线">
             <svg viewBox="0 0 24 24"><circle cx="5" cy="17" r="2"/><circle cx="19" cy="7" r="2"/><path d="M7 17h5V7h5"/></svg>
           </button>
+          <button id="cancelWireButton" title="取消当前导线 (Esc)" aria-label="取消当前导线" hidden>
+            <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
           <button data-schematic-tool="pan" title="平移画布">
             <svg viewBox="0 0 24 24"><path d="M8 11V6a2 2 0 0 1 4 0v4-6a2 2 0 0 1 4 0v6-4a2 2 0 0 1 4 0v7a8 8 0 0 1-8 8h-1a7 7 0 0 1-6-3l-3-4a2 2 0 0 1 3-3l3 3"/></svg>
           </button>
@@ -305,7 +317,7 @@
             <span>标签</span>
           </label>
           <span class="toolbar-separator"></span>
-          <button id="saveCircuitButton" title="保存电路 (Ctrl+Alt+S)"><svg viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-8h8v8"/><path d="M10 16h4"/></svg></button>
+          <button id="saveCircuitButton" title="单独另存电路 (Ctrl+Alt+S)"><svg viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-8h8v8"/><path d="M10 16h4"/></svg></button>
           <button id="openCircuitButton" title="打开电路 (Ctrl+Alt+O)"><svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3Z"/><path d="M8 14h8M12 11v6"/></svg></button>
           <button id="saveAsComponentButton" title="将完整电路保存为组件"><svg viewBox="0 0 24 24"><rect x="6" y="5" width="12" height="14" rx="1"/><path d="M2 9h4M2 15h4M18 9h4M18 15h4M9 2v3M15 2v3M9 19v3M15 19v3"/></svg></button>
           <span class="toolbar-separator"></span>
@@ -458,9 +470,10 @@
     <div class="toast-stack" id="toastStack"></div>
     <div class="drop-overlay" id="dropOverlay"><div><svg viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5M5 14v5h14v-5"/></svg><strong>释放以导入 IOC</strong><span>完整工程请使用“打开工程”选择文件夹</span></div></div>
 
+    <script src="./platform-runtime.js?v=20260826.1"></script>
     <script src="./clock-tree.js?v=20260802.1"></script>
-    <script src="./envelope-automation.js?v=20260819.2"></script>
-    <script src="./app.js?v=20260819.2"></script>
+    <script src="./envelope-automation.js?v=20260825.3"></script>
+    <script src="./app.js?v=20260826.2"></script>
     <script src="./datasheet-import.js?v=20260807.1"></script>
     <script src="./oled-device.js?v=20260731.6"></script>
     <script src="./spi-display-device.js?v=20260802.1"></script>
@@ -469,12 +482,12 @@
     <script src="./peripheral-catalog.js?v=20260801.3"></script>
     <script src="./peripheral-devices.js?v=20260731.8"></script>
     <script src="./simulation-accel.js?v=20260819.2"></script>
-    <script src="./schematic.js?v=20260820.1"></script>
+    <script src="./schematic.js?v=20260826.3"></script>
     <script src="./alice-drivers.js?v=20260731.9"></script>
-    <script src="./ui-actions.js?v=20260819.2"></script>
-    <script src="./panel-resize.js?v=20260814.3"></script>
+    <script src="./ui-actions.js?v=20260826.1"></script>
+    <script src="./panel-resize.js?v=20260825.4"></script>
     <script src="./ioc-viewer.js?v=20260802.2"></script>
-    <script src="./project-folder.js?v=20260813.1"></script>
+    <script src="./project-folder.js?v=20260825.8"></script>
     <script src="./firmware-runtime.js?v=20260820.2"></script>
     <script src="./hal-simulator.js?v=20260820.2"></script>
     <script src="./serial-device-bridge.js?v=20260802.1"></script>

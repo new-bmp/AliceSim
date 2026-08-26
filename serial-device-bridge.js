@@ -6,7 +6,7 @@
   if (root && root.document) {
     root.AliceSerialBridge = api.create({
       eventTarget: root,
-      serial: root.navigator && root.navigator.serial,
+      serial: root.AlicePlatform && root.AlicePlatform.serial && root.AlicePlatform.serial.provider || root.navigator && root.navigator.serial,
       halProvider: function () { return root.AliceHalSimulator; }
     });
   }

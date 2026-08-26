@@ -435,6 +435,51 @@ test("ADC acquisition source drives the real analog net, persists and supports e
   assert.equal(saved.adcBits, 12);
 });
 
+test("firmware model application never adds output components to a user circuit", () => {
+  const api = loadSchematicApi();
+  api.setMcuConfiguration({
+    mcu: "STM32F103C8T6",
+    configuredPins: [{ base: "PC13", signal: "GPIO_Output", mode: "output" }]
+  });
+  const loaded = api.importCircuit({
+    schemaVersion: 1,
+    kind: "AliceSIMCircuit",
+    mcu: "STM32F103C8T6",
+    components: [
+      { id: "mcu", type: "mcu", ref: "U1", value: "STM32F103C8T6", x: 80, y: 120, rotation: 0 },
+      { id: "user-resistor", type: "resistor", ref: "R1", value: "1 kOhm", x: 360, y: 120, rotation: 0 },
+      { id: "user-led", type: "led", ref: "D1", value: "GREEN LED", x: 520, y: 114, rotation: 0 },
+      { id: "user-ground", type: "ground", ref: "GND1", value: "0V", x: 650, y: 150, rotation: 0 }
+    ],
+    wires: [
+      { id: "w1", from: { componentId: "mcu", pin: "PC13" }, to: { componentId: "user-resistor", pin: "1" }, route: [{ x: 250, y: 150 }, { x: 360, y: 150 }] },
+      { id: "w2", from: { componentId: "user-resistor", pin: "2" }, to: { componentId: "user-led", pin: "A" }, route: [{ x: 456, y: 146 }, { x: 520, y: 146 }] },
+      { id: "w3", from: { componentId: "user-led", pin: "K" }, to: { componentId: "user-ground", pin: "GND" }, route: [{ x: 592, y: 146 }, { x: 682, y: 146 }, { x: 682, y: 150 }] }
+    ],
+    view: { zoom: 1.25, panX: -30, panY: 20, userView: true }
+  });
+  assert.equal(loaded.ok, true, JSON.stringify(loaded));
+
+  const before = api.exportCircuit();
+  const result = api.applyProjectModel({
+    mcu: "STM32F103C8T6",
+    pins: { PC13: { physicalPin: "PC13", iocSignal: "GPIO_Output", mode: "output", configured: true } },
+    outputs: { PC13: { pin: "PC13", label: "STATUS_LED", initial: 0 } }
+  });
+  const after = api.exportCircuit();
+
+  assert.equal(result.generated.length, 0);
+  assert.deepEqual(after.components.map(component => component.id), before.components.map(component => component.id));
+  assert.deepEqual(
+    after.wires.map(wire => ({ id: wire.id, from: wire.from, to: wire.to })),
+    before.wires.map(wire => ({ id: wire.id, from: wire.from, to: wire.to }))
+  );
+  assert.deepEqual(after.view, before.view);
+  assert.equal(after.components.filter(component => component.type === "resistor").length, 1);
+  assert.equal(after.components.filter(component => component.type === "led").length, 1);
+  assert.equal(after.components.filter(component => component.type === "ground").length, 1);
+});
+
 test("the STM32F103 HAL example circuit powers and connects its OLED and ADC source", () => {
   const api = loadSchematicApi();
   api.applyProjectModel({

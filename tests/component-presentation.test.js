@@ -61,7 +61,8 @@ test("measurement probe artwork leaves the screen clear for live numeric values"
   assert.doesNotMatch(currentProbe, /M36 38l8-18 8 18/);
   assert.match(schematic, /status: "直流支路实算", code: "measured"/);
   assert.doesNotMatch(schematic, /电阻支路估算/);
-  assert.match(schematic, /fetch\("\/api\/spice-solve"/);
+  assert.match(schematic, /AlicePlatform && window\.AlicePlatform\.fetch/);
+  assert.match(schematic, /request\("\/api\/spice-solve"/);
   assert.match(schematic, /PySpice · 直流工作点/);
 });
 

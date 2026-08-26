@@ -24,6 +24,7 @@
     let historyIndex = -1;
     let lastHistoryInput = { at: 0, type: "" };
     let historyFilePath = "";
+    let projectSaveInFlight = null;
     const customFiles = new Map();
 
     injectStyles();
@@ -35,6 +36,9 @@
       style.textContent = `
         .ui-action-menu{position:fixed;z-index:600;min-width:210px;padding:5px;border:1px solid #c8c8c8;background:#fff;color:#242424;box-shadow:0 8px 24px rgba(0,0,0,.22);font:11px "Segoe UI",sans-serif}
         .toast.warning i{background:#ca5010!important;box-shadow:none!important}
+        .alice-save-feedback{min-width:300px}.alice-save-feedback span{font-variant-numeric:tabular-nums}
+        body.alice-project-saving .quick-access button[data-alice-save-title] svg,body.alice-project-saving #saveCircuitButton svg{animation:aliceSavePulse .75s ease-in-out infinite}
+        @keyframes aliceSavePulse{50%{opacity:.3;transform:scale(.88)}}
         .ui-action-menu[hidden]{display:none}.ui-action-menu button{width:100%;min-height:30px;display:flex;align-items:center;gap:9px;padding:5px 9px;color:#242424;text-align:left;border:0;background:transparent}.ui-action-menu button:hover,.ui-action-menu button:focus{outline:0;background:#e8f3fb}.ui-action-menu button:disabled{color:#a19f9d;background:transparent;cursor:default}.ui-action-menu .ui-menu-icon{width:18px;color:#0f6cbd;text-align:center}.ui-action-menu kbd{margin-left:auto;color:#616161;background:transparent;font:10px Consolas,monospace}.ui-action-menu hr{height:1px;margin:4px;border:0;background:#e1e1e1}
         .ui-action-modal{width:min(470px,calc(100vw - 32px));padding:28px;text-align:left}.ui-action-modal .modal-eyebrow,.ui-action-modal h2,.ui-action-modal>p{text-align:left}.ui-action-modal h2{margin-bottom:7px}.ui-action-modal>p{max-width:none;margin:0 0 18px}.ui-action-form{display:grid;gap:12px}.ui-action-form label{display:grid;gap:5px;color:#323130;font-size:10px}.ui-action-form input[type=text],.ui-action-form input[type=search],.ui-action-form select,.ui-action-form textarea{width:100%;box-sizing:border-box;padding:0 9px;border:1px solid #8a8886;border-radius:2px;color:#242424;background:#fff;font:11px "Segoe UI",sans-serif;outline:0}.ui-action-form input[type=text],.ui-action-form input[type=search],.ui-action-form select{height:32px}.ui-action-form textarea{min-height:64px;padding-block:7px;resize:vertical;line-height:1.4}.ui-action-form input:focus,.ui-action-form select:focus,.ui-action-form textarea:focus{border-color:#0f6cbd;box-shadow:inset 0 0 0 1px #0f6cbd}.ui-action-check{display:flex!important;grid-template-columns:none!important;align-items:center;gap:7px!important}.ui-action-check input{accent-color:#0f6cbd}.ui-action-note{padding:9px;border-left:3px solid #0f6cbd;color:#616161;background:#f5faff;font-size:10px;line-height:1.5}.ui-action-buttons{display:flex;justify-content:flex-end;gap:8px;margin-top:20px}.ui-action-secondary{height:33px;min-width:88px;padding:0 14px;border:1px solid #8a8886;border-radius:2px;color:#242424;background:#fff;font-size:10px}.ui-action-secondary:hover{background:#f3f3f3}.ui-action-list{max-height:320px;overflow:auto;border:1px solid #d6d6d6}.ui-action-list label,.ui-search-result{min-height:34px;display:flex;align-items:center;gap:9px;padding:7px 9px;border-bottom:1px solid #ededed;color:#323130;background:#fff}.ui-action-list label:last-child,.ui-search-result:last-child{border-bottom:0}.ui-action-list label:hover,.ui-search-result:hover{background:#f5faff}.ui-action-list label.is-disabled{color:#a19f9d;background:#f7f7f7}.ui-action-list label.is-disabled:hover{background:#f7f7f7}.ui-action-list label span{display:flex;flex-direction:column;gap:2px}.ui-action-list label small,.ui-search-result small{color:#616161;font-size:9px}.ui-action-list .ui-driver-provenance{display:block;color:#0f6cbd;font-size:9px;line-height:1.35}.ui-action-list .ui-driver-provenance a{color:#0f6cbd;text-decoration:none}.ui-action-list .ui-driver-provenance a:hover{text-decoration:underline}.ui-action-list input{accent-color:#0f6cbd}.ui-search-results{min-height:42px;max-height:260px;overflow:auto;border:1px solid #d6d6d6}.ui-search-result{width:100%;text-align:left}.ui-search-result b{font-weight:600}.ui-search-result small{margin-left:auto}.ui-empty-result{padding:20px;color:#616161;text-align:center;font-size:10px}.ui-help-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.ui-help-card{padding:11px;border:1px solid #d6d6d6;background:#fafafa}.ui-help-card h3{margin:0 0 7px;color:#242424;font-size:11px}.ui-help-card p{margin:0;color:#616161;font-size:10px;line-height:1.55}.ui-shortcuts{margin-top:12px;border-top:1px solid #e1e1e1}.ui-shortcuts div{display:flex;align-items:center;padding:6px 1px;border-bottom:1px solid #ededed;color:#616161;font-size:10px}.ui-shortcuts kbd{margin-left:auto;padding:2px 5px;border:1px solid #c8c8c8;background:#fafafa;color:#323130;font:9px Consolas,monospace}.ui-component-package-grid{display:grid;grid-template-columns:minmax(0,1fr) 92px 110px;gap:9px}.ui-component-description{grid-column:1/-1}.ui-component-ports{display:grid;gap:7px;padding:10px;border:1px solid #d6d6d6;background:#fafafa}.ui-component-ports-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px}.ui-component-ports-head strong{font-size:11px}.ui-component-ports-head small{color:#616161;font-size:9px}.ui-component-port-list{display:flex;flex-wrap:wrap;gap:6px;max-height:128px;overflow:auto}.ui-component-port{min-width:86px;display:grid;gap:2px;padding:6px 8px;border:1px solid #b7c9d6;border-left:3px solid #0f6cbd;background:#fff}.ui-component-port b{font:700 10px Consolas,monospace}.ui-component-port small{color:#616161;font-size:8px}.ui-component-port.role-power{border-left-color:#c43e1c}.ui-component-port.role-ground{border-left-color:#323130}.ui-component-port.role-analog{border-left-color:#8b5cf6}.ui-component-port-empty{width:100%;box-sizing:border-box}
         .ui-ribbon-glyph{width:15px;color:#0f6cbd;text-align:center;font-size:13px}.ribbon-group[data-ui-action-group]{display:none}
@@ -103,6 +107,16 @@
       try {
         localStorage.setItem(key, JSON.stringify(value));
         return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function cacheSmallProject(project) {
+      try {
+        const files = project?.files || {};
+        const characters = Object.values(files).reduce((total, value) => total + (typeof value === "string" ? value.length : 0), 0);
+        return characters <= 2 * 1024 * 1024 ? safeStorageSet(STORAGE_PROJECT, project) : false;
       } catch (_) {
         return false;
       }
@@ -203,9 +217,26 @@
         pin: pin.dataset.pin,
         kind: [...pin.classList].find(name => ["gpio", "uart", "system", "power"].includes(name)) || "gpio"
       }));
+      let circuit = null;
+      try { circuit = window.AliceSchematic?.exportCircuit?.() || null; } catch (_) { circuit = null; }
+      const circuitPath = workspaceSnapshot?.circuitPath || `${safeName(currentProjectName(), "AliceSIM_Project")}.alice-sch.json`;
+      if (circuit) files[circuitPath] = JSON.stringify(circuit, null, 2);
+      const pageState = {
+        workspacePage: window.AliceWorkspacePages?.get?.() || document.body.dataset.appPage || "workspace",
+        simulationSpeed: Number($("#simulationSpeedSelect")?.value) || 1,
+        powerCalculationEnabled: $("#powerCalculationToggle")?.checked !== false,
+        componentLabelsVisible: $("#showComponentLabels")?.checked !== false,
+        envelope: window.AliceEnvelopeAutomation?.getState?.() || null,
+        layout: {
+          panel: window.AlicePanelLayout?.getState?.() || null,
+          sidebar: window.AliceSidebarLayout?.getState?.() || null,
+          ribbonCollapsed: window.AliceRibbonLayout?.isCollapsed?.() || false,
+          observer: window.AliceObserverLayout?.getState?.() || null
+        }
+      };
       return {
         format: "AliceSIM Project",
-        version: 2,
+        version: 3,
         savedAt: new Date().toISOString(),
         project: {
           name: currentProjectName(),
@@ -213,6 +244,9 @@
         },
         currentFile: activeFile,
         files,
+        circuitPath,
+        circuit,
+        pageState,
         pinout,
         workspace: workspaceSnapshot ? {
           entryPath: workspaceSnapshot.entryPath,
@@ -225,6 +259,36 @@
           content: window.AliceIocViewer.getRaw()
         } : null
       };
+    }
+
+    function applySavedPageState(project) {
+      const saved = project?.pageState;
+      if (!saved || typeof saved !== "object") return;
+      try { if (saved.envelope) window.AliceEnvelopeAutomation?.setState?.(saved.envelope); } catch (_) {}
+      try {
+        if (typeof saved.componentLabelsVisible === "boolean") {
+          window.AliceSchematic?.setComponentLabelsVisible?.(saved.componentLabelsVisible);
+        }
+      } catch (_) {}
+      const speed = $("#simulationSpeedSelect");
+      if (speed && saved.simulationSpeed != null) {
+        speed.value = String(saved.simulationSpeed);
+        speed.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const power = $("#powerCalculationToggle");
+      if (power && typeof saved.powerCalculationEnabled === "boolean") {
+        power.checked = saved.powerCalculationEnabled;
+        power.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const layout = saved.layout || {};
+      try {
+        if (layout.sidebar?.preferredWidth != null) window.AliceSidebarLayout?.setWidth?.(layout.sidebar.preferredWidth);
+        if (layout.panel?.mode) window.AlicePanelLayout?.setMode?.(layout.panel.mode);
+        if (layout.panel?.preferredWidth != null) window.AlicePanelLayout?.setWidth?.(layout.panel.preferredWidth);
+        if (typeof layout.ribbonCollapsed === "boolean") window.AliceRibbonLayout?.setCollapsed?.(layout.ribbonCollapsed);
+        if (layout.observer) window.AliceObserverLayout?.setState?.(layout.observer);
+      } catch (_) {}
+      if (saved.workspacePage) window.AliceWorkspacePages?.set?.(saved.workspacePage);
     }
 
     function workspaceHasDirtyFiles() {
@@ -249,7 +313,7 @@
           result = { ok: true, action: "download", path: fileName };
         }
         if (result.ok === false) throw result.error || new Error(result.message || result.code || "保存失败");
-        safeStorageSet(STORAGE_PROJECT, collectProject());
+        cacheSmallProject(collectProject());
         const stillDirty = Boolean(result.dirty) || workspaceHasDirtyFiles();
         markDirty(stillDirty);
         const savedPath = result.path || fileName;
@@ -266,10 +330,104 @@
       }
     }
 
+    function createProjectSaveFeedback(initialMessage) {
+      const stack = $("#toastStack");
+      if (!stack) return { update() {}, close() {} };
+      $("#aliceProjectSaveFeedback")?.remove();
+      const item = document.createElement("div");
+      item.id = "aliceProjectSaveFeedback";
+      item.className = "toast warning alice-save-feedback";
+      item.setAttribute("role", "status");
+      item.setAttribute("aria-live", "polite");
+      const dot = document.createElement("i");
+      const label = document.createElement("span");
+      label.textContent = initialMessage || "正在保存完整项目...";
+      item.append(dot, label);
+      stack.appendChild(item);
+      return {
+        update(message) { label.textContent = String(message || "正在保存完整项目..."); },
+        close() { item.remove(); }
+      };
+    }
+
+    function setProjectSaveBusy(busy) {
+      document.body.classList.toggle("alice-project-saving", Boolean(busy));
+      const buttons = [
+        $('.quick-access button[title="保存项目"],.quick-access button[data-alice-save-title]'),
+        $("#saveCircuitButton"),
+        ...$$('[data-ui-action-group="file-save"] button')
+      ].filter(Boolean);
+      buttons.forEach(button => {
+        button.disabled = Boolean(busy);
+        button.setAttribute("aria-busy", String(Boolean(busy)));
+      });
+      const quick = $('.quick-access button[title="保存项目"],.quick-access button[data-alice-save-title]');
+      if (quick) {
+        if (busy) {
+          quick.dataset.aliceSaveTitle = quick.title;
+          quick.title = "正在保存项目";
+        } else {
+          quick.title = quick.dataset.aliceSaveTitle || "保存项目";
+          delete quick.dataset.aliceSaveTitle;
+        }
+      }
+    }
+
+    function saveWholeProject(options = {}) {
+      if (projectSaveInFlight) {
+        toast("项目正在保存，请等待当前操作完成", "warning");
+        return projectSaveInFlight;
+      }
+      const feedback = createProjectSaveFeedback(options.source === "circuit" ? "正在保存电路和项目..." : "正在保存完整项目...");
+      const feedbackStartedAt = Date.now();
+      const onProgress = event => feedback.update(event.detail?.message);
+      window.addEventListener("alice-project-save-progress", onProgress);
+      setProjectSaveBusy(true);
+      projectSaveInFlight = (async () => {
+        try {
+          await new Promise(resolve => {
+            if (typeof window.requestAnimationFrame === "function") window.requestAnimationFrame(resolve);
+            else window.setTimeout(resolve, 0);
+          });
+          const project = collectProject();
+          const saver = window.AliceProject?.saveProject || window.AliceProjectWorkspace?.saveProject;
+          let result = typeof saver === "function" ? await saver(project, { notify: false }) : null;
+          if (!result) result = { ok: true, action: "browser-storage" };
+          if (result.ok === false) throw new Error(result.error || result.message || result.code || "保存失败");
+          if (!result.browserBackup) cacheSmallProject(project);
+          markDirty(false);
+          var feedbackRemaining = 600 - (Date.now() - feedbackStartedAt);
+          if (feedbackRemaining > 0) await new Promise(resolve => window.setTimeout(resolve, feedbackRemaining));
+          feedback.close();
+          if (result.warning) {
+            toast(`${result.warning}：${result.workspaceSyncError || "请再次点击保存重试"}`, "warning");
+          } else if (result.action === "project-folder") {
+            toast(options.source === "circuit"
+              ? `电路已保存 · ${result.circuitFile}`
+              : `项目已完整保存 · ${result.projectFile} · ${result.fileCount || Object.keys(project.files).length} 个文件`);
+          } else {
+            toast(options.source === "circuit"
+              ? "电路和项目已保存在浏览器中，下次打开将自动恢复"
+              : "项目已保存在浏览器中，下次打开将自动恢复");
+          }
+          return result;
+        } catch (error) {
+          feedback.close();
+          toast(`保存项目失败：${error?.message || error}`, "error");
+          return { ok: false, error };
+        } finally {
+          window.removeEventListener("alice-project-save-progress", onProgress);
+          setProjectSaveBusy(false);
+          projectSaveInFlight = null;
+        }
+      })();
+      return projectSaveInFlight;
+    }
+
     function exportProject() {
       const project = collectProject();
       downloadBlob(JSON.stringify(project, null, 2), `${safeName(project.project.name)}.alice.json`, "application/json;charset=utf-8");
-      safeStorageSet(STORAGE_PROJECT, project);
+      cacheSmallProject(project);
       markDirty(false);
       toast("AliceSIM 工程包已导出");
     }
@@ -287,24 +445,25 @@
       return api;
     }
 
-    function saveCurrentCircuit() {
+    async function saveCurrentCircuit() {
       const api = schematicApi();
       if (!api) return false;
       try {
         const payload = api.exportCircuit();
-        const result = typeof api.downloadCircuit === "function" ? api.downloadCircuit(circuitFileName()) : null;
+        const filename = circuitFileName();
+        const result = typeof api.downloadCircuit === "function" ? api.downloadCircuit(filename) : null;
         if (!result || result.ok === false) {
           const serialized = result?.content || (typeof api.serializeCircuit === "function"
             ? api.serializeCircuit(payload)
             : JSON.stringify(payload, null, 2));
-          downloadBlob(serialized, circuitFileName(), "application/json;charset=utf-8");
+          downloadBlob(serialized, filename, "application/json;charset=utf-8");
         }
         safeStorageSet(STORAGE_CIRCUIT, payload);
-        toast(`电路已单独保存 · ${payload.components?.length || 0} 个元件 · ${payload.wires?.length || 0} 条导线`);
-        return payload;
+        toast(`电路已单独另存 · ${filename} · ${payload.components?.length || 0} 个元件 · ${payload.wires?.length || 0} 条导线`);
+        return { ok: true, action: "circuit-download", filename, circuit: payload };
       } catch (error) {
-        toast(`保存电路失败：${error?.message || error}`, "error");
-        return false;
+        toast(`另存电路失败：${error?.message || error}`, "error");
+        return { ok: false, error };
       }
     }
 
@@ -875,7 +1034,7 @@
           if ($("#runButton.running")) $("#runButton").click();
           setProjectName(name, mcuSelect.value);
           activateMainFile(keepInput.checked ? currentCode : createProjectCode(name));
-          safeStorageSet(STORAGE_PROJECT, collectProject());
+          cacheSmallProject(collectProject());
           toast(`项目 ${name} 已创建`);
           return true;
         }
@@ -968,9 +1127,14 @@
             if (project.ioc?.path && typeof project.ioc.content === "string" && packageFiles[project.ioc.path] == null) {
               packageFiles[project.ioc.path] = project.ioc.content;
             }
+            if (project.circuit && typeof project.circuit === "object") {
+              const savedCircuitPath = project.circuitPath || `${safeName(metadata.name, "AliceSIM_Project")}.alice-sch.json`;
+              packageFiles[savedCircuitPath] = JSON.stringify(project.circuit, null, 2);
+            }
             const rootName = safeName(metadata.name, "STM32_Project");
             window.AliceProjectWorkspace.loadFiles(packageFiles, rootName)?.then(() => {
               if (project.currentFile) window.AliceProjectWorkspace.openFile(project.currentFile);
+              applySavedPageState(project);
             });
             markDirty(false);
             return true;
@@ -982,7 +1146,7 @@
           });
           activateMainFile(code);
           if (Array.isArray(project.pinout)) applySavedPinout(project.pinout);
-          safeStorageSet(STORAGE_PROJECT, project);
+          cacheSmallProject(project);
           markDirty(false);
           toast(`已打开 ${metadata.name}`);
           return true;
@@ -1125,7 +1289,7 @@
       redoEditor();
     }
 
-    const quickSave = $('.quick-access button[title="保存代码"]');
+    const quickSave = $('.quick-access button[title="保存项目"]');
     const quickUndo = $('.quick-access button[title="撤销"]');
     const quickRedo = $('.quick-access button[title="重做"]');
 
@@ -1145,7 +1309,7 @@
       }
     }
 
-    quickSave?.addEventListener("click", saveCurrentCode);
+    quickSave?.addEventListener("click", saveWholeProject);
     $("#saveCircuitButton")?.addEventListener("click", saveCurrentCircuit);
     $("#openCircuitButton")?.addEventListener("click", openCircuitPicker);
     $("#saveAsComponentButton")?.addEventListener("click", openSaveComponentDialog);
@@ -1157,6 +1321,13 @@
     // editor.  Supporting both events keeps the fallback and host paths in
     // sync without recording a synthetic edit.
     window.addEventListener("alice-project-file-open", handleEditorFileOpen);
+    window.addEventListener("alice-project-snapshot-restored", event => {
+      const project = event.detail?.snapshot;
+      if (!project) return;
+      applySavedPageState(project);
+      cacheSmallProject(project);
+      markDirty(false);
+    });
     document.addEventListener("alice:schematic-history-change", updateUndoButtons);
     document.addEventListener("alice:workspace-page-change", updateUndoButtons);
     resetHistory();
@@ -1237,7 +1408,7 @@
         { icon: "⇄", label: splitActive ? "关闭拆分编辑器" : "拆分编辑器", action: () => toggleEditorSplit() },
         { icon: "▥", label: minimapVisible ? "隐藏代码小地图" : "显示代码小地图", action: toggleMinimap },
         { separator: true },
-        { icon: "▣", label: "保存当前代码", shortcut: "Ctrl+S", action: saveCurrentCode },
+        { icon: "▣", label: "保存完整项目", shortcut: "Ctrl+S", action: saveWholeProject },
         { icon: "▣", label: "导出 AliceSIM 工程", shortcut: "Ctrl+Shift+S", action: exportProject },
         { separator: true },
         { icon: "↺", label: "重置工作区布局", action: resetLayout }
@@ -1375,7 +1546,7 @@
         }
       ]);
       addRibbonGroup(ribbon, "file-save", "保存与导出", [
-        { icon: "▣", label: "保存当前代码", action: saveCurrentCode },
+        { icon: "▣", label: "保存完整项目", action: saveWholeProject },
         { icon: "▣", label: "导出 AliceSIM 工程", action: exportProject }
       ]);
       addRibbonGroup(ribbon, "code-edit", "编辑", [
@@ -1391,7 +1562,7 @@
         { icon: "▣", label: "仿真页面全屏", action: toggleSimulatorFullscreen }
       ]);
       addRibbonGroup(ribbon, "sim-circuit", "电路文件", [
-        { icon: "◇", label: "保存电路", action: saveCurrentCircuit },
+        { icon: "◇", label: "另存电路", action: saveCurrentCircuit },
         { icon: "▤", label: "打开电路", action: openCircuitPicker }
       ]);
       addRibbonGroup(ribbon, "layout", "窗口布局", [
@@ -1407,7 +1578,7 @@
         "视图": { original: ["view"], generated: ["layout"], context: "工作区布局" }
       };
 
-      function selectRibbon(button) {
+      function selectRibbon(button, options = {}) {
         const label = button.textContent.trim();
         const selection = config[label] || config["项目"];
         tabButtons.forEach(item => {
@@ -1425,12 +1596,12 @@
         ribbon.setAttribute("aria-label", `${label}功能区`);
         const contextLabel = $(".ribbon-context");
         if (contextLabel) contextLabel.textContent = selection.context || "AliceSIM 工具";
-        selection.action?.();
+        if (options.runAction !== false) selection.action?.();
       }
 
       tabButtons.forEach(button => button.addEventListener("click", () => selectRibbon(button)));
       const initial = tabButtons.find(button => button.classList.contains("active")) || tabButtons.find(button => button.textContent.trim() === "项目");
-      if (initial) selectRibbon(initial);
+      if (initial) selectRibbon(initial, { runAction: false });
     }
 
     setupRibbonTabs();
@@ -1442,8 +1613,8 @@
         { icon: "◇", label: "打开 IOC / 工程包", action: openProjectPicker },
         { icon: "▦", label: "添加 AliceSIM 外设驱动", action: openPeripheralDriverManager },
         { separator: true },
-        { icon: "▣", label: "保存当前代码", shortcut: "Ctrl+S", action: saveCurrentCode },
-        { icon: "◇", label: "保存电路", shortcut: "Ctrl+Alt+S", action: saveCurrentCircuit },
+        { icon: "▣", label: "保存完整项目", shortcut: "Ctrl+S", action: saveWholeProject },
+        { icon: "◇", label: "另存电路", shortcut: "Ctrl+Alt+S", action: saveCurrentCircuit },
         { icon: "▤", label: "打开电路", shortcut: "Ctrl+Alt+O", action: openCircuitPicker },
         { icon: "▣", label: "导出工程包", shortcut: "Ctrl+Shift+S", action: exportProject },
         { separator: true },
@@ -1464,8 +1635,8 @@
           <div class="ui-help-card"><h3>4. 原理图</h3><p>右侧原理图工具由专用交互模块管理；“···”菜单提供视图和全屏操作。</p></div>
         </div>
         <div class="ui-shortcuts">
-          <div>保存当前代码 <kbd>Ctrl+S</kbd></div>
-          <div>保存电路文件 <kbd>Ctrl+Alt+S</kbd></div>
+          <div>保存完整项目 <kbd>Ctrl+S</kbd></div>
+          <div>另存电路文件 <kbd>Ctrl+Alt+S</kbd></div>
           <div>打开电路文件 <kbd>Ctrl+Alt+O</kbd></div>
           <div>导出完整工程 <kbd>Ctrl+Shift+S</kbd></div>
           <div>撤销 / 重做 <kbd>Ctrl+Z / Ctrl+Y</kbd></div>
@@ -1521,8 +1692,8 @@
         }
       }));
       [
-        ["新建项目", openNewProjectDialog], ["打开 STM32 工程文件夹", openProjectFolder], ["打开 IOC 或工程包", openProjectPicker], ["保存当前代码", saveCurrentCode],
-        ["保存电路", saveCurrentCircuit], ["打开电路", openCircuitPicker],
+        ["新建项目", openNewProjectDialog], ["打开 STM32 工程文件夹", openProjectFolder], ["打开 IOC 或工程包", openProjectPicker], ["保存完整项目", saveWholeProject],
+        ["另存电路", saveCurrentCircuit], ["打开电路", openCircuitPicker],
         ["添加 AliceSIM 外设驱动", openPeripheralDriverManager],
         ["导出工程", exportProject], ["重置工作区布局", resetLayout], ["帮助中心", openHelpCenter]
       ].forEach(([label, action]) => items.push({ label, kind: "命令", action }));
@@ -1605,7 +1776,7 @@
       const panelLayout = window.AlicePanelLayout;
       const currentLayout = panelLayout?.getMode?.() || "standard";
       openMenu(event.currentTarget, [
-        { icon: "◇", label: "保存电路", shortcut: "Ctrl+Alt+S", action: saveCurrentCircuit },
+        { icon: "◇", label: "另存电路", shortcut: "Ctrl+Alt+S", action: saveCurrentCircuit },
         { icon: "▤", label: "打开电路", shortcut: "Ctrl+Alt+O", action: openCircuitPicker },
         { separator: true },
         { icon: "□", label: "适应窗口", action: () => $("#fitSchematic")?.click() },
@@ -1925,7 +2096,7 @@
         event.preventDefault();
         event.stopPropagation();
         if (event.shiftKey) exportProject();
-        else saveCurrentCode();
+        else saveWholeProject();
         return;
       }
       const editorFocused = document.activeElement === editor || document.activeElement === splitEditor;

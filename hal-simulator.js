@@ -257,13 +257,22 @@
     return root.location && root.location.origin ? root.location.origin : "AliceSIM local backend";
   }
 
+  function fetchProvider() {
+    if (root.AlicePlatform && typeof root.AlicePlatform.fetch === "function") return root.AlicePlatform.fetch;
+    if (typeof root.fetch === "function") return root.fetch.bind(root);
+    if (typeof fetch === "function") return fetch;
+    return null;
+  }
+
   async function requestSimulationModel(payload) {
     var requestPayload = simulationPayload(payload);
     var body = JSON.stringify(requestPayload);
     var lastError = null;
     for (var attempt = 0; attempt < SIM_MODEL_REQUEST_ATTEMPTS; attempt += 1) {
       try {
-        var response = await fetch("/api/sim-model", {
+        var request = fetchProvider();
+        if (!request) throw new Error("Fetch is unavailable on this device");
+        var response = await request("/api/sim-model", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: body,
