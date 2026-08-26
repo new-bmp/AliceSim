@@ -226,6 +226,8 @@ test("envelope tests use the independent sensor timeline", () => {
 test("the default workspace is not the BluePill blinky example", () => {
   assert.doesNotMatch(html, /BluePill_Blinky/);
   assert.doesNotMatch(app, /HAL_GPIO_TogglePin\(GPIOC/);
+  const starter = app.match(/const defaultCode = `[\s\S]*?`;\n/)?.[0] || "";
+  assert.match(starter, /while \(1\)[\s\S]*HAL_Delay\(1U\)/);
   const seed = schematic.match(/function seedInitialCircuit[\s\S]*?\n  }/)?.[0] || "";
   assert.doesNotMatch(seed, /demo-pc13|createComponentModel\("led"|createComponentModel\("resistor"/);
 });

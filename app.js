@@ -7,6 +7,7 @@ int main(void)
   while (1)
   {
     /* Add application code here. */
+    HAL_Delay(1U);
   }
 }`;
 
