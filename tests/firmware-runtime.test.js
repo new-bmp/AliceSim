@@ -496,6 +496,165 @@ test("I2C OLED writes and ADC reads use peripheral hooks and preserve HAL values
   assert.deepEqual(state.adc.ADC1, { started: true, ready: false, value: 2048, voltage: 1.65, samples: 1 });
 });
 
+test("HAL tick expressions follow simulated time", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { now: 0 },
+    program: {
+      operations: [
+        { op: "delay", milliseconds: 7 },
+        { op: "assign", target: "now", value: { kind: "tick" } }
+      ]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(7);
+  assert.equal(state.variables.now, 7);
+});
+
+test("ADC poll expressions return HAL_OK only after the ADC has started", () => {
+  const polls = [];
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { converted: 0 },
+    adcs: { hadc1: { handle: "hadc1", instance: "ADC1", channels: [] } },
+    program: {
+      operations: [
+        { op: "adcStart", adc: "hadc1", instance: "ADC1" },
+        {
+          op: "if",
+          condition: {
+            op: "eq",
+            left: { kind: "adcPoll", adc: "hadc1", instance: "ADC1", timeout: literal(10) },
+            right: constant("HAL_OK")
+          },
+          then: [{ op: "assign", target: "converted", value: literal(1) }],
+          else: [{ op: "assign", target: "converted", value: literal(0) }]
+        }
+      ]
+    }
+  }, {
+    onAdcPoll(event) { polls.push(event); }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.variables.converted, 1);
+  assert.equal(polls.length, 1);
+  assert.equal(polls[0].ready, true);
+});
+
+test("ADC UART and timer interrupt APIs complete asynchronously and execute callbacks", () => {
+  const uartTx = [];
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { adcValue: 0, adcDone: 0, tx: [79, 75], rx: [0, 0], txDone: 0, rxDone: 0, timerTicks: 0 },
+    adcs: { hadc1: { handle: "hadc1", instance: "ADC1", samplePeriodMs: 2 } },
+    uarts: { huart2: { handle: "huart2", instance: "USART2", baudRate: 1000, frame: { dataBits: 8, stopBits: 1, parity: "none" } } },
+    timers: { htim2: { handle: "htim2", instance: "TIM2", frequencyHz: 100 } },
+    callbacks: {
+      HAL_ADC_ConvCpltCallback: {
+        parameters: ["adcHandle"],
+        operations: [
+          { op: "adcGetValue", adc: "adcHandle", instance: null, target: "adcValue" },
+          { op: "assign", target: "adcDone", value: literal(1) }
+        ]
+      },
+      HAL_UART_TxCpltCallback: { parameters: ["uartHandle"], operations: [{ op: "assign", target: "txDone", value: literal(1) }] },
+      HAL_UART_RxCpltCallback: { parameters: ["uartHandle"], operations: [{ op: "assign", target: "rxDone", value: literal(1) }] },
+      HAL_TIM_PeriodElapsedCallback: {
+        parameters: ["timerHandle"],
+        operations: [{
+          op: "if",
+          condition: eq({ type: "member", object: variable("timerHandle"), member: "Instance" }, variable("TIM2")),
+          then: [{ op: "assign", target: "timerTicks", value: { kind: "add", left: variable("timerTicks"), right: literal(1) } }]
+        }]
+      }
+    },
+    program: {
+      operations: [
+        { op: "adcStartIt", adc: "hadc1", instance: "ADC1" },
+        { op: "uartTransmitIt", uart: "huart2", instance: "USART2", buffer: "tx", length: 2 },
+        { op: "uartReceiveIt", uart: "huart2", instance: "USART2", buffer: "rx", length: 2 },
+        { op: "timerStartIt", timer: "htim2", instance: "TIM2", frequencyHz: 100 },
+        { op: "while", condition: literal(true), body: [{ op: "delay", milliseconds: 100 }] }
+      ]
+    }
+  }, {
+    onAdcRead: () => ({ value: 1234, voltage: 1.0 }),
+    onUartTx: event => uartTx.push(event)
+  });
+
+  runtime.start();
+  let state = runtime.step(0);
+  assert.equal(state.variables.adcDone, 0);
+  assert.equal(state.variables.txDone, 0);
+  assert.equal(uartTx[0].interrupt, true);
+  state = runtime.enqueueUart("USART2", [7, 8]);
+  assert.deepEqual(state.variables.rx, [7, 8]);
+  assert.equal(state.variables.rxDone, 1);
+  state = runtime.step(2);
+  assert.equal(state.variables.adcValue, 1234);
+  assert.equal(state.variables.adcDone, 1);
+  state = runtime.step(18);
+  assert.equal(state.variables.txDone, 1);
+  assert.equal(state.variables.timerTicks, 2);
+});
+
+test("GPIO EXTI callbacks honor configured edges and callback parameter names", () => {
+  const gpioEvents = [];
+  const runtime = AliceFirmwareRuntime.create({
+    variables: {},
+    pins: { PA0: { physicalPin: "PA0", interruptEdge: "rising" } },
+    callbacks: {
+      HAL_GPIO_EXTI_Callback: {
+        parameters: ["selectedPin"],
+        operations: [{
+          op: "if",
+          condition: eq(variable("selectedPin"), literal(1)),
+          then: [{ op: "gpioToggle", pin: "PA5" }]
+        }]
+      }
+    },
+    program: { operations: [{ op: "while", condition: literal(true), body: [{ op: "delay", milliseconds: 100 }] }] }
+  }, { onGpio: event => gpioEvents.push(event) });
+
+  runtime.start();
+  runtime.step(0);
+  runtime.syncGpioInputs({ PA0: 0 });
+  let state = runtime.syncGpioInputs({ PA0: 1 });
+  assert.equal(state.gpio.PA5, 1);
+  runtime.syncGpioInputs({ PA0: 0 });
+  state = runtime.syncGpioInputs({ PA0: 1 });
+  assert.equal(state.gpio.PA5, 0);
+  assert.equal(gpioEvents.length, 2);
+  assert.equal(state.interrupts.history.filter(event => event.type === "gpioExti").length, 2);
+});
+
+test("timer interrupt backlog drains across bounded steps", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { ticks: 0 },
+    timers: { htim2: { handle: "htim2", instance: "TIM2", frequencyHz: 1000 } },
+    callbacks: {
+      HAL_TIM_PeriodElapsedCallback: {
+        operations: [{ op: "assign", target: "ticks", value: { kind: "add", left: variable("ticks"), right: literal(1) } }]
+      }
+    },
+    program: {
+      operations: [
+        { op: "timerStartIt", timer: "htim2", instance: "TIM2", frequencyHz: 1000 },
+        { op: "while", condition: literal(true), body: [{ op: "delay", milliseconds: 2000 }] }
+      ]
+    }
+  });
+
+  runtime.start();
+  runtime.step(0);
+  let state = runtime.step(1000);
+  assert.ok(state.pendingAdvanceMs > 0);
+  while (state.pendingAdvanceMs > 0) state = runtime.step(0);
+  assert.equal(state.variables.ticks, 1000);
+  assert.equal(state.interrupts.history.length, 64);
+});
+
 test("ADC circular DMA fills buffers in batches and executes half/full callbacks", () => {
   const dmaEvents = [];
   const adcReads = [];
@@ -646,6 +805,42 @@ test("overlapping DMA starts return HAL_BUSY without cancelling the active trans
   assert.equal(state.variables.secondStatus, 2);
   assert.equal(state.dma.transfers.filter(item => item.active).length, 1);
   assert.equal(state.dma.transfers.find(item => item.active).buffer, "first");
+});
+
+test("interrupt and DMA starts on the same peripheral return HAL_BUSY symmetrically", () => {
+  const dmaAfterIt = AliceFirmwareRuntime.create({
+    variables: { samples: [0, 0], itStatus: 9, dmaStatus: 9 },
+    adcs: { hadc1: { handle: "hadc1", instance: "ADC1", samplePeriodMs: 1 } },
+    program: {
+      operations: [
+        { op: "adcStartIt", adc: "hadc1", instance: "ADC1", resultTarget: "itStatus" },
+        { op: "adcStartDma", adc: "hadc1", instance: "ADC1", buffer: "samples", length: 2, resultTarget: "dmaStatus" },
+        { op: "delay", milliseconds: 10 }
+      ]
+    }
+  });
+  dmaAfterIt.start();
+  let state = dmaAfterIt.step(0);
+  assert.equal(state.variables.itStatus, 0);
+  assert.equal(state.variables.dmaStatus, 2);
+  assert.equal(state.dma.transfers.filter(item => item.active).length, 0);
+
+  const itAfterDma = AliceFirmwareRuntime.create({
+    variables: { samples: [0, 0], dmaStatus: 9, itStatus: 9 },
+    adcs: { hadc1: { handle: "hadc1", instance: "ADC1", samplePeriodMs: 1 } },
+    program: {
+      operations: [
+        { op: "adcStartDma", adc: "hadc1", instance: "ADC1", buffer: "samples", length: 2, resultTarget: "dmaStatus" },
+        { op: "adcStartIt", adc: "hadc1", instance: "ADC1", resultTarget: "itStatus" },
+        { op: "delay", milliseconds: 10 }
+      ]
+    }
+  });
+  itAfterDma.start();
+  state = itAfterDma.step(0);
+  assert.equal(state.variables.dmaStatus, 0);
+  assert.equal(state.variables.itStatus, 2);
+  assert.equal(state.interrupts.events.filter(item => item.active).length, 0);
 });
 
 test("paused UART RX DMA queues bytes until the runtime resumes", () => {
@@ -876,6 +1071,223 @@ test("runtime evaluates ADC arithmetic and writes UART text through a dynamic ar
   assert.equal(state.variables.adc_mv, 1650);
   assert.equal(state.variables.uart_length, 2);
   assert.deepEqual(state.variables.uart_text, [65, 66, 0]);
+});
+
+test("snprintf formatting writes decimal millivolts and strlen drives UART length", () => {
+  const uart = [];
+  const runtime = AliceFirmwareRuntime.create({
+    variables: {
+      adc1_mv10: 11000,
+      adc2_mv10: 22005,
+      oled_line: new Array(24).fill(0),
+      uart_report: new Array(64).fill(0),
+      report_length: 0
+    },
+    program: {
+      operations: [
+        {
+          op: "formatString",
+          buffer: "oled_line",
+          capacity: { kind: "sizeOf", value: variable("oled_line") },
+          format: { kind: "string", value: "PA0 %lu.%01lu mV" },
+          arguments: [
+            { kind: "div", left: variable("adc1_mv10"), right: literal(10) },
+            { kind: "mod", left: variable("adc1_mv10"), right: literal(10) }
+          ]
+        },
+        {
+          op: "formatString",
+          buffer: "uart_report",
+          capacity: { kind: "sizeOf", value: variable("uart_report") },
+          format: { kind: "string", value: "PA0=%lu.%01lumV PB0=%lu.%01lumV\r\n" },
+          arguments: [
+            { kind: "div", left: variable("adc1_mv10"), right: literal(10) },
+            { kind: "mod", left: variable("adc1_mv10"), right: literal(10) },
+            { kind: "div", left: variable("adc2_mv10"), right: literal(10) },
+            { kind: "mod", left: variable("adc2_mv10"), right: literal(10) }
+          ],
+          resultTarget: "report_length"
+        },
+        {
+          op: "uartTransmit",
+          uart: "huart2",
+          instance: "USART2",
+          buffer: "uart_report",
+          length: { kind: "stringLength", value: variable("uart_report") }
+        }
+      ]
+    }
+  }, {
+    onUartTx(event) { uart.push(event); }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  const oledLength = state.variables.oled_line.indexOf(0);
+  assert.equal(Buffer.from(state.variables.oled_line.slice(0, oledLength)).toString(), "PA0 1100.0 mV");
+  assert.equal(uart.length, 1);
+  assert.equal(uart[0].text, "PA0=1100.0mV PB0=2200.5mV\r\n");
+  assert.equal(state.variables.report_length, uart[0].bytes.length);
+});
+
+test("C floating literals, casts and division preserve ADC millivolt decimals", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { raw: 2048, millivolts: 0, line: new Array(32).fill(0) },
+    variableTypes: { raw: "uint32_t", millivolts: "float" },
+    program: {
+      operations: [
+        {
+          op: "assign",
+          target: "millivolts",
+          value: {
+            kind: "div",
+            left: {
+              kind: "mul",
+              left: { kind: "cast", cType: "float", value: variable("raw") },
+              right: { kind: "literal", value: 3300, numericType: "float" }
+            },
+            right: { kind: "literal", value: 4095, numericType: "float" }
+          }
+        },
+        {
+          op: "formatString",
+          buffer: "line",
+          capacity: literal(32),
+          format: { kind: "string", value: "%.2f mV" },
+          arguments: [variable("millivolts")]
+        }
+      ]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  const lineLength = state.variables.line.indexOf(0);
+  assert.equal(Buffer.from(state.variables.line.slice(0, lineLength)).toString(), "1650.40 mV");
+  assert.ok(Math.abs(state.variables.millivolts - 1650.4029) < 0.001);
+});
+
+test("unsupported expression errors include the original C text", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    program: {
+      operations: [{
+        op: "assign",
+        target: "value",
+        value: { kind: "expression", text: "raw ? 1U : 0U" },
+        source: { file: "Core/Src/main.c", line: 7, column: 3 }
+      }]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.status, "error");
+  assert.match(state.error.message, /raw \? 1U : 0U/);
+  assert.deepEqual(state.error.source, { file: "Core/Src/main.c", line: 7, column: 3 });
+});
+
+test("stdio string stdlib and heap operations preserve C behavior", () => {
+  const stdio = [];
+  const runtime = AliceFirmwareRuntime.create({
+    heapBytes: 64,
+    variableTypes: { heap_value: "int*", compare_result: "int", parsed_value: "int" },
+    variables: {
+      source_text: [97, 98, 99, 0, 0, 0, 0, 0],
+      destination: new Array(16).fill(0),
+      heap_value: 0,
+      compare_result: 9,
+      parsed_value: 0,
+      scanned_value: 0,
+      scanned_voltage: 0,
+      scan_count: 0
+    },
+    program: {
+      operations: [
+        { op: "libcMemory", function: "memset", arguments: [variable("destination"), literal(0), literal(16)] },
+        { op: "libcMemory", function: "strcpy", arguments: [variable("destination"), variable("source_text")] },
+        { op: "libcMemory", function: "strcat", arguments: [variable("destination"), { kind: "string", value: "!" }] },
+        { op: "assign", target: "compare_result", value: { kind: "libcCall", function: "strcmp", arguments: [variable("destination"), { kind: "string", value: "abc!" }] } },
+        { op: "assign", target: "parsed_value", value: { kind: "libcCall", function: "atoi", arguments: [{ kind: "string", value: "1234" }] } },
+        {
+          op: "stdioScan",
+          input: { kind: "string", value: "17 2.5" },
+          format: { kind: "string", value: "%d %f" },
+          targets: [
+            { kind: "addressOf", value: variable("scanned_value") },
+            { kind: "addressOf", value: variable("scanned_voltage") }
+          ],
+          resultTarget: "scan_count"
+        },
+        { op: "heapAllocate", function: "malloc", size: literal(4), resultTarget: "heap_value" },
+        { op: "assign", target: { kind: "dereference", pointer: variable("heap_value") }, value: variable("parsed_value") },
+        {
+          op: "stdioWrite",
+          function: "printf",
+          format: { kind: "string", value: "heap=%d %s\n" },
+          arguments: [
+            { kind: "dereference", pointer: variable("heap_value") },
+            variable("destination")
+          ]
+        },
+        { op: "stdioWrite", function: "puts", stream: "stdout", data: { kind: "string", value: "done" }, newline: true },
+        { op: "heapFree", pointer: variable("heap_value") }
+      ]
+    }
+  }, {
+    onStdio(event) { stdio.push(event); }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(Buffer.from(state.variables.destination.slice(0, 4)).toString(), "abc!");
+  assert.equal(state.variables.compare_result, 0);
+  assert.equal(state.variables.parsed_value, 1234);
+  assert.equal(state.variables.scanned_value, 17);
+  assert.equal(state.variables.scanned_voltage, 2.5);
+  assert.equal(state.variables.scan_count, 2);
+  assert.deepEqual(stdio.map(event => event.text), ["heap=1234 abc!\n", "done\n"]);
+  assert.equal(state.heap.usedBytes, 0);
+  assert.equal(state.heap.peakBytes, 4);
+});
+
+test("freed heap memory cannot be dereferenced", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    heapBytes: 16,
+    variables: { pointer: 0, result: 0 },
+    program: {
+      operations: [
+        { op: "heapAllocate", function: "calloc", count: literal(1), size: literal(4), resultTarget: "pointer" },
+        { op: "heapFree", pointer: variable("pointer") },
+        { op: "assign", target: "result", value: { kind: "dereference", pointer: variable("pointer") } }
+      ]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.status, "error");
+  assert.match(state.error.message, /freed or invalid memory/);
+});
+
+test("typed heap pointer indexing uses the C element width", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    heapBytes: 16,
+    variableTypes: { pointer: "int*", result: "int" },
+    variables: { pointer: 0, result: 0 },
+    program: {
+      operations: [
+        { op: "heapAllocate", function: "calloc", count: literal(2), size: literal(4), resultTarget: "pointer" },
+        { op: "assign", target: { kind: "arrayIndex", name: "pointer", index: literal(1) }, value: literal(1000) },
+        { op: "assign", target: "result", value: { kind: "arrayIndex", name: "pointer", index: literal(1) } }
+      ]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.status, "completed");
+  assert.equal(state.variables.result, 1000);
+  assert.deepEqual(state.heap.allocations["1"].bytes, [0, 0, 0, 0, 0xe8, 0x03, 0, 0]);
 });
 
 test("peripheral transfer history stays bounded while cumulative counters keep increasing", () => {

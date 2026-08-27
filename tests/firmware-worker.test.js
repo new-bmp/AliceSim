@@ -161,3 +161,28 @@ test("firmware Worker returns synchronized ADC and high-level sensor values", ()
   assert.equal(state.variables.distanceStatus, 0);
   assert.equal(state.variables.distanceMm, 321);
 });
+
+test("firmware Worker forwards stdio output from printf", () => {
+  const worker = loadWorker();
+  const model = {
+    variables: { value: 42 },
+    program: {
+      operations: [{
+        op: "stdioWrite",
+        function: "printf",
+        stream: "stdout",
+        format: { kind: "string", value: "value=%d\n" },
+        arguments: [{ kind: "variable", name: "value" }]
+      }]
+    }
+  };
+
+  worker.send({ command: "init", model });
+  worker.send({ command: "call", method: "start", args: [] });
+  const state = worker.send({ command: "step", deltaMs: 0, inputs: { gpio: {}, adc: {}, i2c: [], spi: [], peripherals: [] } });
+  const event = worker.messages.find(message => message.type === "event" && message.kind === "stdio");
+
+  assert.equal(state.status, "completed");
+  assert.equal(event.detail.stream, "stdout");
+  assert.equal(event.detail.text, "value=42\n");
+});

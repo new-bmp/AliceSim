@@ -653,7 +653,9 @@ function handleRuntimeStatus(runtimeState) {
         source: "Alice HAL Runtime",
         code
       }]));
-      appendTerminal(`HAL runtime stopped [${code}]: ${message}`, "error");
+      const runtimeFile = normalizeProjectPath(source.file || state.firmwareModel?.program?.source || state.currentFile);
+      const runtimeLocation = runtimeFile ? ` at ${runtimeFile}:${Math.max(1, Number(source.line) || 1)}:${Math.max(1, Number(source.column) || 1)}` : "";
+      appendTerminal(`HAL runtime stopped [${code}]${runtimeLocation}: ${message}`, "error");
       showToast("HAL runtime stopped · see Problems", "error");
     }
     stopSimulation({ skipRuntimePause: true, silent: true });
@@ -1258,6 +1260,13 @@ document.addEventListener("alice:firmware-uart-tx", event => {
   const uartName = detail.instance || detail.uart || "UART";
   if (state.virtualUartInstance && uartIdentity(detail) !== state.virtualUartInstance) return;
   appendSerialLine(`${escapeHtml(uartName)} TX → HOST: ${escapeHtml(text)}`);
+});
+
+document.addEventListener("alice:firmware-stdio", event => {
+  const detail = event.detail || {};
+  const stream = String(detail.stream || "stdout").toUpperCase();
+  const text = detail.text != null ? String(detail.text) : "";
+  appendSerialLine(`${escapeHtml(stream)}: ${escapeHtml(text)}`);
 });
 
 document.addEventListener("alice:uart-source-send", event => {

@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "alicesim-shell-20260826-2";
+const CACHE_NAME = "alicesim-shell-20260827-5";
 const APP_SHELL = [
   "./",
   "./index.html",

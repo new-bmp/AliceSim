@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+import math
 import re
 from typing import Iterable, Mapping, Sequence
 
@@ -182,7 +183,7 @@ def _collect_macros(
         r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]+(.+?)[ \t]*$"
     )
     for record in records:
-        if not record.path.casefold().endswith((".h", ".inc")):
+        if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES + (".inc",)):
             continue
         cleaned = _strip_comments(record.content)
         priority = _macro_priority(record.path)
@@ -425,6 +426,17 @@ def _empty_pin(physical_pin: str) -> dict:
         "configured": False,
         "aliases": [],
     }
+
+
+def _interrupt_edge_from_mode(value: object) -> str | None:
+    normalized = str(value or "").upper()
+    if "RISING_FALLING" in normalized or ("RISING" in normalized and "FALLING" in normalized):
+        return "both"
+    if "FALLING" in normalized:
+        return "falling"
+    if "RISING" in normalized:
+        return "rising"
+    return None
 
 
 def _parse_ioc(records: Sequence[_ProjectFile], diagnostics: list[dict]) -> tuple[dict, dict]:
@@ -828,6 +840,64 @@ def _build_gpio_aliases(
     return aliases
 
 
+def _parse_gpio_interrupt_configuration(
+    records: Sequence[_ProjectFile], macros: Mapping[str, _Macro], ioc: Mapping[str, object]
+) -> None:
+    """Attach EXTI edge metadata from IOC values and CubeMX GPIO init code."""
+
+    pins: dict[str, dict] = ioc["pins"]  # type: ignore[assignment]
+    values: Mapping[str, str] = ioc.get("values", {})  # type: ignore[assignment]
+    resolve_expression, _ = _make_integer_resolver(macros)
+
+    for physical_pin, pin in pins.items():
+        candidates = [pin.get("mode"), pin.get("iocSignal")]
+        prefix = physical_pin.casefold() + "."
+        candidates.extend(
+            value for key, value in values.items()
+            if key.casefold().startswith(prefix) and ("EXTI" in key.upper() or "GPIO_MODE_IT" in str(value).upper())
+        )
+        edge = next((_interrupt_edge_from_mode(value) for value in candidates if _interrupt_edge_from_mode(value)), None)
+        if edge:
+            pin["interruptEdge"] = edge
+
+    init_call = re.compile(
+        r"\bHAL_GPIO_Init\s*\(\s*(?P<port>[^,]+),\s*&?\s*(?P<struct>[A-Za-z_]\w*)\s*\)"
+    )
+    for record in records:
+        if not record.path.casefold().endswith(C_SOURCE_SUFFIXES):
+            continue
+        cleaned = _strip_comments(record.content)
+        for call in init_call.finditer(cleaned):
+            struct_name = call.group("struct")
+            prefix_source = cleaned[: call.start()]
+            pin_assignments = list(re.finditer(
+                rf"\b{re.escape(struct_name)}\s*\.\s*Pin\s*=\s*(?P<value>[^;]+);", prefix_source
+            ))
+            mode_assignments = list(re.finditer(
+                rf"\b{re.escape(struct_name)}\s*\.\s*Mode\s*=\s*(?P<value>[^;]+);", prefix_source
+            ))
+            if not pin_assignments or not mode_assignments:
+                continue
+            pin_assignment = pin_assignments[-1]
+            mode_assignment = mode_assignments[-1]
+            if mode_assignment.start() < pin_assignment.start():
+                continue
+            edge = _interrupt_edge_from_mode(mode_assignment.group("value"))
+            port = _resolve_port(call.group("port"), macros)
+            mask = resolve_expression(pin_assignment.group("value"))
+            if not edge or not port or mask is None or mask <= 0:
+                continue
+            for pin_number in range(16):
+                if mask & (1 << pin_number):
+                    physical_pin = f"P{port[-1]}{pin_number}"
+                    pin = pins.setdefault(physical_pin, _empty_pin(physical_pin))
+                    pin["interruptEdge"] = edge
+                    pin["interruptSource"] = {
+                        "file": record.path,
+                        "line": _source_line(cleaned, mode_assignment.start())[0],
+                    }
+
+
 def _source_line(source: str, position: int) -> tuple[int, int]:
     line = source.count("\n", 0, position) + 1
     last_break = source.rfind("\n", 0, position)
@@ -874,11 +944,17 @@ def _lex_c(source: str) -> list[_Token]:
             tokens.append(_Token(text, "identifier", start, token_line, token_column))
             advance(text)
             continue
-        if char.isdigit():
-            index += 1
-            while index < len(cleaned) and (cleaned[index].isalnum() or cleaned[index] in "._"):
-                index += 1
-            text = cleaned[start:index]
+        if char.isdigit() or (char == "." and index + 1 < len(cleaned) and cleaned[index + 1].isdigit()):
+            number_match = re.match(
+                r"(?:"
+                r"0[xX](?:(?:[0-9A-Fa-f]+\.[0-9A-Fa-f]*|\.[0-9A-Fa-f]+|[0-9A-Fa-f]+)[pP][+-]?\d+[fFlL]?|[0-9A-Fa-f]+[uUlL]*)|"
+                r"0[bB][01]+[uUlL]*|"
+                r"(?:(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+)[fFlL]?|"
+                r"\d+[uUlL]*)",
+                cleaned[index:],
+            )
+            text = number_match.group(0) if number_match else char
+            index += len(text)
             tokens.append(_Token(text, "number", start, token_line, token_column))
             advance(text)
             continue
@@ -933,6 +1009,28 @@ def _tokens_text(tokens: Sequence[_Token]) -> str:
     return " ".join(token.value for token in tokens)
 
 
+def _strip_leading_c_casts(tokens: Sequence[_Token]) -> list[_Token]:
+    output = list(tokens)
+    type_names = {
+        "bool", "char", "const", "double", "enum", "float", "int", "long", "short", "signed",
+        "size_t", "struct", "union", "unsigned", "void", "volatile", "_Bool",
+    }
+    while len(output) >= 4 and output[0].value == "(":
+        close = _matching(output, 0, "(", ")")
+        if close is None or close >= len(output) - 1:
+            break
+        cast_tokens = output[1:close]
+        identifiers = [token.value for token in cast_tokens if token.kind == "identifier"]
+        is_type = bool(identifiers) and all(
+            name in type_names or name.endswith("_t") or name.endswith("TypeDef")
+            for name in identifiers
+        ) and all(token.kind == "identifier" or token.value == "*" for token in cast_tokens)
+        if not is_type:
+            break
+        output = _strip_wrapping_parentheses(output[close + 1 :])
+    return output
+
+
 def _decode_c_char(token: str) -> str | None:
     if len(token) < 2 or token[0] != "'" or token[-1] != "'":
         return None
@@ -971,6 +1069,27 @@ def _parse_c_integer(text: str) -> int | None:
         return int(match.group(1), 0)
     except ValueError:
         return None
+
+
+def _parse_c_float(text: str) -> tuple[float, str] | None:
+    match = re.fullmatch(
+        r"(?P<number>(?:"
+        r"(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+|"
+        r"0[xX](?:[0-9A-Fa-f]+\.[0-9A-Fa-f]*|\.[0-9A-Fa-f]+|[0-9A-Fa-f]+)[pP][+-]?\d+"
+        r"))(?P<suffix>[fFlL]?)",
+        text,
+    )
+    if not match:
+        return None
+    try:
+        number = match.group("number")
+        value = float.fromhex(number) if number.casefold().startswith("0x") else float(number)
+    except ValueError:
+        return None
+    if not math.isfinite(value):
+        return None
+    suffix = match.group("suffix").casefold()
+    return value, "float" if suffix == "f" else "long double" if suffix == "l" else "double"
 
 
 def _decode_c_string_literal(text: str) -> list[int] | None:
@@ -1031,16 +1150,16 @@ def _parse_initial_variables(
 ) -> dict[str, object]:
     """Collect simple C scalar/array initializers used by HAL buffer calls.
 
-    This is deliberately not a C evaluator.  It accepts fixed-size integer
-    arrays, flat brace initializers, string literals, and integer expressions
-    already supported by the macro resolver.  Unknown expressions are skipped
-    instead of being invented.
+    This is deliberately not a C evaluator.  It accepts fixed-size numeric
+    arrays, flat brace initializers, string literals, floating literals, and
+    integer expressions already supported by the macro resolver. Unknown
+    expressions are skipped instead of being invented.
     """
 
     resolve_expression, _ = _make_integer_resolver(macros)
     declaration_pattern = re.compile(
         r"\b(?P<qualifiers>(?:(?:static|const|volatile|register)\s+)*)"
-        r"(?P<type>(?:u?int(?:8|16|32|64)_t|size_t|char|short|int|long|unsigned\s+char|unsigned\s+short|unsigned\s+int|unsigned\s+long))"
+        r"(?P<type>(?:u?int(?:8|16|32|64)_t|size_t|float|double|long\s+double|char|short|int|long|unsigned\s+char|unsigned\s+short|unsigned\s+int|unsigned\s+long))"
         r"\s+(?P<name>[A-Za-z_]\w*)\s*"
         r"(?:\[\s*(?P<size>[^\]]*)\s*\])?\s*"
         r"(?:=\s*(?P<initializer>\{[^;]*\}|\"(?:\\.|[^\"\\])*\"|[^;]+?))?\s*;",
@@ -1048,11 +1167,14 @@ def _parse_initial_variables(
     )
     variables: dict[str, object] = {}
 
-    def integer_value(expression: str) -> int | None:
+    def numeric_value(expression: str, floating: bool = False) -> int | float | None:
         text = expression.strip()
         parsed = _parse_c_integer(text)
         if parsed is not None:
             return parsed
+        parsed_float = _parse_c_float(text)
+        if floating and parsed_float is not None:
+            return parsed_float[0]
         if len(text) >= 2 and text[0] == "'" and text[-1] == "'":
             decoded = _decode_c_char(text)
             return ord(decoded) if decoded is not None else None
@@ -1064,6 +1186,7 @@ def _parse_initial_variables(
         cleaned = _strip_comments(record.content)
         for match in declaration_pattern.finditer(cleaned):
             name = match.group("name")
+            floating = "float" in match.group("type") or "double" in match.group("type")
             size_text = match.group("size")
             initializer = (match.group("initializer") or "").strip()
             is_array = size_text is not None
@@ -1075,11 +1198,11 @@ def _parse_initial_variables(
                     for item in initializer[1:-1].split(","):
                         if not item.strip():
                             continue
-                        resolved = integer_value(item)
+                        resolved = numeric_value(item, floating)
                         if resolved is None:
                             values = None
                             break
-                        values.append(resolved & 0xFF)
+                        values.append(resolved if floating else int(resolved) & 0xFF)
                 elif initializer.startswith('"'):
                     values = _decode_c_string_literal(initializer)
                     if values is not None:
@@ -1098,14 +1221,14 @@ def _parse_initial_variables(
 
             if not initializer:
                 continue
-            scalar = integer_value(initializer)
+            scalar = numeric_value(initializer, floating)
             if scalar is not None:
                 variables[name] = scalar
     return variables
 
 
 def _parse_variable_types(records: Sequence[_ProjectFile]) -> dict[str, str]:
-    """Collect scalar/array integer declarations for runtime C-width coercion.
+    """Collect scalar/array numeric declarations for runtime C coercion.
 
     The behaviour model remains value-oriented, but preserving the declared C
     type lets the browser runtime apply the width/sign rules when assigning a
@@ -1113,9 +1236,9 @@ def _parse_variable_types(records: Sequence[_ProjectFile]) -> dict[str, str]:
     """
     declaration_pattern = re.compile(
         r"\b(?P<qualifiers>(?:(?:static|const|volatile|register)\s+)*)"
-        r"(?P<type>(?:u?int(?:8|16|32|64)_t|size_t|_Bool|bool|char|signed\s+char|short|signed\s+short|int|signed\s+int|long|signed\s+long|"
+        r"(?P<type>(?:u?int(?:8|16|32|64)_t|size_t|_Bool|bool|float|double|long\s+double|char|signed\s+char|short|signed\s+short|int|signed\s+int|long|signed\s+long|"
         r"unsigned\s+(?:char|short|int|long)))"
-        r"\s+(?P<name>[A-Za-z_]\w*)\s*"
+        r"\s+(?P<pointer>\*+\s*)?(?P<name>[A-Za-z_]\w*)\s*"
         r"(?:\[[^\]]*\])?\s*"
         r"(?:=\s*(?:\{[^;]*\}|\"(?:\\.|[^\"\\])*\"|[^;]+?))?\s*;",
         re.MULTILINE | re.DOTALL,
@@ -1126,16 +1249,69 @@ def _parse_variable_types(records: Sequence[_ProjectFile]) -> dict[str, str]:
             continue
         cleaned = _strip_comments(record.content)
         for match in declaration_pattern.finditer(cleaned):
-            variable_types[match.group("name")] = re.sub(r"\s+", " ", match.group("type").strip().lower())
+            pointer = (match.group("pointer") or "").replace(" ", "")
+            variable_types[match.group("name")] = re.sub(r"\s+", " ", match.group("type").strip().lower()) + pointer
     return variable_types
+
+
+_PURE_LIBC_FUNCTIONS = {
+    "abs", "labs", "llabs", "atoi", "atol", "atoll", "atof",
+    "strtol", "strtoul", "strtoll", "strtoull", "strtod",
+    "strcmp", "strncmp", "memcmp", "strlen",
+    "rand", "sqrt", "sqrtf", "sqrtl", "pow", "powf", "powl",
+    "sin", "sinf", "sinl", "cos", "cosf", "cosl", "tan", "tanf", "tanl",
+    "asin", "asinf", "asinl", "acos", "acosf", "acosl", "atan", "atanf", "atanl",
+    "atan2", "atan2f", "atan2l", "floor", "floorf", "floorl", "ceil", "ceilf", "ceill",
+    "round", "roundf", "roundl", "trunc", "truncf", "truncl", "fabs", "fabsf", "fabsl",
+    "fmod", "fmodf", "fmodl", "exp", "expf", "expl", "log", "logf", "logl",
+    "log10", "log10f", "log10l",
+    "isalnum", "isalpha", "isblank", "iscntrl", "isdigit", "isgraph", "islower", "isprint",
+    "ispunct", "isspace", "isupper", "isxdigit", "tolower", "toupper",
+}
+
+_STATEMENT_LIBC_FUNCTIONS = {
+    "printf", "fprintf", "puts", "fputs", "putchar", "fputc", "fwrite", "sscanf",
+    "memcpy", "memmove", "memset", "strcpy", "strncpy", "strcat", "strncat",
+    "malloc", "calloc", "realloc", "free", "srand", "exit", "_Exit", "abort",
+}
 
 
 def _expression_model(tokens: Sequence[_Token], resolve_integer) -> dict:
     cleaned = _strip_wrapping_parentheses(tokens)
-    while cleaned and cleaned[0].value in {"&", "*", "+"}:
-        cleaned = cleaned[1:]
+    while len(cleaned) >= 4 and cleaned[0].kind == "identifier" and cleaned[1].value == ":" and cleaned[2].value == ":":
+        cleaned = cleaned[3:]
     if not cleaned:
         return {"kind": "unknown", "text": ""}
+
+    if len(cleaned) >= 3 and cleaned[0].kind == "identifier" and cleaned[1].value == "(":
+        close_call = _matching(cleaned, 1, "(", ")")
+        if close_call == len(cleaned) - 1:
+            if cleaned[0].value == "HAL_GetTick":
+                return {"kind": "tick"}
+            if cleaned[0].value in {"HAL_Init", "HAL_ADCEx_Calibration_Start"}:
+                return {"kind": "constant", "name": "HAL_OK", "value": 0}
+            if cleaned[0].value == "HAL_ADC_PollForConversion":
+                arguments = _split_arguments(cleaned[2:close_call])
+                return {
+                    "kind": "adcPoll",
+                    "adc": _first_identifier(arguments[0]) if arguments else None,
+                    "timeout": _expression_model(arguments[1], resolve_integer) if len(arguments) > 1 else {"kind": "literal", "value": 0},
+                }
+            if cleaned[0].value in {"strlen", "sizeof"}:
+                argument = _expression_model(cleaned[2:close_call], resolve_integer)
+                return {
+                    "kind": "stringLength" if cleaned[0].value == "strlen" else "sizeOf",
+                    "value": argument,
+                }
+            if cleaned[0].value in _PURE_LIBC_FUNCTIONS:
+                return {
+                    "kind": "libcCall",
+                    "function": cleaned[0].value,
+                    "arguments": [
+                        _expression_model(argument, resolve_integer)
+                        for argument in _split_arguments(cleaned[2:close_call])
+                    ],
+                }
 
     binary_names = {
         "|": "bitOr",
@@ -1179,6 +1355,27 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer) -> dict:
             "left": _expression_model(cleaned[:operator_index], resolve_integer),
             "right": _expression_model(cleaned[operator_index + 1 :], resolve_integer),
         }
+
+    if cleaned[0].value in {"&", "*", "+", "-", "!", "~"}:
+        unary_kinds = {
+            "&": "addressOf",
+            "*": "dereference",
+            "+": "positive",
+            "-": "negate",
+            "!": "logicalNot",
+            "~": "bitNot",
+        }
+        field = "pointer" if cleaned[0].value == "*" else "value"
+        return {"kind": unary_kinds[cleaned[0].value], field: _expression_model(cleaned[1:], resolve_integer)}
+
+    without_cast = _strip_leading_c_casts(cleaned)
+    if without_cast != cleaned:
+        close = _matching(cleaned, 0, "(", ")")
+        cast_type = _tokens_text(cleaned[1:close]).replace(" *", "*") if close is not None else ""
+        if "float" in cast_type or "double" in cast_type:
+            return {"kind": "cast", "cType": cast_type, "value": _expression_model(cleaned[close + 1 :], resolve_integer)}
+        return _expression_model(without_cast, resolve_integer)
+
     if len(cleaned) == 1:
         token = cleaned[0]
         if token.kind == "string":
@@ -1197,6 +1394,9 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer) -> dict:
             value = _parse_c_integer(token.value)
             if value is not None:
                 return {"kind": "literal", "value": value}
+            floating = _parse_c_float(token.value)
+            if floating is not None:
+                return {"kind": "literal", "value": floating[0], "numericType": floating[1], "text": token.value}
         if token.kind == "identifier":
             constants = {
                 "HAL_OK": 0,
@@ -1205,6 +1405,7 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer) -> dict:
                 "HAL_TIMEOUT": 3,
                 "GPIO_PIN_RESET": 0,
                 "GPIO_PIN_SET": 1,
+                "NULL": 0,
                 "RESET": 0,
                 "SET": 1,
             }
@@ -1251,8 +1452,25 @@ def _runtime_expression_supported(expression: Mapping[str, object]) -> bool:
     """
 
     kind = str(expression.get("kind") or "")
-    if kind in {"literal", "constant", "variable", "char", "string"}:
+    if kind in {"literal", "constant", "variable", "char", "string", "tick"}:
         return True
+    if kind in {"stringLength", "sizeOf", "positive", "negate", "logicalNot", "bitNot", "cast"}:
+        value = expression.get("value")
+        return not isinstance(value, Mapping) or _runtime_expression_supported(value)
+    if kind == "adcPoll":
+        timeout = expression.get("timeout")
+        return not isinstance(timeout, Mapping) or _runtime_expression_supported(timeout)
+    if kind == "addressOf":
+        value = expression.get("value")
+        return not isinstance(value, Mapping) or _runtime_expression_supported(value)
+    if kind == "dereference":
+        pointer = expression.get("pointer")
+        return not isinstance(pointer, Mapping) or _runtime_expression_supported(pointer)
+    if kind == "libcCall":
+        return all(
+            not isinstance(argument, Mapping) or _runtime_expression_supported(argument)
+            for argument in expression.get("arguments", [])
+        )
     if kind == "arrayIndex":
         index = expression.get("index")
         return not isinstance(index, Mapping) or _runtime_expression_supported(index)
@@ -1361,8 +1579,11 @@ class _StatementParser:
         spi_instances: Mapping[str, dict],
         adc_instances: Mapping[str, dict],
         diagnostics: list[dict],
+        inline_stack: Sequence[str] | None = None,
+        function_tokens: Sequence[_Token] | None = None,
     ) -> None:
         self.tokens = list(tokens)
+        self.function_tokens = list(function_tokens) if function_tokens is not None else self.tokens
         self.file = file
         self.macros = macros
         self.aliases = aliases
@@ -1371,7 +1592,15 @@ class _StatementParser:
         self.spi_instances = spi_instances
         self.adc_instances = adc_instances
         self.diagnostics = diagnostics
+        self.inline_stack = tuple(inline_stack or ())
         self.resolve_expression, self.resolve_identifier = _make_integer_resolver(macros)
+
+    @staticmethod
+    def _append_operation(operations: list[dict], operation: dict | list[dict] | None) -> None:
+        if isinstance(operation, list):
+            operations.extend(operation)
+        elif operation:
+            operations.append(operation)
 
     def _source(self, token: _Token) -> dict:
         return {"file": self.file, "line": token.line, "column": token.column}
@@ -1453,8 +1682,7 @@ class _StatementParser:
                 index += 1
                 continue
             operation = self._parse_simple(self.tokens[index:statement_end])
-            if operation:
-                operations.append(operation)
+            self._append_operation(operations, operation)
             index = statement_end + (1 if statement_end < end and self.tokens[statement_end].value == ";" else 0)
         return operations
 
@@ -1525,7 +1753,9 @@ class _StatementParser:
         next_index = statement_end + (
             1 if statement_end < end and self.tokens[statement_end].value == ";" else 0
         )
-        return ([operation] if operation else []), next_index
+        operations: list[dict] = []
+        self._append_operation(operations, operation)
+        return operations, next_index
 
     def _parse_if(self, start: int, end: int) -> tuple[dict | None, int]:
         if start + 1 >= end or self.tokens[start + 1].value != "(":
@@ -1592,8 +1822,7 @@ class _StatementParser:
         operations: list[dict] = []
         for clause in clauses:
             operation = self._parse_simple(clause)
-            if operation:
-                operations.append(operation)
+            self._append_operation(operations, operation)
         return operations
 
     def _parse_for(self, start: int, end: int) -> tuple[dict | None, int]:
@@ -1703,9 +1932,172 @@ class _StatementParser:
             "source": self._source(self.tokens[start]),
         }, body_end + 1
 
-    def _parse_simple(self, tokens: Sequence[_Token]) -> dict | None:
+    def _parse_declaration(self, tokens: Sequence[_Token]) -> list[dict] | None:
+        """Lower ordinary local declarations with initializers or fixed arrays.
+
+        A C declaration can contain several declarators, for example
+        ``uint16_t first = 0, second = 0``. Treating the first ``=`` as a
+        general assignment loses every declarator after it. The runtime needs
+        fixed local character arrays as real arrays as well, because snprintf
+        and the display drivers write through their addresses.
+        """
+
+        cursor = 0
+        saw_type = False
+        while cursor < len(tokens):
+            token = tokens[cursor]
+            lowered = token.value.casefold()
+            if token.kind == "identifier" and (
+                lowered in self._DECLARATION_PREFIXES or lowered.endswith("_t")
+            ):
+                saw_type = True
+                cursor += 1
+                continue
+            if token.value == "*" and saw_type:
+                cursor += 1
+                continue
+            break
+        if not saw_type or cursor >= len(tokens):
+            return None
+
+        operations: list[dict] = []
+        for declarator in _split_arguments(tokens[cursor:]):
+            if not declarator:
+                continue
+            depth = 0
+            assignment = None
+            for index, token in enumerate(declarator):
+                if token.value in {"(", "[", "{"}:
+                    depth += 1
+                elif token.value in {")", "]", "}"}:
+                    depth = max(0, depth - 1)
+                elif token.value == "=" and depth == 0:
+                    assignment = index
+                    break
+            name_tokens = declarator[:assignment] if assignment is not None else declarator
+            bracket = next((index for index, token in enumerate(name_tokens) if token.value == "["), None)
+            identifiers = [
+                token for token in (name_tokens[:bracket] if bracket is not None else name_tokens)
+                if token.kind == "identifier"
+            ]
+            if not identifiers:
+                continue
+            name = identifiers[-1]
+            source = self._source(name)
+
+            if assignment is not None:
+                initializer = declarator[assignment + 1 :]
+                if len(initializer) >= 3 and initializer[0].kind == "identifier" and initializer[1].value == "(":
+                    close = _matching(initializer, 1, "(", ")")
+                    if close == len(initializer) - 1 and initializer[0].value.startswith(("HAL_", "__HAL_")):
+                        operation = self._parse_hal_call(
+                            initializer[0],
+                            _split_arguments(initializer[2:close]),
+                        )
+                        if operation is not None:
+                            if operation.get("op") == "adcGetValue":
+                                operation["target"] = name.value
+                            else:
+                                operation["resultTarget"] = name.value
+                            operations.append(operation)
+                            continue
+                if len(initializer) >= 2 and initializer[0].value == "{" and initializer[-1].value == "}":
+                    values = [
+                        _expression_model(value, self.resolve_expression)
+                        for value in _split_arguments(initializer[1:-1])
+                        if value
+                    ]
+                    operations.append({"op": "assign", "target": name.value, "value": values, "source": source})
+                else:
+                    operations.append({
+                        "op": "assign",
+                        "target": name.value,
+                        "value": _expression_model(initializer, self.resolve_expression),
+                        "source": source,
+                    })
+                continue
+
+            if bracket is None:
+                continue
+            close = _matching(name_tokens, bracket, "[", "]")
+            if close is None:
+                continue
+            size = self.resolve_expression(_tokens_text(name_tokens[bracket + 1 : close]))
+            if size is None or size < 0 or size > 65536:
+                continue
+            operations.append({
+                "op": "assign",
+                "target": name.value,
+                "value": [0] * size,
+                "source": source,
+            })
+        return operations
+
+    def _inline_value_function(
+        self,
+        call: _Token,
+        arguments: Sequence[Sequence[_Token]],
+        target: str | dict,
+        statement: Sequence[_Token],
+    ) -> list[dict] | None:
+        """Inline a simple project helper used as the complete RHS of an assignment."""
+
+        call_name = call.value
+        body = _find_function(self.function_tokens, call_name)
+        if body is None or call_name in self.inline_stack:
+            return None
+        parameters = _function_parameter_names(self.function_tokens, call_name)
+        if len(arguments) != len(parameters):
+            unsupported = self._unsupported(
+                statement,
+                "C_UNSUPPORTED_FUNCTION_ARGUMENTS",
+                f"Function call '{call_name}' expects {len(parameters)} arguments but received {len(arguments)}",
+            )
+            return [unsupported]
+        inline_tokens = _substitute_function_parameters(
+            self.function_tokens[body[0] : body[1]],
+            dict(zip(parameters, arguments)),
+        )
+        parser = _StatementParser(
+            inline_tokens,
+            self.file,
+            self.macros,
+            self.aliases,
+            self.uart_instances,
+            self.i2c_instances,
+            self.spi_instances,
+            self.adc_instances,
+            self.diagnostics,
+            self.inline_stack + (call_name,),
+            self.function_tokens,
+        )
+        operations = parser.parse()
+        if not operations or operations[-1].get("op") != "return" or "value" not in operations[-1]:
+            source = self._source(call)
+            self.diagnostics.append(
+                _diagnostic(
+                    "error",
+                    "C_UNSUPPORTED_FUNCTION_RETURN",
+                    f"Function call '{call_name}' does not have a supported final return value",
+                    **source,
+                )
+            )
+            return [{"op": "unsupported", "call": call_name, "source": source}]
+        returned = operations.pop()
+        operations.append({
+            "op": "assign",
+            "target": target,
+            "value": returned["value"],
+            "source": self._source(call),
+        })
+        return operations
+
+    def _parse_simple(self, tokens: Sequence[_Token]) -> dict | list[dict] | None:
         if not tokens:
             return None
+        declaration = self._parse_declaration(tokens)
+        if declaration is not None:
+            return declaration
         depth = 0
         assignment_index: int | None = None
         compound_assignment_index: int | None = None
@@ -1744,7 +2136,8 @@ class _StatementParser:
                 "vTaskDelay", "vTaskDelayUntil", "taskYIELD", "osDelay", "osDelayUntil", "osThreadYield",
                 "xQueueReceive", "xSemaphoreTake", "osMessageQueueGet", "osSemaphoreAcquire",
             }
-            if (is_hal_call or is_alice_call or is_middleware_call) and tokens[index + 1].value == "(":
+            expression_only_hal = token.value in {"HAL_GetTick", "HAL_ADCEx_Calibration_Start"}
+            if (is_hal_call or is_alice_call or is_middleware_call) and tokens[index + 1].value == "(" and not expression_only_hal:
                 close = _matching(tokens, index + 1, "(", ")")
                 if close is not None:
                     arguments = _split_arguments(tokens[index + 2 : close])
@@ -1768,6 +2161,37 @@ class _StatementParser:
                             operation["resultTarget"] = target
                     return operation
 
+        for index, token in enumerate(tokens[:-1]):
+            if token.kind != "identifier" or token.value not in {"snprintf", "sprintf"} or tokens[index + 1].value != "(":
+                continue
+            close = _matching(tokens, index + 1, "(", ")")
+            if close is None:
+                continue
+            arguments = _split_arguments(tokens[index + 2 : close])
+            operation = self._parse_format_call(token, arguments)
+            if operation and assignment_index is not None and assignment_index < index:
+                left = list(tokens[:assignment_index])
+                target = next((item.value for item in reversed(left) if item.kind == "identifier"), None)
+                if target:
+                    operation["resultTarget"] = target
+            return operation
+
+        for index, token in enumerate(tokens[:-1]):
+            recognized = token.value in _STATEMENT_LIBC_FUNCTIONS or assignment_index is None and token.value in _PURE_LIBC_FUNCTIONS
+            if token.kind != "identifier" or not recognized or tokens[index + 1].value != "(":
+                continue
+            close = _matching(tokens, index + 1, "(", ")")
+            if close is None:
+                continue
+            arguments = _split_arguments(tokens[index + 2 : close])
+            operation = self._parse_libc_call(token, arguments)
+            if operation and assignment_index is not None and assignment_index < index:
+                left = list(tokens[:assignment_index])
+                target = next((item.value for item in reversed(left) if item.kind == "identifier"), None)
+                if target:
+                    operation["resultTarget"] = target
+            return operation
+
         if assignment_index is None:
             call_index = next((index for index, token in enumerate(tokens[:-1]) if token.kind == "identifier" and tokens[index + 1].value == "("), None)
             if call_index is not None:
@@ -1784,9 +2208,49 @@ class _StatementParser:
                         "message": "Firmware entered Error_Handler()",
                         "source": self._source(tokens[call_index]),
                     }
+                call_close = _matching(tokens, call_index + 1, "(", ")")
+                call_arguments = _split_arguments(tokens[call_index + 2 : call_close]) if call_close is not None else []
+                inline_body = _find_function(self.function_tokens, call_name)
+                if inline_body is not None and call_name not in self.inline_stack:
+                    parameter_names = _function_parameter_names(self.function_tokens, call_name)
+                    if len(call_arguments) != len(parameter_names):
+                        return self._unsupported(
+                            tokens,
+                            "C_UNSUPPORTED_FUNCTION_ARGUMENTS",
+                            f"Function call '{call_name}' expects {len(parameter_names)} arguments but received {len(call_arguments)}",
+                        )
+                    inline_tokens = _substitute_function_parameters(
+                        self.function_tokens[inline_body[0] : inline_body[1]],
+                        dict(zip(parameter_names, call_arguments)),
+                    )
+                    parser = _StatementParser(
+                        inline_tokens,
+                        self.file,
+                        self.macros,
+                        self.aliases,
+                        self.uart_instances,
+                        self.i2c_instances,
+                        self.spi_instances,
+                        self.adc_instances,
+                        self.diagnostics,
+                        self.inline_stack + (call_name,),
+                        self.function_tokens,
+                    )
+                    inline_operations = parser.parse()
+                    if inline_operations and inline_operations[-1].get("op") == "return" and "value" not in inline_operations[-1]:
+                        inline_operations.pop()
+                    return inline_operations
+                if call_name in {"HAL_GetTick", "HAL_ADCEx_Calibration_Start"}:
+                    return None
                 return self._unsupported(tokens, "C_UNSUPPORTED_FUNCTION_CALL", f"Function call '{call_name}' is outside the supported HAL/driver subset")
             first = next((token.value.lower() for token in tokens if token.kind == "identifier"), "")
             if first in self._DECLARATION_PREFIXES or first.startswith(("uint", "int")) and first.endswith("_t"):
+                return None
+            identifiers = [token for token in tokens if token.kind == "identifier"]
+            if len(identifiers) >= 2 and not any(token.value in {"+", "-", "/", "%", "&&", "||", "==", "!=", "<", ">", "<=", ">="} for token in tokens):
+                # Clang has already validated the statement. Two identifiers
+                # without an expression are therefore a typedef/enum variable
+                # declaration such as `GPIO_PinState sw_run`.
                 return None
             if len(tokens) >= 2 and tokens[0].kind == "identifier" and tokens[0].value.startswith("AliceSIM_") and tokens[1].kind == "identifier":
                 return None
@@ -1797,6 +2261,12 @@ class _StatementParser:
             # are not needed by the value-oriented HAL behavior model.
             return None
         target: str | dict | None = None
+        stripped_left = _strip_wrapping_parentheses(left)
+        if stripped_left and stripped_left[0].value == "*":
+            target = {
+                "kind": "dereference",
+                "pointer": _expression_model(stripped_left[1:], self.resolve_expression),
+            }
         bracket_index = next((index for index, token in enumerate(left) if token.value == "["), None)
         if bracket_index is not None and bracket_index > 0 and left[bracket_index - 1].kind == "identifier":
             target_model = _expression_model(left[bracket_index - 1 :], self.resolve_expression)
@@ -1806,12 +2276,137 @@ class _StatementParser:
             target = next((token.value for token in reversed(left) if token.kind == "identifier"), None)
         if not target:
             return None
+        value_tokens = _strip_wrapping_parentheses(tokens[assignment_index + 1 :])
+        if len(value_tokens) >= 3 and value_tokens[0].kind == "identifier" and value_tokens[1].value == "(":
+            close = _matching(value_tokens, 1, "(", ")")
+            if close == len(value_tokens) - 1:
+                inline = self._inline_value_function(
+                    value_tokens[0],
+                    _split_arguments(value_tokens[2:close]),
+                    target,
+                    tokens,
+                )
+                if inline is not None:
+                    return inline
         return {
             "op": "assign",
             "target": target,
             "value": _expression_model(tokens[assignment_index + 1 :], self.resolve_expression),
             "source": self._source(tokens[0]),
         }
+
+    def _parse_format_call(self, call: _Token, arguments: Sequence[Sequence[_Token]]) -> dict:
+        name = call.value
+        minimum = 3 if name == "snprintf" else 2
+        source = self._source(call)
+        if len(arguments) < minimum:
+            self.diagnostics.append(
+                _diagnostic("error", "C_FORMAT_ARGUMENTS", f"{name} has too few arguments", **source)
+            )
+            return {"op": "unsupported", "call": name, "source": source}
+        buffer = _first_identifier(arguments[0], ignore=self._DECLARATION_PREFIXES)
+        if not buffer:
+            self.diagnostics.append(
+                _diagnostic("error", "C_FORMAT_BUFFER", f"Could not resolve the destination buffer for {name}", **source)
+            )
+            return {"op": "unsupported", "call": name, "source": source}
+        format_index = 2 if name == "snprintf" else 1
+        operation = {
+            "op": "formatString",
+            "function": name,
+            "buffer": buffer,
+            "format": _expression_model(arguments[format_index], self.resolve_expression),
+            "arguments": [
+                _expression_model(argument, self.resolve_expression)
+                for argument in arguments[format_index + 1 :]
+            ],
+            "source": source,
+        }
+        if name == "snprintf":
+            operation["capacity"] = _expression_model(arguments[1], self.resolve_expression)
+        return operation
+
+    def _parse_libc_call(self, call: _Token, arguments: Sequence[Sequence[_Token]]) -> dict | None:
+        name = call.value
+        source = self._source(call)
+
+        def require(count: int) -> bool:
+            if len(arguments) >= count:
+                return True
+            self.diagnostics.append(
+                _diagnostic("error", "C_LIBRARY_ARGUMENTS", f"{name} has fewer than {count} arguments", **source)
+            )
+            return False
+
+        def expression(index: int) -> dict:
+            return _expression_model(arguments[index], self.resolve_expression)
+
+        if name in _PURE_LIBC_FUNCTIONS:
+            return None
+        if name in {"malloc", "calloc", "realloc"}:
+            required = 2 if name in {"calloc", "realloc"} else 1
+            if not require(required):
+                return {"op": "unsupported", "call": name, "source": source}
+            operation = {"op": "heapAllocate", "function": name, "source": source}
+            if name == "calloc":
+                operation.update({"count": expression(0), "size": expression(1), "zero": True})
+            elif name == "realloc":
+                operation.update({"pointer": expression(0), "size": expression(1)})
+            else:
+                operation["size"] = expression(0)
+            return operation
+        if name == "free":
+            if not require(1):
+                return {"op": "unsupported", "call": name, "source": source}
+            return {"op": "heapFree", "pointer": expression(0), "source": source}
+        if name in {"memcpy", "memmove", "memset", "strcpy", "strncpy", "strcat", "strncat"}:
+            required = 3 if name in {"memcpy", "memmove", "memset", "strncpy", "strncat"} else 2
+            if not require(required):
+                return {"op": "unsupported", "call": name, "source": source}
+            return {
+                "op": "libcMemory",
+                "function": name,
+                "arguments": [expression(index) for index in range(required)],
+                "source": source,
+            }
+        if name in {"printf", "fprintf", "puts", "fputs", "putchar", "fputc", "fwrite"}:
+            required = {"printf": 1, "fprintf": 2, "puts": 1, "fputs": 2, "putchar": 1, "fputc": 2, "fwrite": 4}[name]
+            if not require(required):
+                return {"op": "unsupported", "call": name, "source": source}
+            operation: dict = {"op": "stdioWrite", "function": name, "stream": "stdout", "source": source}
+            if name in {"fprintf", "fputs", "fputc", "fwrite"}:
+                operation["stream"] = _first_identifier(arguments[-1], ignore=self._DECLARATION_PREFIXES) or "stdout"
+            if name in {"printf", "fprintf"}:
+                format_index = 1 if name == "fprintf" else 0
+                operation["format"] = expression(format_index)
+                operation["arguments"] = [
+                    expression(index) for index in range(format_index + 1, len(arguments))
+                ]
+            elif name in {"puts", "fputs"}:
+                operation.update({"data": expression(0), "newline": name == "puts"})
+            elif name in {"putchar", "fputc"}:
+                operation["character"] = expression(0)
+            else:
+                operation.update({"data": expression(0), "size": expression(1), "count": expression(2)})
+            return operation
+        if name == "sscanf":
+            if not require(2):
+                return {"op": "unsupported", "call": name, "source": source}
+            return {
+                "op": "stdioScan",
+                "input": expression(0),
+                "format": expression(1),
+                "targets": [expression(index) for index in range(2, len(arguments))],
+                "source": source,
+            }
+        if name == "srand":
+            if not require(1):
+                return {"op": "unsupported", "call": name, "source": source}
+            return {"op": "libcSeed", "seed": expression(0), "source": source}
+        if name in {"exit", "_Exit", "abort"}:
+            status = expression(0) if arguments else {"kind": "literal", "value": 1 if name == "abort" else 0}
+            return {"op": "processExit", "status": status, "abnormal": name == "abort", "source": source}
+        return None
 
     def _parse_middleware_call(self, call: _Token, arguments: Sequence[Sequence[_Token]]) -> dict | None:
         source = self._source(call)
@@ -2294,6 +2889,16 @@ class _StatementParser:
         )
         return {"op": "unsupported", "call": name, "source": source}
 
+    def _transfer_length(self, tokens: Sequence[_Token]) -> tuple[int | dict | None, str]:
+        expression_text = _tokens_text(tokens)
+        resolved = self.resolve_expression(expression_text)
+        if resolved is not None:
+            return resolved, expression_text
+        expression = _expression_model(tokens, self.resolve_expression)
+        if _runtime_expression_supported(expression):
+            return expression, expression_text
+        return None, expression_text
+
     def _parse_hal_call(self, call: _Token, arguments: Sequence[Sequence[_Token]]) -> dict | None:
         source = self._source(call)
         name = call.value
@@ -2329,9 +2934,14 @@ class _StatementParser:
                 "interrupt": name.endswith("_IT"),
                 "source": source,
             }
-        if name in {"HAL_UART_Receive", "HAL_UART_Transmit", "HAL_UART_Receive_DMA", "HAL_UART_Transmit_DMA"}:
+        if name in {
+            "HAL_UART_Receive", "HAL_UART_Transmit",
+            "HAL_UART_Receive_IT", "HAL_UART_Transmit_IT",
+            "HAL_UART_Receive_DMA", "HAL_UART_Transmit_DMA",
+        }:
             is_dma = name.endswith("_DMA")
-            required = 3 if is_dma else 4
+            is_interrupt = name.endswith("_IT")
+            required = 3 if is_dma or is_interrupt else 4
             if len(arguments) < required:
                 self.diagnostics.append(
                     _diagnostic(
@@ -2343,16 +2953,20 @@ class _StatementParser:
                 )
                 return {"op": "unsupported", "call": name, "source": source}
             handle = _first_identifier(arguments[0])
-            buffer = _first_identifier(arguments[1])
-            length_expression = _tokens_text(arguments[2])
-            length = self.resolve_expression(length_expression)
-            timeout = None if is_dma else _tokens_text(arguments[3])
+            buffer = _first_identifier(arguments[1], ignore=self._DECLARATION_PREFIXES)
+            length, length_expression = self._transfer_length(arguments[2])
+            timeout = None if is_dma or is_interrupt else _tokens_text(arguments[3])
             instance = None
             if handle and handle in self.uart_instances:
                 instance = self.uart_instances[handle].get("instance")
             receiving = "Receive" in name
-            operation_name = ("uartReceiveDma" if receiving else "uartTransmitDma") if is_dma else ("uartReceive" if receiving else "uartTransmit")
-            blocking = not is_dma and timeout != "0"
+            if is_dma:
+                operation_name = "uartReceiveDma" if receiving else "uartTransmitDma"
+            elif is_interrupt:
+                operation_name = "uartReceiveIt" if receiving else "uartTransmitIt"
+            else:
+                operation_name = "uartReceive" if receiving else "uartTransmit"
+            blocking = not is_dma and not is_interrupt and timeout != "0"
             operation = {
                 "op": operation_name,
                 "uart": handle,
@@ -2363,6 +2977,7 @@ class _StatementParser:
                 "timeout": timeout,
                 "blocking": blocking,
                 "dma": is_dma,
+                "interrupt": is_interrupt,
                 "source": source,
             }
             if length is None:
@@ -2376,6 +2991,19 @@ class _StatementParser:
                     )
                 )
             return operation
+
+        if name in {"HAL_UART_Abort_IT", "HAL_UART_AbortTransmit_IT", "HAL_UART_AbortReceive_IT"}:
+            if len(arguments) < 1:
+                self.diagnostics.append(_diagnostic("error", "HAL_CALL_ARGUMENTS", f"{name} has too few arguments", **source))
+                return {"op": "unsupported", "call": name, "source": source}
+            handle = _first_identifier(arguments[0])
+            return {
+                "op": "uartAbortIt",
+                "uart": handle,
+                "instance": self.uart_instances.get(handle, {}).get("instance") if handle else None,
+                "direction": "tx" if "Transmit" in name else "rx" if "Receive" in name else "both",
+                "source": source,
+            }
 
         if name == "HAL_UART_DMAStop":
             if len(arguments) < 1:
@@ -2528,6 +3156,31 @@ class _StatementParser:
                     )
             return operation
 
+        if name in {"HAL_ADC_Start_IT", "HAL_ADC_Stop_IT"}:
+            if len(arguments) < 1:
+                self.diagnostics.append(_diagnostic("error", "HAL_CALL_ARGUMENTS", f"{name} has too few arguments", **source))
+                return {"op": "unsupported", "call": name, "source": source}
+            handle = _first_identifier(arguments[0])
+            return {
+                "op": "adcStartIt" if name == "HAL_ADC_Start_IT" else "adcStopIt",
+                "adc": handle,
+                "instance": self.adc_instances.get(handle, {}).get("instance") if handle else None,
+                "source": source,
+            }
+
+        if name in {"HAL_TIM_Base_Start_IT", "HAL_TIM_Base_Stop_IT"}:
+            if len(arguments) < 1:
+                self.diagnostics.append(_diagnostic("error", "HAL_CALL_ARGUMENTS", f"{name} has too few arguments", **source))
+                return {"op": "unsupported", "call": name, "source": source}
+            handle = _first_identifier(arguments[0])
+            suffix = re.search(r"(\d+)$", str(handle or ""))
+            return {
+                "op": "timerStartIt" if name == "HAL_TIM_Base_Start_IT" else "timerStopIt",
+                "timer": handle,
+                "instance": "TIM" + suffix.group(1) if suffix else None,
+                "source": source,
+            }
+
         if name in {"HAL_ADC_Start", "HAL_ADC_PollForConversion", "HAL_ADC_GetValue"}:
             required = 2 if name == "HAL_ADC_PollForConversion" else 1
             if len(arguments) < required:
@@ -2622,7 +3275,14 @@ class _StatementParser:
                 "source": source,
             }
 
-        if name in {"HAL_Init", "HAL_IncTick", "HAL_UART_Init", "HAL_I2C_Init", "HAL_ADC_Init", "HAL_DMA_Init", "HAL_DMA_DeInit", "HAL_DMA_IRQHandler", "HAL_GPIO_Init", "HAL_TIM_PWM_Init", "HAL_TIM_PWM_ConfigChannel", "HAL_TIM_Base_Init"}:
+        if name in {
+            "HAL_Init", "HAL_IncTick", "HAL_UART_Init", "HAL_I2C_Init", "HAL_ADC_Init", "HAL_ADC_Stop",
+            "HAL_ADCEx_Calibration_Start", "HAL_DMA_Init", "HAL_DMA_DeInit", "HAL_DMA_IRQHandler",
+            "HAL_GPIO_Init", "HAL_GPIO_EXTI_IRQHandler", "HAL_ADC_IRQHandler", "HAL_UART_IRQHandler",
+            "HAL_TIM_IRQHandler", "HAL_TIM_PWM_Init", "HAL_TIM_PWM_ConfigChannel", "HAL_TIM_Base_Init",
+            "HAL_NVIC_SetPriority", "HAL_NVIC_EnableIRQ", "HAL_NVIC_DisableIRQ", "HAL_NVIC_ClearPendingIRQ",
+            "__HAL_LINKDMA", "__HAL_GPIO_EXTI_CLEAR_IT", "__HAL_GPIO_EXTI_CLEAR_FLAG",
+        }:
             return None
         self.diagnostics.append(
             _diagnostic(
@@ -2650,6 +3310,47 @@ def _find_function(tokens: Sequence[_Token], name: str) -> tuple[int, int] | Non
             if close_brace is not None:
                 return cursor + 1, close_brace
     return None
+
+
+def _function_parameter_names(tokens: Sequence[_Token], name: str) -> list[str]:
+    for index, token in enumerate(tokens[:-1]):
+        if token.value != name or tokens[index + 1].value != "(":
+            continue
+        close_paren = _matching(tokens, index + 1, "(", ")")
+        if close_paren is None:
+            continue
+        cursor = close_paren + 1
+        while cursor < len(tokens) and tokens[cursor].value in {"__attribute__", "(", ")"}:
+            cursor += 1
+        if cursor >= len(tokens) or tokens[cursor].value != "{":
+            continue
+        parameters: list[str] = []
+        for argument in _split_arguments(tokens[index + 2 : close_paren]):
+            identifiers = [item.value for item in argument if item.kind == "identifier" and item.value != "void"]
+            if identifiers:
+                parameters.append(identifiers[-1])
+        return parameters
+    return []
+
+
+def _substitute_function_parameters(
+    body: Sequence[_Token],
+    arguments: Mapping[str, Sequence[_Token]],
+) -> list[_Token]:
+    substituted: list[_Token] = []
+    for index, token in enumerate(body):
+        is_member_name = index > 0 and body[index - 1].value in {".", "->"}
+        actual = arguments.get(token.value) if token.kind == "identifier" and not is_member_name else None
+        if actual is None:
+            substituted.append(token)
+            continue
+        if not actual:
+            continue
+        marker = actual[0]
+        substituted.append(_Token("(", "operator", marker.start, marker.line, marker.column))
+        substituted.extend(actual)
+        substituted.append(_Token(")", "operator", marker.start, marker.line, marker.column))
+    return substituted
 
 
 def _parse_source_uart_configuration(
@@ -3174,6 +3875,29 @@ def _walk_operations(operations: Sequence[dict]) -> Iterable[dict]:
             yield from _walk_operations(operation.get("default", []))
 
 
+def _find_unsupported_expressions(value: object) -> list[tuple[Mapping[str, object], Mapping[str, object] | None]]:
+    """Find expression placeholders while retaining the nearest operation source."""
+
+    found: list[tuple[Mapping[str, object], Mapping[str, object] | None]] = []
+
+    def visit(current: object, source: Mapping[str, object] | None = None) -> None:
+        if isinstance(current, Mapping):
+            own_source = current.get("source")
+            if isinstance(own_source, Mapping) and own_source.get("file"):
+                source = own_source
+            if current.get("kind") in {"expression", "unknown"}:
+                found.append((current, source))
+            for key, child in current.items():
+                if key != "source":
+                    visit(child, source)
+        elif isinstance(current, (list, tuple)):
+            for child in current:
+                visit(child, source)
+
+    visit(value)
+    return found
+
+
 def _assign_operation_ids(operations: Sequence[dict], prefix: str = "op") -> None:
     counter = 0
 
@@ -3246,6 +3970,7 @@ def _parse_hal_callbacks(
     diagnostics: list[dict],
 ) -> dict[str, dict]:
     callback_names = (
+        "HAL_GPIO_EXTI_Callback",
         "HAL_ADC_ConvHalfCpltCallback",
         "HAL_ADC_ConvCpltCallback",
         "HAL_ADC_ErrorCallback",
@@ -3254,6 +3979,12 @@ def _parse_hal_callbacks(
         "HAL_UART_RxHalfCpltCallback",
         "HAL_UART_RxCpltCallback",
         "HAL_UART_ErrorCallback",
+        "HAL_UART_AbortCpltCallback",
+        "HAL_UART_AbortTransmitCpltCallback",
+        "HAL_UART_AbortReceiveCpltCallback",
+        "HAL_TIM_PeriodElapsedCallback",
+        "HAL_TIM_PWM_PulseFinishedCallback",
+        "HAL_TIM_ErrorCallback",
     )
     callbacks: dict[str, dict] = {}
     for name in callback_names:
@@ -3270,9 +4001,11 @@ def _parse_hal_callbacks(
         )
         if source_path is None:
             continue
+        source_record = next((record for record in records if record.path == source_path), None)
         callbacks[name] = {
             "entry": name,
             "source": source_path,
+            "parameters": _function_parameter_names(_lex_c(source_record.content), name) if source_record else [],
             "operations": operations,
         }
     return callbacks
@@ -3525,7 +4258,10 @@ def _parse_program(
     blocking_receives: list[dict] = []
     for operation in _walk_operations(operations):
         operation_name = operation.get("op")
-        if operation_name in {"uartReceive", "uartTransmit", "uartReceiveDma", "uartTransmitDma", "uartDmaStop"}:
+        if operation_name in {
+            "uartReceive", "uartTransmit", "uartReceiveIt", "uartTransmitIt",
+            "uartReceiveDma", "uartTransmitDma", "uartDmaStop", "uartAbortIt",
+        }:
             handle = operation.get("uart")
             if handle and handle not in uarts:
                 suffix = re.search(r"(\d+)$", str(handle))
@@ -3551,8 +4287,9 @@ def _parse_program(
                     "blocking": operation.get("blocking", False),
                     "source": operation.get("source"),
                 }
-                if operation_name != "uartDmaStop":
+                if operation_name not in {"uartDmaStop", "uartAbortIt"}:
                     metadata["dma"] = operation_name.endswith("Dma")
+                    metadata["interrupt"] = operation_name.endswith("It")
                     key = "receiveCalls" if "Receive" in operation_name else "transmitCalls"
                     uart[key].append(metadata)
                 if operation_name == "uartReceive" and operation.get("blocking"):
@@ -3632,7 +4369,10 @@ def _parse_program(
                 })
             continue
 
-        if operation_name in {"adcStart", "adcPollForConversion", "adcGetValue", "adcStartDma", "adcStopDma"}:
+        if operation_name in {
+            "adcStart", "adcPollForConversion", "adcGetValue",
+            "adcStartIt", "adcStopIt", "adcStartDma", "adcStopDma",
+        }:
             handle = operation.get("adc")
             if handle and handle not in adcs:
                 suffix = re.search(r"(\d+)$", str(handle))
@@ -3653,7 +4393,8 @@ def _parse_program(
                     "operationId": operation["id"],
                     "source": operation.get("source"),
                 }
-                if operation_name == "adcStart":
+                if operation_name in {"adcStart", "adcStartIt", "adcStopIt"}:
+                    metadata["operation"] = operation_name
                     adc["startCalls"].append(metadata)
                 elif operation_name in {"adcStartDma", "adcStopDma"}:
                     metadata.update({
@@ -3727,6 +4468,7 @@ def build_hal_model(files: Iterable[object]) -> dict:
     variables = _parse_initial_variables(records, macros)
     variable_types = _parse_variable_types(records)
     aliases = _build_gpio_aliases(macros, ioc, diagnostics)
+    _parse_gpio_interrupt_configuration(records, macros, ioc)
     uarts = _parse_source_uart_configuration(records, macros, ioc, diagnostics)
     i2cs = _parse_source_i2c_configuration(records, macros, ioc, diagnostics)
     spis = _parse_source_spi_configuration(records, macros, ioc)
@@ -3786,7 +4528,7 @@ def build_hal_model(files: Iterable[object]) -> dict:
             operation["dmaInstance"] = dma.get("instance")
             operation["circular"] = bool(dma.get("circular", False))
 
-        if operation.get("op") not in {"pwmStart", "pwmStop", "pwmSetCompare"}:
+        if operation.get("op") not in {"pwmStart", "pwmStop", "pwmSetCompare", "timerStartIt", "timerStopIt"}:
             continue
         handle = operation.get("timer")
         timer = timers.get(handle) if handle else None
@@ -3825,6 +4567,31 @@ def build_hal_model(files: Iterable[object]) -> dict:
     outputs = _build_outputs(output_operations, aliases, pins)
     for pin in pins.values():
         pin["aliases"] = sorted(set(pin.get("aliases", [])))
+
+    reported_expressions: set[tuple[str, str, int, int]] = set()
+    for expression, source in _find_unsupported_expressions(output_operations):
+        text = str(expression.get("text") or "").strip()
+        location = source or {}
+        key = (
+            text,
+            str(location.get("file") or ""),
+            int(location.get("line") or 0),
+            int(location.get("column") or 0),
+        )
+        if key in reported_expressions:
+            continue
+        reported_expressions.add(key)
+        diagnostics.append(
+            _diagnostic(
+                "error",
+                "C_UNSUPPORTED_EXPRESSION",
+                f"Unsupported firmware expression: {text or expression.get('kind')}",
+                file=str(location.get("file") or "") or None,
+                line=int(location.get("line") or 0) or None,
+                column=int(location.get("column") or 0) or None,
+                details={"expression": text, "kind": expression.get("kind")},
+            )
+        )
     diagnostics.sort(
         key=lambda item: (
             {"error": 0, "warning": 1, "information": 2}.get(str(item.get("severity")), 3),

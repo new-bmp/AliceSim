@@ -17,16 +17,22 @@
   var SIM_MODEL_REQUEST_ATTEMPTS = 2;
   var SIM_MODEL_RETRY_DELAY_MS = 180;
 
-  function workerInputs() {
-    var inputs = { gpio: {}, adc: {}, i2c: [], spi: [], peripherals: [] };
-    if (!root.AliceSchematic) return inputs;
+  function gpioInputs() {
+    var gpio = {};
+    if (!root.AliceSchematic) return gpio;
     var pins = currentModel && currentModel.pins || {};
     Object.keys(pins).forEach(function (key) {
       var physical = pins[key] && (pins[key].physicalPin || pins[key].pin) || key;
       if (!/^P[A-Z]\d+$/.test(String(physical))) return;
       var value = typeof root.AliceSchematic.sampleMcuPin === "function" ? root.AliceSchematic.sampleMcuPin(physical) : null;
-      inputs.gpio[String(physical).toUpperCase()] = value;
+      gpio[String(physical).toUpperCase()] = value;
     });
+    return gpio;
+  }
+
+  function workerInputs() {
+    var inputs = { gpio: gpioInputs(), adc: {}, i2c: [], spi: [], peripherals: [] };
+    if (!root.AliceSchematic) return inputs;
     modelAdcs(currentModel).forEach(function (adc) {
       var instance = adc.instance || adc.handle || "";
       var channels = Array.isArray(adc.channels) ? adc.channels : [];
@@ -80,6 +86,7 @@
       dispatch("alice:firmware-uart-tx", uartEvent);
       return;
     }
+    if (kind === "stdio") { dispatch("alice:firmware-stdio", payload); return; }
     if (kind === "i2c-tx") {
       var i2c = findI2c(currentModel, payload.instance || payload.i2c || payload.handle);
       var i2cEvent = Object.assign({}, payload, i2c ? { instance: i2c.instance || payload.instance, handle: i2c.handle || payload.handle, sclPin: i2c.sclPin, sdaPin: i2c.sdaPin, clockSpeed: i2c.clockSpeed, addressBits: i2c.addressBits } : {});
@@ -114,7 +121,7 @@
   function createWorkerBridge() {
     if (typeof root.Worker !== "function" || !root.location || !root.location.href) return null;
     var url;
-    try { url = new URL("./firmware-worker.js?v=20260820.2", root.location.href); } catch (_) { return null; }
+    try { url = new URL("./firmware-worker.js?v=20260827.6", root.location.href); } catch (_) { return null; }
     var worker;
     try { worker = new root.Worker(url.href); } catch (_) { return null; }
     var pending = new Map();
@@ -582,6 +589,7 @@
         }
         dispatch("alice:firmware-uart-tx", enriched);
       },
+      onStdio: function (event) { dispatch("alice:firmware-stdio", event); },
       onI2cTx: function (event) {
         var i2c = findI2c(currentModel, event.instance || event.i2c || event.handle);
         var enriched = Object.assign({}, event, i2c ? {
@@ -644,6 +652,12 @@
       },
       onDmaCallback: function (event) {
         dispatch("alice:firmware-dma-callback", event);
+      },
+      onInterrupt: function (event) {
+        dispatch("alice:firmware-interrupt", event);
+      },
+      onInterruptCallback: function (event) {
+        dispatch("alice:firmware-interrupt-callback", event);
       },
       onPeripheral: function (event) {
         var peripheralType = String(event && event.peripheralType || event && event.type || "").toLowerCase();
@@ -804,7 +818,9 @@
         return state;
       });
     }
-    var result = requireRuntime().step(Math.max(0, Number(deltaMs) || 0));
+    var activeRuntime = requireRuntime();
+    if (typeof activeRuntime.syncGpioInputs === "function") activeRuntime.syncGpioInputs(gpioInputs());
+    var result = activeRuntime.step(Math.max(0, Number(deltaMs) || 0));
     var state = result || runtime.getState();
     recordTrace(state && state.timeMs || 0);
     return state;

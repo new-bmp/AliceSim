@@ -2,7 +2,7 @@
 (function () {
   "use strict";
 
-  importScripts("./firmware-runtime.js?v=20260820.2");
+  importScripts("./firmware-runtime.js?v=20260827.6");
 
   var runtime = null;
   var model = null;
@@ -159,6 +159,7 @@
       },
       onPwm: function (event) { emit("pwm", event); return true; },
       onUartTx: function (event) { emit("uart-tx", event); },
+      onStdio: function (event) { emit("stdio", event); },
       onI2cTx: function (event) { var response = i2cResponse(event); emit("i2c-tx", event); return response; },
       onSpiTx: function (event) { var response = spiResponse(event); emit("spi-tx", event); return response; },
       onAdcStart: function (event) { emit("adc-start", event); },
@@ -172,6 +173,9 @@
       onDma: function (event) { emit("dma", event); },
       onDmaCallback: function (event) { emit("dma-callback", event); },
       onDmaCallbackComplete: function (event) { emit("dma-callback-complete", event); },
+      onInterrupt: function (event) { emit("interrupt", event); },
+      onInterruptCallback: function (event) { emit("interrupt-callback", event); },
+      onInterruptCallbackComplete: function (event) { emit("interrupt-callback-complete", event); },
       onPeripheral: function (event) {
         var response = peripheralResponse(event);
         emit("peripheral", event);
@@ -199,11 +203,13 @@
       }
       if (request.command === "sync") {
         inputs = request.inputs && typeof request.inputs === "object" ? request.inputs : inputs;
+        if (runtime && typeof runtime.syncGpioInputs === "function") runtime.syncGpioInputs(inputs.gpio);
         result(id, true);
         return;
       }
       if (request.command === "step") {
         inputs = request.inputs && typeof request.inputs === "object" ? request.inputs : inputs;
+        if (runtime && typeof runtime.syncGpioInputs === "function") runtime.syncGpioInputs(inputs.gpio);
         result(id, runtime.step(Math.max(0, Number(request.deltaMs) || 0)));
         return;
       }

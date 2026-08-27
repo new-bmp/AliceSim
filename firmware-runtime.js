@@ -17,6 +17,7 @@
   var MAX_PERIPHERAL_HISTORY = 64;
   var MAX_DMA_EVENTS_PER_STEP = 256;
   var MAX_DMA_TRANSFER_RECORDS = 32;
+  var MAX_INTERRUPT_EVENT_RECORDS = 32;
 
   var BUILTIN_CONSTANTS = {
     HAL_OK: 0,
@@ -24,6 +25,7 @@
     HAL_BUSY: 2,
     HAL_TIMEOUT: 3,
     HAL_MAX_DELAY: MAX_DELAY_VALUE,
+    NULL: 0,
     GPIO_PIN_RESET: 0,
     GPIO_PIN_SET: 1,
     ALICESIM_SSD1306_COLOR_BLACK: 0,
@@ -75,6 +77,9 @@
       haluarttransmit: "uarttransmit",
       haluartreceivedma: "uartreceivedma",
       haluarttransmitdma: "uarttransmitdma",
+      haluartreceiveit: "uartreceiveit",
+      haluarttransmitit: "uarttransmitit",
+      haluartabortit: "uartabortit",
       haluartdmastop: "uartdmastop",
       hali2cmastertransmit: "i2ctransmit",
       i2cmastertransmit: "i2ctransmit",
@@ -83,6 +88,8 @@
       haladcstart: "adcstart",
       haladcstartdma: "adcstartdma",
       haladcstopdma: "adcstopdma",
+      haladcstartit: "adcstartit",
+      haladcstopit: "adcstopit",
       haladcpollforconversion: "adcpoll",
       adcpollforconversion: "adcpoll",
       haladcgetvalue: "adcgetvalue",
@@ -90,6 +97,8 @@
       haltimpwmstartit: "pwmstart",
       haltimpwmstop: "pwmstop",
       haltimpwmstopit: "pwmstop",
+      haltimbasestartit: "timerstartit",
+      haltimbasestopit: "timerstopit",
       haltimsetcompare: "pwmsetcompare",
       set: "assign",
       assignment: "assign",
@@ -270,8 +279,11 @@
         }
 
         if ([
-          "uartreceive", "uarttransmit", "uartreceivedma", "uarttransmitdma", "uartdmastop", "i2ctransmit", "i2cmemwrite", "spitransmit", "adcstart", "adcstartdma", "adcstopdma", "adcpoll", "adcgetvalue", "pwmstart", "pwmstop", "pwmsetcompare",
-          "assign", "gpiowrite", "gpioread", "gpiotoggle", "delay", "fault", "rtosdelay", "rtosyield", "rtoswait",
+          "uartreceive", "uarttransmit", "uartreceiveit", "uarttransmitit", "uartabortit", "uartreceivedma", "uarttransmitdma", "uartdmastop",
+          "i2ctransmit", "i2cmemwrite", "spitransmit", "adcstart", "adcstartit", "adcstopit", "adcstartdma", "adcstopdma", "adcpoll", "adcgetvalue",
+          "timerstartit", "timerstopit", "pwmstart", "pwmstop", "pwmsetcompare",
+          "assign", "formatstring", "stdiowrite", "stdioscan", "libcmemory", "heapallocate", "heapfree", "libcseed", "processexit",
+          "gpiowrite", "gpioread", "gpiotoggle", "delay", "fault", "rtosdelay", "rtosyield", "rtoswait",
           "aliceoledinit", "aliceoledupdate", "aliceoledcommand", "aliceoleddata", "aliceoledsetdisplay",
           "aliceoledsetinvert", "aliceoledsetcontrast", "aliceoledfill", "aliceoledclear", "aliceoleddrawpixel",
           "aliceoledgetpixel", "aliceoleddrawhorizontalline", "aliceoleddrawverticalline", "aliceoleddrawrectangle",
@@ -389,6 +401,11 @@
     if (typeof right === "string" && right.length === 1 && typeof left === "number") right = right.charCodeAt(0);
     if (typeof left === "boolean" && typeof right === "number") left = left ? 1 : 0;
     if (typeof right === "boolean" && typeof left === "number") right = right ? 1 : 0;
+    if (left && right && typeof left === "object" && typeof right === "object" && left.__alicePointer && right.__alicePointer) {
+      return left.__alicePointer === right.__alicePointer
+        && String(left.id || left.name || "") === String(right.id || right.name || "")
+        && Number(left.offset || 0) === Number(right.offset || 0);
+    }
     return left === right;
   }
 
@@ -407,11 +424,16 @@
     Object.keys(initialVariables).forEach(function (name) { initialVariables[name] = initialVariableValue(initialVariables[name]); });
     var shared = {
       status: "idle", running: false, time: 0, variables: initialVariables, gpio: {}, uartRx: new Map(), uartTx: [], i2cTx: [], spiTx: [],
-      uartTxCount: 0, i2cTxCount: 0, spiTxCount: 0, adc: {}, dma: { transfers: [], history: [], sequence: 0 }, pwm: {}, peripherals: {},
+      uartTxCount: 0, i2cTxCount: 0, spiTxCount: 0, adc: {}, dma: { transfers: [], history: [], sequence: 0 },
+      interrupts: { events: [], history: [], sequence: 0, gpioLevels: {} }, pwm: {}, peripherals: {},
+      heap: { totalBytes: Math.max(0, Number(freertos.heapBytes) || 16 * 1024), usedBytes: 0, peakBytes: 0, nextId: 0, allocations: {} },
+      stdio: [], randomState: 1,
       operationsExecuted: 0, currentTaskId: null, error: null, lastSelectedIndex: -1
     };
     var sharedStore = {
-      variables: shared.variables, gpio: shared.gpio, uartRx: shared.uartRx, adc: shared.adc, dma: shared.dma, pwm: shared.pwm, peripherals: shared.peripherals
+      variables: shared.variables, gpio: shared.gpio, uartRx: shared.uartRx, adc: shared.adc, dma: shared.dma,
+      interrupts: shared.interrupts, pwm: shared.pwm, peripherals: shared.peripherals,
+      heap: shared.heap, stdio: shared.stdio, randomState: shared.randomState
     };
 
     function forward(name, payload) {
@@ -426,6 +448,7 @@
         onUartTx: function (event) { shared.uartTxCount += 1; appendBoundedHistory(shared.uartTx, event); return forward("onUartTx", event); },
         onI2cTx: function (event) { shared.i2cTxCount += 1; appendBoundedHistory(shared.i2cTx, event); return forward("onI2cTx", event); },
         onSpiTx: function (event) { shared.spiTxCount += 1; appendBoundedHistory(shared.spiTx, event); return forward("onSpiTx", event); },
+        onStdio: function (event) { return forward("onStdio", event); },
         onPwm: function (event) {
           if (event && event.key) shared.pwm[event.key] = cloneValue(event);
           return forward("onPwm", event);
@@ -482,7 +505,7 @@
         rtosTasks.forEach(function (task) { task.cpuPercent = Number((task.cpuPercent * cpuScale).toFixed(1)); });
       }
       var heapTotal = Math.max(0, Number(freertos.heapBytes) || 0);
-      var heapUsed = rtosTasks.reduce(function (total, task) { return total + task.stackWords * 4 + 96; }, 0);
+      var heapUsed = rtosTasks.reduce(function (total, task) { return total + task.stackWords * 4 + 96; }, 0) + Number(shared.heap.usedBytes || 0);
       if (heapTotal) heapUsed = Math.min(heapTotal, heapUsed);
       var uartRx = {};
       var blocked = null;
@@ -496,8 +519,10 @@
       return {
         status: shared.status, running: shared.running, time: shared.time, timeMs: shared.time, pc: 0, variables: cloneValue(shared.variables), gpio: Object.assign({}, shared.gpio),
         uartRx: uartRx, uartTx: cloneValue(shared.uartTx), i2cTx: cloneValue(shared.i2cTx), spiTx: cloneValue(shared.spiTx),
-        uartTxCount: shared.uartTxCount, i2cTxCount: shared.i2cTxCount, spiTxCount: shared.spiTxCount, adc: cloneValue(shared.adc), dma: cloneValue(shared.dma), pwm: cloneValue(shared.pwm),
-        peripherals: cloneValue(shared.peripherals), blocked: shared.status === "blocked" ? blocked : null, sleepUntil: null,
+        uartTxCount: shared.uartTxCount, i2cTxCount: shared.i2cTxCount, spiTxCount: shared.spiTxCount, adc: cloneValue(shared.adc), dma: cloneValue(shared.dma),
+        interrupts: cloneValue(shared.interrupts), pwm: cloneValue(shared.pwm),
+        peripherals: cloneValue(shared.peripherals), heap: cloneValue(shared.heap), stdio: cloneValue(shared.stdio),
+        blocked: shared.status === "blocked" ? blocked : null, sleepUntil: null,
         operationsExecuted: shared.operationsExecuted, error: shared.error ? cloneValue(shared.error) : null,
         rtos: {
           detected: true, api: freertos.api || "FreeRTOS", schedulerState: shared.running ? "running" : (shared.status === "idle" ? "ready" : shared.status),
@@ -523,8 +548,11 @@
       shared.uartTxCount = 0; shared.i2cTxCount = 0; shared.spiTxCount = 0;
       Object.keys(shared.adc).forEach(function (name) { delete shared.adc[name]; });
       shared.dma.transfers.splice(0, shared.dma.transfers.length); shared.dma.history.splice(0, shared.dma.history.length); shared.dma.sequence = 0;
+      shared.interrupts.events.splice(0, shared.interrupts.events.length); shared.interrupts.history.splice(0, shared.interrupts.history.length); shared.interrupts.sequence = 0; shared.interrupts.gpioLevels = {};
       Object.keys(shared.pwm).forEach(function (name) { delete shared.pwm[name]; });
       Object.keys(shared.peripherals).forEach(function (name) { delete shared.peripherals[name]; });
+      Object.keys(shared.heap.allocations).forEach(function (name) { delete shared.heap.allocations[name]; });
+      shared.heap.usedBytes = 0; shared.heap.peakBytes = 0; shared.heap.nextId = 0; shared.stdio.splice(0, shared.stdio.length); shared.randomState = 1;
       shared.operationsExecuted = 0; shared.currentTaskId = null; shared.error = null; shared.lastSelectedIndex = -1;
       tasks.forEach(function (task) { task.state = task.engine.reset(); task.lastOperations = 0; task.runTimeMs = 0; task.cpuPercent = 0; });
       return notify();
@@ -631,7 +659,12 @@
       if (selected) selected.state = selected.engine.enqueueUart(instance, value);
       return notify();
     }
-    return Object.freeze({ start: start, pause: pause, reset: reset, step: step, advanceTimeTo: advanceTimeTo, enqueueUart: enqueueUart, getState: snapshot });
+    function syncGpioInputs(levels) {
+      var selected = tasks[0];
+      if (selected && typeof selected.engine.syncGpioInputs === "function") selected.state = selected.engine.syncGpioInputs(levels);
+      return notify();
+    }
+    return Object.freeze({ start: start, pause: pause, reset: reset, step: step, advanceTimeTo: advanceTimeTo, enqueueUart: enqueueUart, syncGpioInputs: syncGpioInputs, getState: snapshot });
   }
 
   function create(model, hooks, options) {
@@ -702,6 +735,10 @@
     if (!Number.isFinite(operationBudget) || operationBudget < 1) operationBudget = DEFAULT_OPERATION_BUDGET;
     operationBudget = Math.floor(operationBudget);
     var rtosTickRateHz = Math.max(1, Number(model.rtosTickRateHz) || 1000);
+    var heapCapacity = Math.max(0, Math.floor(Number(firstDefined(model, ["heapBytes", "heapSize"], 16 * 1024)) || 0));
+    function emptyHeap() {
+      return { totalBytes: heapCapacity, usedBytes: 0, peakBytes: 0, nextId: 0, allocations: {} };
+    }
 
     var sharedStore = options.sharedStore && typeof options.sharedStore === "object" ? options.sharedStore : null;
     var peripheralDefaults = { oled: {}, lightSensor: {}, dht11: {}, hcsr04: {}, sg90: {}, buzzer: {}, tm1637: {} };
@@ -711,8 +748,12 @@
       if (!sharedStore.uartRx) sharedStore.uartRx = new Map();
       if (!sharedStore.adc) sharedStore.adc = {};
       if (!sharedStore.dma) sharedStore.dma = { transfers: [], history: [], sequence: 0 };
+      if (!sharedStore.interrupts) sharedStore.interrupts = { events: [], history: [], sequence: 0, gpioLevels: {} };
       if (!sharedStore.pwm) sharedStore.pwm = {};
       if (!sharedStore.peripherals) sharedStore.peripherals = cloneValue(peripheralDefaults);
+      if (!sharedStore.heap) sharedStore.heap = emptyHeap();
+      if (!sharedStore.stdio) sharedStore.stdio = [];
+      if (!Number.isFinite(sharedStore.randomState)) sharedStore.randomState = 1;
     }
     var runtime = {
       status: "idle",
@@ -730,8 +771,13 @@
       spiTxCount: 0,
       adc: sharedStore ? sharedStore.adc : {},
       dma: sharedStore ? sharedStore.dma : { transfers: [], history: [], sequence: 0 },
+      interrupts: sharedStore ? sharedStore.interrupts : { events: [], history: [], sequence: 0, gpioLevels: {} },
       pwm: sharedStore ? sharedStore.pwm : {},
       peripherals: sharedStore ? sharedStore.peripherals : cloneValue(peripheralDefaults),
+      heap: sharedStore ? sharedStore.heap : emptyHeap(),
+      stdio: sharedStore ? sharedStore.stdio : [],
+      stdioCount: 0,
+      randomState: sharedStore ? sharedStore.randomState : 1,
       blocked: null,
       sleepUntil: null,
       pendingAdvanceMs: 0,
@@ -758,6 +804,26 @@
       return value;
     }
 
+    function expressionIsFloating(expression) {
+      if (!expression || typeof expression !== "object") return false;
+      var kind = canonicalExpressionKind(expression);
+      if (kind === "literal") return /^(?:float|double|longdouble)$/.test(normalizedKind(expression.numericType));
+      if (kind === "variable") {
+        var variableName = firstDefined(expression, ["name", "variable", "value"], "");
+        return /\b(?:float|double)\b/.test(String(variableTypes[variableName] || "").toLowerCase());
+      }
+      if (kind === "cast") return /\b(?:float|double)\b/.test(String(expression.cType || expression.castType || "").toLowerCase());
+      if (kind === "libccall") {
+        return /^(?:atof|strtod|sqrt|sqrtf|sqrtl|pow|powf|powl|sin|sinf|sinl|cos|cosf|cosl|tan|tanf|tanl|asin|asinf|asinl|acos|acosf|acosl|atan|atanf|atanl|atan2|atan2f|atan2l|floor|floorf|floorl|ceil|ceilf|ceill|round|roundf|roundl|trunc|truncf|truncl|fmod|fmodf|fmodl|exp|expf|expl|log|logf|logl|log10|log10f|log10l)$/.test(String(expression.function || expression.name || ""));
+      }
+      if (["positive", "negate"].indexOf(kind) >= 0) return expressionIsFloating(expression.value);
+      if (["add", "sub", "mul", "div"].indexOf(kind) >= 0) {
+        return expressionIsFloating(firstDefined(expression, ["left", "a"], null))
+          || expressionIsFloating(firstDefined(expression, ["right", "b"], null));
+      }
+      return false;
+    }
+
     function evaluate(expression, resolving) {
       if (expression == null || typeof expression === "number" || typeof expression === "boolean") return expression;
       if (typeof expression === "string") {
@@ -779,7 +845,7 @@
         return expression;
       }
 
-      if (kind === "literal") return expression.value;
+      if (kind === "literal") return normalizedKind(expression.numericType) === "float" ? Math.fround(Number(expression.value)) : expression.value;
       if (kind === "string") return firstDefined(expression, ["value", "text"], "");
       if (kind === "constant") {
         var constantName = firstDefined(expression, ["name", "constant"], "");
@@ -787,6 +853,7 @@
         return resolvedConstant === undefined && hasOwn(expression, "value") ? expression.value : resolvedConstant;
       }
       if (kind === "variable") return runtime.variables[firstDefined(expression, ["name", "variable", "value"], "")];
+      if (kind === "tick") return Math.max(0, Math.floor(runtime.time));
       if (kind === "char") return byteArray(String(firstDefined(expression, ["value", "char"], "")))[0] || 0;
       if (kind === "arrayindex") {
         var arraySource = firstDefined(expression, ["array", "source", "target", "name"], []);
@@ -794,6 +861,7 @@
           ? runtime.variables[arraySource]
           : evaluate(arraySource, resolving);
         var index = Math.trunc(Number(evaluate(firstDefined(expression, ["index", "subscript"], 0), resolving)) || 0);
+        if (isHeapPointer(array)) return readPointer(pointerElementOffset(array, index));
         return array == null ? undefined : array[index];
       }
       if (kind === "member") {
@@ -804,13 +872,58 @@
         var memberName = String(firstDefined(expression, ["member", "field", "property", "name"], ""));
         return objectValue == null ? undefined : objectValue[memberName];
       }
+      if (kind === "stringlength") {
+        var stringValue = evaluate(firstDefined(expression, ["value", "source", "buffer"], ""), resolving);
+        return cBytes(stringValue).length;
+      }
+      if (kind === "sizeof") {
+        var sizedValue = evaluate(firstDefined(expression, ["value", "source", "buffer"], null), resolving);
+        if (Array.isArray(sizedValue)) return sizedValue.length;
+        if (typeof sizedValue === "string") return byteArray(sizedValue).length + 1;
+        if (typeof sizedValue === "boolean") return 1;
+        return 4;
+      }
+      if (kind === "adcpoll") {
+        return pollAdc({
+          op: "adcPollForConversion",
+          adc: firstDefined(expression, ["adc", "handle"], null),
+          instance: expression.instance,
+          timeout: firstDefined(expression, ["timeout", "timeoutMs"], null)
+        });
+      }
+      if (kind === "positive") return Number(evaluate(firstDefined(expression, ["value", "source"], 0), resolving)) || 0;
+      if (kind === "negate") return -(Number(evaluate(firstDefined(expression, ["value", "source"], 0), resolving)) || 0);
+      if (kind === "logicalnot") return !evaluate(firstDefined(expression, ["value", "source"], 0), resolving);
+      if (kind === "bitnot") return ~Math.trunc(Number(evaluate(firstDefined(expression, ["value", "source"], 0), resolving)) || 0);
+      if (kind === "cast") {
+        var castValue = evaluate(firstDefined(expression, ["value", "source"], 0), resolving);
+        var castType = String(expression.cType || expression.castType || "").toLowerCase();
+        if (/\bfloat\b/.test(castType)) return Math.fround(Number(castValue) || 0);
+        if (/\bdouble\b/.test(castType)) return Number(castValue) || 0;
+        var castIntegerInfo = integerTypeInfo(castType.replace(/\*+/g, "").trim());
+        return castIntegerInfo ? coerceIntegerValue(castValue, castIntegerInfo) : castValue;
+      }
+      if (kind === "addressof") return addressOf(firstDefined(expression, ["value", "target", "source"], null));
+      if (kind === "dereference") return readPointer(evaluate(firstDefined(expression, ["pointer", "value", "source"], null), resolving));
+      if (kind === "libccall") {
+        var libcArguments = Array.isArray(expression.arguments) ? expression.arguments.map(function (argument) { return evaluate(argument, resolving); }) : [];
+        return evaluateLibcCall(String(expression.function || expression.name || ""), libcArguments);
+      }
       if (["add", "sub", "mul", "div", "mod", "bitor", "bitxor", "bitand", "shiftleft", "shiftright"].indexOf(kind) >= 0) {
-        var arithmeticLeft = Number(evaluate(firstDefined(expression, ["left", "a"], 0), resolving)) || 0;
-        var arithmeticRight = Number(evaluate(firstDefined(expression, ["right", "b"], 0), resolving)) || 0;
+        var rawArithmeticLeft = evaluate(firstDefined(expression, ["left", "a"], 0), resolving);
+        var rawArithmeticRight = evaluate(firstDefined(expression, ["right", "b"], 0), resolving);
+        if ((kind === "add" || kind === "sub") && isHeapPointer(rawArithmeticLeft)) {
+          return pointerElementOffset(rawArithmeticLeft, (kind === "sub" ? -1 : 1) * (Number(rawArithmeticRight) || 0));
+        }
+        var arithmeticLeft = Number(rawArithmeticLeft) || 0;
+        var arithmeticRight = Number(rawArithmeticRight) || 0;
         if (kind === "add") return arithmeticLeft + arithmeticRight;
         if (kind === "sub") return arithmeticLeft - arithmeticRight;
         if (kind === "mul") return arithmeticLeft * arithmeticRight;
-        if (kind === "div") return arithmeticRight === 0 ? 0 : Math.trunc(arithmeticLeft / arithmeticRight);
+        if (kind === "div") {
+          if (expressionIsFloating(expression)) return arithmeticLeft / arithmeticRight;
+          return arithmeticRight === 0 ? 0 : Math.trunc(arithmeticLeft / arithmeticRight);
+        }
         if (kind === "mod") return arithmeticRight === 0 ? 0 : Math.trunc(arithmeticLeft) % Math.trunc(arithmeticRight);
         if (kind === "bitor") return Math.trunc(arithmeticLeft) | Math.trunc(arithmeticRight);
         if (kind === "bitxor") return Math.trunc(arithmeticLeft) ^ Math.trunc(arithmeticRight);
@@ -849,7 +962,8 @@
         if (kind === "gt") return comparisonLeft > comparisonRight;
         return comparisonLeft >= comparisonRight;
       }
-      throw new Error("Unsupported firmware expression: " + kind);
+      var expressionText = String(expression.text || expression.sourceText || "").trim();
+      throw new Error("Unsupported firmware expression: " + kind + (expressionText ? " (" + expressionText + ")" : ""));
     }
 
     function integerTypeInfo(rawType) {
@@ -868,9 +982,14 @@
       return null;
     }
 
-    function coerceCValue(name, value) {
-      var info = integerTypeInfo(variableTypes[name]);
-      if (!info || Array.isArray(value) || (value && typeof value === "object")) return cloneValue(value);
+    function pointerTypeInfo(name) {
+      var type = String(variableTypes[name] || "").trim();
+      if (type.indexOf("*") < 0) return { elementSize: 1, unsigned: true };
+      var info = integerTypeInfo(type.replace(/\*+/g, "").trim());
+      return info ? { elementSize: Math.max(1, info.bits / 8), unsigned: info.unsigned } : { elementSize: 1, unsigned: true };
+    }
+
+    function coerceIntegerValue(value, info) {
       var number = Number(value);
       if (!Number.isFinite(number)) number = 0;
       if (info.bits > 32) return Math.trunc(number);
@@ -879,6 +998,15 @@
       var wrapped = ((number % modulus) + modulus) % modulus;
       if (!info.unsigned && wrapped >= modulus / 2) wrapped -= modulus;
       return wrapped;
+    }
+
+    function coerceCValue(name, value) {
+      var declaredType = String(variableTypes[name] || "").toLowerCase();
+      if (declaredType.indexOf("*") < 0 && /\bfloat\b/.test(declaredType)) return Math.fround(Number(value) || 0);
+      if (declaredType.indexOf("*") < 0 && /\bdouble\b/.test(declaredType)) return Number(value) || 0;
+      var info = integerTypeInfo(variableTypes[name]);
+      if (!info || Array.isArray(value) || (value && typeof value === "object")) return cloneValue(value);
+      return coerceIntegerValue(value, info);
     }
 
     function assign(target, value) {
@@ -899,11 +1027,527 @@
         if (!arrayName) throw new Error("Array assignment requires a named variable");
         var array = Array.isArray(runtime.variables[arrayName]) ? runtime.variables[arrayName] : [];
         var index = Math.trunc(Number(evaluate(target.index)) || 0);
+        if (isHeapPointer(runtime.variables[arrayName])) {
+          writePointer(pointerElementOffset(runtime.variables[arrayName], index), value);
+          return;
+        }
         array[index] = coerceCValue(arrayName, value);
         runtime.variables[arrayName] = array;
         return;
       }
+      if (kind === "dereference") {
+        writePointer(evaluate(firstDefined(target, ["pointer", "value", "source"], null)), value);
+        return;
+      }
       throw new Error("Unsupported assignment target");
+    }
+
+    function isHeapPointer(value) {
+      return Boolean(value && typeof value === "object" && value.__alicePointer === "heap");
+    }
+
+    function isVariablePointer(value) {
+      return Boolean(value && typeof value === "object" && value.__alicePointer === "variable");
+    }
+
+    function pointerOffset(pointer, offset) {
+      if (!pointer || typeof pointer !== "object") return pointer;
+      var copy = cloneValue(pointer);
+      copy.offset = Math.max(0, Math.trunc(Number(copy.offset || 0) + Number(offset || 0)));
+      return copy;
+    }
+
+    function pointerElementOffset(pointer, elements) {
+      return pointerOffset(pointer, Number(elements || 0) * Math.max(1, Math.trunc(Number(pointer && pointer.elementSize) || 1)));
+    }
+
+    function addressOf(expression) {
+      if (!expression || typeof expression !== "object") throw new Error("Address-of requires a named variable or array element");
+      var kind = canonicalExpressionKind(expression);
+      if (kind === "variable") {
+        return { __alicePointer: "variable", name: String(firstDefined(expression, ["name", "variable", "value"], "")), offset: 0 };
+      }
+      if (kind === "arrayindex") {
+        var arrayName = firstDefined(expression, ["array", "source", "name"], "");
+        if (arrayName && typeof arrayName === "object") arrayName = firstDefined(arrayName, ["name", "variable"], "");
+        return {
+          __alicePointer: "variable",
+          name: String(arrayName || ""),
+          offset: Math.max(0, Math.trunc(Number(evaluate(firstDefined(expression, ["index", "subscript"], 0))) || 0))
+        };
+      }
+      if (kind === "dereference") return evaluate(firstDefined(expression, ["pointer", "value"], null));
+      throw new Error("Address-of target is unsupported");
+    }
+
+    function heapAllocation(pointer) {
+      if (!isHeapPointer(pointer)) return null;
+      var allocation = runtime.heap.allocations[String(pointer.id)];
+      if (!allocation || allocation.freed) throw new Error("Heap pointer refers to freed or invalid memory");
+      return allocation;
+    }
+
+    function readPointer(pointer) {
+      if (pointer == null || pointer === 0) throw new Error("Null pointer dereference");
+      if (isVariablePointer(pointer)) {
+        var variableValue = runtime.variables[pointer.name];
+        var variableOffset = Math.max(0, Math.trunc(Number(pointer.offset) || 0));
+        if (Array.isArray(variableValue)) {
+          if (variableOffset >= variableValue.length) throw new Error("Array pointer read is out of bounds");
+          return variableValue[variableOffset];
+        }
+        if (variableOffset !== 0) throw new Error("Scalar pointer read is out of bounds");
+        return variableValue;
+      }
+      var allocation = heapAllocation(pointer);
+      if (!allocation) throw new Error("Value is not a valid pointer");
+      var offset = Math.max(0, Math.trunc(Number(pointer.offset) || 0));
+      var width = Math.max(1, Math.trunc(Number(pointer.elementSize) || 1));
+      if (offset + width > allocation.size) throw new Error("Heap pointer read is out of bounds");
+      var result = 0;
+      for (var readIndex = 0; readIndex < width; readIndex += 1) {
+        if (!allocation.initialized[offset + readIndex]) throw new Error("Read from uninitialized malloc memory");
+        result += allocation.bytes[offset + readIndex] * Math.pow(256, readIndex);
+      }
+      var signLimit = Math.pow(2, width * 8 - 1);
+      var modulus = Math.pow(2, width * 8);
+      if (pointer.unsigned === false && result >= signLimit) result -= modulus;
+      return result;
+    }
+
+    function writePointer(pointer, value) {
+      if (pointer == null || pointer === 0) throw new Error("Null pointer write");
+      if (isVariablePointer(pointer)) {
+        var variableOffset = Math.max(0, Math.trunc(Number(pointer.offset) || 0));
+        if (Array.isArray(runtime.variables[pointer.name])) {
+          if (variableOffset >= runtime.variables[pointer.name].length) throw new Error("Array pointer write is out of bounds");
+          runtime.variables[pointer.name][variableOffset] = coerceCValue(pointer.name, value);
+        } else {
+          if (variableOffset !== 0) throw new Error("Scalar pointer write is out of bounds");
+          runtime.variables[pointer.name] = coerceCValue(pointer.name, value);
+        }
+        return;
+      }
+      var allocation = heapAllocation(pointer);
+      if (!allocation) throw new Error("Value is not a valid pointer");
+      var offset = Math.max(0, Math.trunc(Number(pointer.offset) || 0));
+      var width = Math.max(1, Math.trunc(Number(pointer.elementSize) || 1));
+      if (offset + width > allocation.size) throw new Error("Heap pointer write is out of bounds");
+      var numeric = Math.trunc(Number(value) || 0);
+      var modulus = Math.pow(2, width * 8);
+      numeric = ((numeric % modulus) + modulus) % modulus;
+      for (var writeIndex = 0; writeIndex < width; writeIndex += 1) {
+        allocation.bytes[offset + writeIndex] = Math.floor(numeric / Math.pow(256, writeIndex)) & 0xff;
+        allocation.initialized[offset + writeIndex] = true;
+      }
+    }
+
+    function memoryBytes(value, count) {
+      var bytes;
+      if (isVariablePointer(value)) {
+        var variable = runtime.variables[value.name];
+        bytes = byteArray(variable).slice(Math.max(0, Math.trunc(Number(value.offset) || 0)));
+      } else if (isHeapPointer(value)) {
+        var allocation = heapAllocation(value);
+        var offset = Math.max(0, Math.trunc(Number(value.offset) || 0));
+        var limit = count == null ? allocation.size - offset : Math.max(0, Math.trunc(Number(count) || 0));
+        if (offset + limit > allocation.size) throw new Error("Heap memory read is out of bounds");
+        for (var initializedIndex = offset; initializedIndex < offset + limit; initializedIndex += 1) {
+          if (!allocation.initialized[initializedIndex]) throw new Error("Read from uninitialized malloc memory");
+        }
+        bytes = allocation.bytes.slice(offset, offset + limit);
+      } else {
+        bytes = byteArray(value);
+      }
+      return count == null ? bytes : bytes.slice(0, Math.max(0, Math.trunc(Number(count) || 0)));
+    }
+
+    function memoryTargetPointer(expression) {
+      var kind = canonicalExpressionKind(expression);
+      if (kind === "addressof") return evaluate(expression);
+      if (kind === "variable") {
+        var name = String(firstDefined(expression, ["name", "variable", "value"], ""));
+        return isHeapPointer(runtime.variables[name]) ? runtime.variables[name] : { __alicePointer: "variable", name: name, offset: 0 };
+      }
+      if (kind === "arrayindex") return addressOf(expression);
+      var evaluated = evaluate(expression);
+      if (isHeapPointer(evaluated) || isVariablePointer(evaluated)) return evaluated;
+      throw new Error("Memory destination is not writable");
+    }
+
+    function writeMemory(pointer, bytes) {
+      var bytePointer = cloneValue(pointer);
+      if (isHeapPointer(bytePointer)) {
+        bytePointer.elementSize = 1;
+        bytePointer.unsigned = true;
+      }
+      bytes.forEach(function (byte, index) { writePointer(pointerOffset(bytePointer, index), byte); });
+    }
+
+    function allocateHeap(size, zero, typeInfo) {
+      size = Math.max(0, Math.trunc(Number(size) || 0));
+      if (size === 0 || runtime.heap.usedBytes + size > runtime.heap.totalBytes) return 0;
+      var id = String(++runtime.heap.nextId);
+      var allocation = {
+        id: id,
+        size: size,
+        bytes: new Array(size).fill(0),
+        initialized: new Array(size).fill(Boolean(zero)),
+        freed: false
+      };
+      runtime.heap.allocations[id] = allocation;
+      runtime.heap.usedBytes += size;
+      runtime.heap.peakBytes = Math.max(runtime.heap.peakBytes, runtime.heap.usedBytes);
+      typeInfo = typeInfo || { elementSize: 1, unsigned: true };
+      return {
+        __alicePointer: "heap",
+        id: id,
+        offset: 0,
+        elementSize: Math.max(1, Math.trunc(Number(typeInfo.elementSize) || 1)),
+        unsigned: typeInfo.unsigned !== false
+      };
+    }
+
+    function freeHeap(pointer) {
+      if (pointer == null || pointer === 0) return;
+      var allocation = heapAllocation(pointer);
+      if (!allocation || Math.trunc(Number(pointer.offset) || 0) !== 0) throw new Error("free requires the original allocated pointer");
+      allocation.freed = true;
+      runtime.heap.usedBytes = Math.max(0, runtime.heap.usedBytes - allocation.size);
+    }
+
+    function executeHeapAllocate(operation) {
+      var name = String(operation.function || "malloc");
+      var size = Math.max(0, Math.trunc(Number(evaluate(operation.size)) || 0));
+      var typeInfo = pointerTypeInfo(String(firstDefined(operation, ["resultTarget", "result", "target"], "")));
+      if (name === "calloc") size *= Math.max(0, Math.trunc(Number(evaluate(operation.count)) || 0));
+      var pointer;
+      if (name === "realloc") {
+        var previous = evaluate(operation.pointer);
+        if (previous == null || previous === 0) pointer = allocateHeap(size, false, typeInfo);
+        else if (size === 0) {
+          freeHeap(previous);
+          pointer = 0;
+        } else {
+          var previousAllocation = heapAllocation(previous);
+          var available = runtime.heap.totalBytes - runtime.heap.usedBytes + previousAllocation.size;
+          if (size > available) pointer = 0;
+          else {
+            var oldSize = previousAllocation.size;
+            previousAllocation.bytes.length = size;
+            previousAllocation.initialized.length = size;
+            for (var index = oldSize; index < size; index += 1) {
+              previousAllocation.bytes[index] = 0;
+              previousAllocation.initialized[index] = false;
+            }
+            previousAllocation.size = size;
+            runtime.heap.usedBytes += size - oldSize;
+            runtime.heap.peakBytes = Math.max(runtime.heap.peakBytes, runtime.heap.usedBytes);
+            pointer = previous;
+          }
+        }
+      } else pointer = allocateHeap(size, name === "calloc" || Boolean(operation.zero), typeInfo);
+      setOperationResult(operation, pointer);
+    }
+
+    function compareBytes(left, right, count) {
+      var leftBytes = memoryBytes(left, count);
+      var rightBytes = memoryBytes(right, count);
+      var length = count == null ? Math.max(leftBytes.length, rightBytes.length) : Math.max(0, Math.trunc(Number(count) || 0));
+      for (var index = 0; index < length; index += 1) {
+        var difference = Number(leftBytes[index] || 0) - Number(rightBytes[index] || 0);
+        if (difference) return difference;
+      }
+      return 0;
+    }
+
+    function evaluateLibcCall(name, values) {
+      name = String(name || "");
+      if (name === "rand") {
+        runtime.randomState = (Math.imul(runtime.randomState, 1103515245) + 12345) & 0x7fffffff;
+        if (sharedStore) sharedStore.randomState = runtime.randomState;
+        return runtime.randomState;
+      }
+      if (name === "strcmp" || name === "strncmp") {
+        var leftText = byteArray(cString(values[0])).concat([0]);
+        var rightText = byteArray(cString(values[1])).concat([0]);
+        return compareBytes(leftText, rightText, name === "strncmp" ? values[2] : Math.max(leftText.length, rightText.length));
+      }
+      if (name === "memcmp") return compareBytes(values[0], values[1], values[2]);
+      if (["atoi", "atol", "atoll"].indexOf(name) >= 0) return parseInt(cString(values[0]), 10) || 0;
+      if (name === "atof" || name === "strtod") return parseFloat(cString(values[0])) || 0;
+      if (["strtol", "strtoul", "strtoll", "strtoull"].indexOf(name) >= 0) {
+        var base = Math.trunc(Number(values[2]) || 0);
+        var parsed = parseInt(cString(values[0]), base || 0);
+        if (!Number.isFinite(parsed)) parsed = 0;
+        return name.indexOf("strtou") === 0 && parsed < 0 ? parsed >>> 0 : parsed;
+      }
+      if (["abs", "labs", "llabs", "fabs", "fabsf", "fabsl"].indexOf(name) >= 0) return Math.abs(Number(values[0]) || 0);
+      if (["isalnum", "isalpha", "isblank", "iscntrl", "isdigit", "isgraph", "islower", "isprint", "ispunct", "isspace", "isupper", "isxdigit", "tolower", "toupper"].indexOf(name) >= 0) {
+        var characterCode = Math.trunc(Number(values[0]) || 0) & 0xff;
+        var character = String.fromCharCode(characterCode);
+        if (name === "tolower") return character.toLowerCase().charCodeAt(0);
+        if (name === "toupper") return character.toUpperCase().charCodeAt(0);
+        var patterns = {
+          isalnum: /^[A-Za-z0-9]$/, isalpha: /^[A-Za-z]$/, isblank: /^[ \t]$/, iscntrl: /^[\x00-\x1f\x7f]$/,
+          isdigit: /^[0-9]$/, isgraph: /^[\x21-\x7e]$/, islower: /^[a-z]$/, isprint: /^[\x20-\x7e]$/,
+          ispunct: /^[!-/:-@[-`{-~]$/, isspace: /^\s$/, isupper: /^[A-Z]$/, isxdigit: /^[A-Fa-f0-9]$/
+        };
+        return patterns[name].test(character) ? 1 : 0;
+      }
+      var mathName = name.replace(/[fl]$/, "");
+      var mathFunctions = {
+        sqrt: Math.sqrt, pow: Math.pow, sin: Math.sin, cos: Math.cos, tan: Math.tan,
+        asin: Math.asin, acos: Math.acos, atan: Math.atan, atan2: Math.atan2,
+        floor: Math.floor, ceil: Math.ceil, round: Math.round, trunc: Math.trunc,
+        fmod: function (left, right) { return Number(right) === 0 ? NaN : Number(left) % Number(right); },
+        exp: Math.exp, log: Math.log, log10: Math.log10
+      };
+      if (mathFunctions[mathName]) return mathFunctions[mathName].apply(Math, values.map(Number));
+      throw new Error("Unsupported C library expression: " + name);
+    }
+
+    function cBytes(value) {
+      var bytes;
+      if (isHeapPointer(value)) {
+        var allocation = heapAllocation(value);
+        var offset = Math.max(0, Math.trunc(Number(value.offset) || 0));
+        bytes = [];
+        for (var index = offset; index < allocation.size; index += 1) {
+          if (!allocation.initialized[index]) throw new Error("String reads uninitialized malloc memory before a terminator");
+          if (allocation.bytes[index] === 0) return bytes;
+          bytes.push(allocation.bytes[index]);
+        }
+        throw new Error("String is not null terminated within its allocation");
+      }
+      bytes = memoryBytes(value);
+      var terminator = bytes.indexOf(0);
+      if (terminator >= 0) bytes = bytes.slice(0, terminator);
+      return bytes;
+    }
+
+    function cString(value) {
+      var bytes = cBytes(value);
+      return bytesToText(bytes);
+    }
+
+    function formatPadding(text, width, flags, prefixLength) {
+      width = Math.max(0, Math.trunc(Number(width) || 0));
+      if (text.length >= width) return text;
+      var padding = new Array(width - text.length + 1).join(flags.indexOf("0") >= 0 && flags.indexOf("-") < 0 ? "0" : " ");
+      if (flags.indexOf("-") >= 0) return text + padding;
+      if (padding[0] === "0" && prefixLength > 0) return text.slice(0, prefixLength) + padding + text.slice(prefixLength);
+      return padding + text;
+    }
+
+    function formatCValue(specifier, flags, width, precision, value) {
+      var text;
+      var prefix = "";
+      if (specifier === "s") {
+        text = cString(value);
+        if (precision != null) text = text.slice(0, Math.max(0, precision));
+        return formatPadding(text, width, flags, 0);
+      }
+      if (specifier === "c") {
+        text = typeof value === "string" ? value.slice(0, 1) : String.fromCharCode(Math.trunc(Number(value) || 0) & 0xff);
+        return formatPadding(text, width, flags, 0);
+      }
+      if ("fFeEgGaA".indexOf(specifier) >= 0) {
+        var floatValue = Number(value);
+        if (!Number.isFinite(floatValue)) floatValue = 0;
+        var digits = precision == null ? 6 : Math.max(0, precision);
+        if (specifier.toLowerCase() === "f") text = floatValue.toFixed(digits);
+        else if (specifier.toLowerCase() === "e") text = floatValue.toExponential(digits);
+        else text = floatValue.toPrecision(Math.max(1, digits || 1)).replace(/(?:\.0+|(?:(\.\d*?)0+))(?=e|$)/i, "$1");
+        if (specifier === specifier.toUpperCase()) text = text.toUpperCase();
+        if (floatValue >= 0 && flags.indexOf("+") >= 0) text = "+" + text;
+        else if (floatValue >= 0 && flags.indexOf(" ") >= 0) text = " " + text;
+        return formatPadding(text, width, flags, text[0] === "+" || text[0] === "-" || text[0] === " " ? 1 : 0);
+      }
+
+      var numeric = Math.trunc(Number(value) || 0);
+      var unsigned = "uoxXp".indexOf(specifier) >= 0;
+      if (unsigned && numeric < 0) numeric = numeric >>> 0;
+      var base = specifier === "o" ? 8 : "xXp".indexOf(specifier) >= 0 ? 16 : 10;
+      var negative = !unsigned && numeric < 0;
+      var digitsText = Math.abs(numeric).toString(base);
+      if (specifier === "X") digitsText = digitsText.toUpperCase();
+      if (precision != null) {
+        digitsText = new Array(Math.max(0, precision - digitsText.length) + 1).join("0") + digitsText;
+        flags = flags.replace(/0/g, "");
+      }
+      if (negative) prefix = "-";
+      else if (!unsigned && flags.indexOf("+") >= 0) prefix = "+";
+      else if (!unsigned && flags.indexOf(" ") >= 0) prefix = " ";
+      if (specifier === "p" || flags.indexOf("#") >= 0 && numeric !== 0 && "xX".indexOf(specifier) >= 0) prefix += specifier === "X" ? "0X" : "0x";
+      else if (flags.indexOf("#") >= 0 && numeric !== 0 && specifier === "o") prefix += "0";
+      text = prefix + digitsText;
+      return formatPadding(text, width, flags, prefix.length);
+    }
+
+    function formatCString(format, values) {
+      var argumentIndex = 0;
+      return String(format).replace(/%([-+ #0]*)(\*|\d+)?(?:\.(\*|\d+))?(?:hh|h|ll|l|j|z|t|L)?([diuoxXfFeEgGaAcsp%])/g, function (match, flags, widthToken, precisionToken, specifier) {
+        if (specifier === "%") return "%";
+        var width = widthToken === "*" ? Number(values[argumentIndex++]) : widthToken == null ? 0 : Number(widthToken);
+        var precision = precisionToken === "*" ? Number(values[argumentIndex++]) : precisionToken == null ? null : Number(precisionToken);
+        return formatCValue(specifier, flags, width, precision, values[argumentIndex++]);
+      });
+    }
+
+    function writeFormattedString(operation) {
+      var buffer = String(firstDefined(operation, ["buffer", "target", "destination"], ""));
+      if (!buffer) throw new Error("Formatted output buffer is missing");
+      var format = cString(evaluate(firstDefined(operation, ["format", "template"], "")));
+      var values = Array.isArray(operation.arguments) ? operation.arguments.map(function (value) { return evaluate(value); }) : [];
+      var renderedBytes = byteArray(formatCString(format, values));
+      var hasCapacity = operation.capacity !== undefined && operation.capacity !== null;
+      var capacity = hasCapacity ? Math.max(0, Math.trunc(Number(evaluate(operation.capacity)) || 0)) : renderedBytes.length + 1;
+      if (capacity > 0) {
+        var written = renderedBytes.slice(0, Math.max(0, capacity - 1));
+        if (isHeapPointer(runtime.variables[buffer])) {
+          writeMemory(runtime.variables[buffer], written.concat([0]));
+        } else {
+          var existing = Array.isArray(runtime.variables[buffer]) ? runtime.variables[buffer].slice() : [];
+          while (existing.length < capacity) existing.push(0);
+          written.forEach(function (byte, index) { existing[index] = byte; });
+          existing[written.length] = 0;
+          runtime.variables[buffer] = existing;
+        }
+      }
+      setOperationResult(operation, renderedBytes.length);
+    }
+
+    function executeLibcMemory(operation) {
+      var name = String(operation.function || "");
+      var args = Array.isArray(operation.arguments) ? operation.arguments : [];
+      var destination = memoryTargetPointer(args[0]);
+      var output;
+      if (name === "memset") {
+        var fill = Math.trunc(Number(evaluate(args[1])) || 0) & 0xff;
+        output = new Array(Math.max(0, Math.trunc(Number(evaluate(args[2])) || 0))).fill(fill);
+      } else if (name === "memcpy" || name === "memmove") {
+        var copyCount = Math.max(0, Math.trunc(Number(evaluate(args[2])) || 0));
+        output = memoryBytes(evaluate(args[1]), copyCount).slice();
+        if (output.length < copyCount) throw new Error(name + " source read is out of bounds");
+      } else if (name === "strcpy" || name === "strncpy") {
+        output = cBytes(evaluate(args[1])).concat([0]);
+        if (name === "strncpy") {
+          var stringCount = Math.max(0, Math.trunc(Number(evaluate(args[2])) || 0));
+          output = output.slice(0, stringCount);
+          while (output.length < stringCount) output.push(0);
+        }
+      } else {
+        var existing = cBytes(evaluate(args[0]));
+        var addition = cBytes(evaluate(args[1]));
+        if (name === "strncat") addition = addition.slice(0, Math.max(0, Math.trunc(Number(evaluate(args[2])) || 0)));
+        destination = pointerOffset(destination, existing.length);
+        output = addition.concat([0]);
+      }
+      writeMemory(destination, output);
+      setOperationResult(operation, evaluate(args[0]));
+    }
+
+    function writeStdio(operation) {
+      var name = String(operation.function || "printf");
+      var bytes;
+      var result;
+      if (operation.format !== undefined) {
+        var format = cString(evaluate(operation.format));
+        var values = Array.isArray(operation.arguments) ? operation.arguments.map(function (value) { return evaluate(value); }) : [];
+        bytes = byteArray(formatCString(format, values));
+        result = bytes.length;
+      } else if (operation.character !== undefined) {
+        bytes = [Math.trunc(Number(evaluate(operation.character)) || 0) & 0xff];
+        result = bytes[0];
+      } else if (name === "fwrite") {
+        var size = Math.max(0, Math.trunc(Number(evaluate(operation.size)) || 0));
+        var count = Math.max(0, Math.trunc(Number(evaluate(operation.count)) || 0));
+        bytes = memoryBytes(evaluate(operation.data), size * count);
+        result = size ? Math.floor(bytes.length / size) : 0;
+      } else {
+        bytes = cBytes(evaluate(operation.data));
+        if (operation.newline) bytes = bytes.concat([10]);
+        result = bytes.length;
+      }
+      var event = {
+        stream: String(operation.stream || "stdout"),
+        function: name,
+        bytes: bytes.slice(),
+        text: bytesToText(bytes),
+        time: runtime.time,
+        timeMs: runtime.time
+      };
+      runtime.stdioCount += 1;
+      appendBoundedHistory(runtime.stdio, event);
+      callHook("onStdio", cloneValue(event));
+      setOperationResult(operation, result);
+    }
+
+    function scanStdio(operation) {
+      var input = cString(evaluate(operation.input));
+      var format = cString(evaluate(operation.format));
+      var descriptors = [];
+      var pattern = "^";
+      for (var index = 0; index < format.length;) {
+        var character = format[index];
+        if (/\s/.test(character)) {
+          while (index < format.length && /\s/.test(format[index])) index += 1;
+          pattern += "\\s+";
+          continue;
+        }
+        if (character !== "%") {
+          pattern += character.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          index += 1;
+          continue;
+        }
+        index += 1;
+        if (format[index] === "%") {
+          pattern += "%";
+          index += 1;
+          continue;
+        }
+        var suppressed = format[index] === "*";
+        if (suppressed) index += 1;
+        var widthText = "";
+        while (index < format.length && /\d/.test(format[index])) widthText += format[index++];
+        while (index < format.length && /[hlLjzt]/.test(format[index])) index += 1;
+        var specifier = format[index++] || "";
+        var width = Math.max(0, Number(widthText) || 0);
+        var capture;
+        if (specifier === "d" || specifier === "u") capture = specifier === "d" ? "[+-]?\\d+" : "\\+?\\d+";
+        else if (specifier === "i") capture = "[+-]?(?:0[xX][0-9A-Fa-f]+|0[0-7]+|\\d+)";
+        else if (specifier === "x" || specifier === "X" || specifier === "p") capture = "(?:0[xX])?[0-9A-Fa-f]+";
+        else if (specifier === "o") capture = "[0-7]+";
+        else if ("fFeEgGaA".indexOf(specifier) >= 0) capture = "[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?";
+        else if (specifier === "s") capture = width ? "\\S{1," + width + "}" : "\\S+";
+        else if (specifier === "c") capture = ".{" + (width || 1) + "}";
+        else throw new Error("Unsupported sscanf conversion: %" + specifier);
+        pattern += suppressed ? "(?:" + capture + ")" : "(" + capture + ")";
+        if (!suppressed) descriptors.push({ specifier: specifier });
+      }
+      var match = new RegExp(pattern).exec(input);
+      if (!match) {
+        setOperationResult(operation, 0);
+        return;
+      }
+      var targets = Array.isArray(operation.targets) ? operation.targets : [];
+      var assigned = Math.min(descriptors.length, targets.length);
+      for (var targetIndex = 0; targetIndex < assigned; targetIndex += 1) {
+        var descriptor = descriptors[targetIndex];
+        var token = match[targetIndex + 1];
+        if (descriptor.specifier === "s" || descriptor.specifier === "c") {
+          var targetPointer = memoryTargetPointer(targets[targetIndex]);
+          var scannedBytes = byteArray(token);
+          if (descriptor.specifier === "s") scannedBytes.push(0);
+          writeMemory(targetPointer, scannedBytes);
+        } else {
+          var base = descriptor.specifier === "x" || descriptor.specifier === "X" || descriptor.specifier === "p" ? 16 : descriptor.specifier === "o" ? 8 : descriptor.specifier === "i" ? 0 : 10;
+          var value = "fFeEgGaA".indexOf(descriptor.specifier) >= 0 ? parseFloat(token) : parseInt(token, base);
+          writePointer(evaluate(targets[targetIndex]), Number.isFinite(value) ? value : 0);
+        }
+      }
+      setOperationResult(operation, assigned);
     }
 
     function resolveAlias(value, aliases) {
@@ -928,6 +1572,7 @@
 
     function resolvePeripheralInstance(raw, aliases, fallback, pattern) {
       var value = raw && typeof raw === "object" ? evaluate(raw) : raw;
+      if (typeof value === "string" && hasOwn(runtime.variables, value)) value = runtime.variables[value];
       value = resolveAlias(value, aliases);
       if (value && typeof value === "object") value = value.instance || value.name || value.id;
       var name = String(value == null ? fallback : value).trim().replace(/^&/, "");
@@ -997,19 +1642,19 @@
     }
 
     function operationInstance(operation) {
-      return resolveInstance(firstDefined(operation, ["instance", "uart", "handle", "peripheral"], "UART"));
+      return resolveInstance(operation.instance || operation.uart || operation.handle || operation.peripheral || "UART");
     }
 
     function operationI2cInstance(operation) {
-      return resolveI2cInstance(firstDefined(operation, ["instance", "i2c", "handle", "peripheral"], "I2C"));
+      return resolveI2cInstance(operation.instance || operation.i2c || operation.handle || operation.peripheral || "I2C");
     }
 
     function operationSpiInstance(operation) {
-      return resolveSpiInstance(firstDefined(operation, ["instance", "spi", "handle", "peripheral"], "SPI"));
+      return resolveSpiInstance(operation.instance || operation.spi || operation.handle || operation.peripheral || "SPI");
     }
 
     function operationAdcInstance(operation) {
-      return resolveAdcInstance(firstDefined(operation, ["instance", "adc", "handle", "peripheral"], "ADC"));
+      return resolveAdcInstance(operation.instance || operation.adc || operation.handle || operation.peripheral || "ADC");
     }
 
     function pwmChannelNumber(operation) {
@@ -1202,9 +1847,11 @@
         text: bytesToText(bytes),
         bytes: bytes.slice(),
         dma: Boolean(operation.dma),
+        interrupt: Boolean(operation.interrupt),
         dmaHandle: operation.dmaHandle || null,
         dmaInstance: operation.dmaInstance || null,
         transferId: operation.transferId || null,
+        interruptId: operation.interruptId || null,
         durationMs: evaluatedNumber(operation.durationMs, 0),
         time: runtime.time,
         timeMs: runtime.time
@@ -1305,27 +1952,36 @@
         timeMs: runtime.time
       });
       setOperationResult(operation, status);
+      return status;
     }
 
     function readAdc(operation) {
       var instance = operationAdcInstance(operation);
       var state = adcState(instance);
-      var sample = callHook("onAdcRead", {
-        instance: instance,
-        adc: firstDefined(operation, ["adc", "handle"], instance),
-        started: state.started,
-        ready: state.ready,
-        time: runtime.time,
-        timeMs: runtime.time
-      });
-      var value = sample && typeof sample === "object" ? firstDefined(sample, ["value", "raw"], null) : sample;
-      value = Number(value);
-      if (!Number.isFinite(value)) value = 0;
-      value = Math.max(0, Math.round(value));
-      state.value = value;
-      state.voltage = sample && typeof sample === "object" && Number.isFinite(Number(sample.voltage)) ? Number(sample.voltage) : null;
+      var sample;
+      var value;
+      if (state.interruptValueReady) {
+        sample = state.interruptSample;
+        value = state.value;
+        state.interruptValueReady = false;
+      } else {
+        sample = callHook("onAdcRead", {
+          instance: instance,
+          adc: firstDefined(operation, ["adc", "handle"], instance),
+          started: state.started,
+          ready: state.ready,
+          time: runtime.time,
+          timeMs: runtime.time
+        });
+        value = sample && typeof sample === "object" ? firstDefined(sample, ["value", "raw"], null) : sample;
+        value = Number(value);
+        if (!Number.isFinite(value)) value = 0;
+        value = Math.max(0, Math.round(value));
+        state.value = value;
+        state.voltage = sample && typeof sample === "object" && Number.isFinite(Number(sample.voltage)) ? Number(sample.voltage) : null;
+        state.samples += 1;
+      }
       state.ready = false;
-      state.samples += 1;
       var target = firstDefined(operation, ["target", "destination", "variable", "resultTarget"], null);
       if (target) assign(target, value);
       callHook("onAdcValue", {
@@ -1359,7 +2015,7 @@
     }
 
     function rejectBusyDma(operation, type, instance) {
-      var active = activeDmaTransfer(type, instance);
+      var active = activeDmaTransfer(type, instance) || activeInterruptEvent(type, instance);
       if (!active) return false;
       setOperationResult(operation, BUILTIN_CONSTANTS.HAL_BUSY);
       dmaHistory({
@@ -1413,33 +2069,22 @@
         uartRx: runtime.uartRx,
         adc: runtime.adc,
         dma: runtime.dma,
+        interrupts: runtime.interrupts,
         pwm: runtime.pwm,
-        peripherals: runtime.peripherals
+        peripherals: runtime.peripherals,
+        heap: runtime.heap,
+        stdio: runtime.stdio,
+        randomState: runtime.randomState
       };
     }
 
-    function runDmaCallback(name, transfer, phase, eventTime) {
-      var event = {
-        callback: name,
-        phase: phase,
-        type: transfer.type,
-        id: transfer.id,
-        key: transfer.key,
-        instance: transfer.instance,
-        handle: transfer.handle,
-        dmaHandle: transfer.dmaHandle,
-        dmaInstance: transfer.dmaInstance,
-        buffer: transfer.buffer,
-        length: transfer.length,
-        circular: transfer.circular,
-        cycle: transfer.cycle,
-        time: eventTime,
-        timeMs: eventTime
-      };
-      callHook("onDmaCallback", cloneValue(event));
+    function runFirmwareCallback(name, event, bindings, hookKind) {
       var callbacks = model.callbacks && typeof model.callbacks === "object" ? model.callbacks : {};
       var descriptor = callbacks[name];
-      if (!descriptor || !Array.isArray(descriptor.operations) || !descriptor.operations.length) return;
+      event = Object.assign({ callback: name, time: runtime.time, timeMs: runtime.time }, event || {});
+      hookKind = hookKind || "Interrupt";
+      callHook("on" + hookKind + "Callback", cloneValue(event));
+      if (!descriptor || !Array.isArray(descriptor.operations) || !descriptor.operations.length) return event;
 
       var callbackHooks = Object.assign({}, hooks, {
         onState: null,
@@ -1467,37 +2112,62 @@
           operations: descriptor.operations
         })
       });
-      var parameterName = transfer.type === "adc" ? "hadc" : "huart";
-      var hadPreviousParameter = hasOwn(runtime.variables, parameterName);
-      var previousParameter = runtime.variables[parameterName];
-      var handleName = String(transfer.handle || "").replace(/^&/, "");
-      var hadPreviousHandle = handleName ? hasOwn(runtime.variables, handleName) : false;
-      var previousHandle = handleName ? runtime.variables[handleName] : undefined;
-      var instanceName = String(transfer.instance || "");
-      var hadPreviousInstance = instanceName ? hasOwn(runtime.variables, instanceName) : false;
-      var previousInstance = instanceName ? runtime.variables[instanceName] : undefined;
-      var callbackHandle = { Instance: transfer.instance, handle: transfer.handle };
-      runtime.variables[parameterName] = callbackHandle;
-      if (handleName) runtime.variables[handleName] = callbackHandle;
-      if (instanceName) runtime.variables[instanceName] = instanceName;
+      bindings = Object.assign({}, bindings || {});
+      var bindingKey = ["hadc", "huart", "htim", "GPIO_Pin"].find(function (name) { return hasOwn(bindings, name); }) || Object.keys(bindings)[0];
+      (Array.isArray(descriptor.parameters) ? descriptor.parameters : []).forEach(function (parameterName) {
+        if (!hasOwn(bindings, parameterName) && bindingKey) bindings[parameterName] = bindings[bindingKey];
+      });
+      var previousBindings = {};
+      Object.keys(bindings).forEach(function (bindingName) {
+        previousBindings[bindingName] = {
+          present: hasOwn(runtime.variables, bindingName),
+          value: runtime.variables[bindingName]
+        };
+        runtime.variables[bindingName] = bindings[bindingName];
+      });
       var callbackRuntime = create(callbackModel, callbackHooks, { sharedStore: callbackSharedStore() });
-      callbackRuntime.advanceTimeTo(eventTime);
+      callbackRuntime.advanceTimeTo(event.timeMs);
       callbackRuntime.start();
       var callbackState = callbackRuntime.step(0);
-      if (hadPreviousParameter) runtime.variables[parameterName] = previousParameter;
-      else delete runtime.variables[parameterName];
-      if (handleName) {
-        if (hadPreviousHandle) runtime.variables[handleName] = previousHandle;
-        else delete runtime.variables[handleName];
-      }
-      if (instanceName) {
-        if (hadPreviousInstance) runtime.variables[instanceName] = previousInstance;
-        else delete runtime.variables[instanceName];
-      }
+      Object.keys(previousBindings).forEach(function (bindingName) {
+        if (previousBindings[bindingName].present) runtime.variables[bindingName] = previousBindings[bindingName].value;
+        else delete runtime.variables[bindingName];
+      });
       event.status = callbackState.status;
       event.operationsExecuted = callbackState.operationsExecuted;
       if (callbackState.error) event.error = cloneValue(callbackState.error);
-      callHook("onDmaCallbackComplete", cloneValue(event));
+      callHook("on" + hookKind + "CallbackComplete", cloneValue(event));
+      return event;
+    }
+
+    function peripheralCallbackBindings(parameterName, transfer) {
+      var handleName = String(transfer.handle || "").replace(/^&/, "");
+      var instanceName = String(transfer.instance || "");
+      var callbackHandle = { Instance: transfer.instance, handle: transfer.handle };
+      var bindings = {};
+      bindings[parameterName] = callbackHandle;
+      if (handleName) bindings[handleName] = callbackHandle;
+      if (instanceName) bindings[instanceName] = instanceName;
+      return bindings;
+    }
+
+    function runDmaCallback(name, transfer, phase, eventTime) {
+      return runFirmwareCallback(name, {
+        phase: phase,
+        type: transfer.type,
+        id: transfer.id,
+        key: transfer.key,
+        instance: transfer.instance,
+        handle: transfer.handle,
+        dmaHandle: transfer.dmaHandle,
+        dmaInstance: transfer.dmaInstance,
+        buffer: transfer.buffer,
+        length: transfer.length,
+        circular: transfer.circular,
+        cycle: transfer.cycle,
+        time: eventTime,
+        timeMs: eventTime
+      }, peripheralCallbackBindings(transfer.type === "adc" ? "hadc" : "huart", transfer), "Dma");
     }
 
     function dmaCallbackName(transfer, phase) {
@@ -1611,6 +2281,341 @@
       pruneDmaTransfers();
     }
 
+    function interruptHistory(event) {
+      appendBoundedHistory(runtime.interrupts.history, event);
+      callHook("onInterrupt", cloneValue(event));
+    }
+
+    function pruneInterruptEvents() {
+      var completed = runtime.interrupts.events.filter(function (event) { return !event.active && !event.processing; });
+      var recentCompleted = new Set(completed.slice(-MAX_INTERRUPT_EVENT_RECORDS));
+      var retained = runtime.interrupts.events.filter(function (event) {
+        return event.active || event.processing || recentCompleted.has(event);
+      });
+      runtime.interrupts.events.splice.apply(runtime.interrupts.events, [0, runtime.interrupts.events.length].concat(retained));
+    }
+
+    function activeInterruptEvent(type, instance) {
+      return runtime.interrupts.events.find(function (event) {
+        return event.active && event.type === type && event.instance === instance;
+      }) || null;
+    }
+
+    function cancelInterruptEvents(predicate, eventTime, reason) {
+      var cancelled = 0;
+      runtime.interrupts.events.forEach(function (event) {
+        if (!event.active || !predicate(event)) return;
+        event.active = false;
+        event.cancelReason = reason || "stopped";
+        cancelled += 1;
+        interruptHistory({
+          type: event.type,
+          phase: "stopped",
+          id: event.id,
+          key: event.key,
+          instance: event.instance,
+          handle: event.handle,
+          reason: event.cancelReason,
+          time: eventTime,
+          timeMs: eventTime
+        });
+      });
+      pruneInterruptEvents();
+      return cancelled;
+    }
+
+    function interruptBusy(type, instance) {
+      if (activeInterruptEvent(type, instance)) return true;
+      var dmaType = type === "adc" ? "adc" : type === "uartTx" ? "uartTx" : type === "uartRx" ? "uartRx" : "";
+      return dmaType ? Boolean(activeDmaTransfer(dmaType, instance)) : false;
+    }
+
+    function startInterruptEvent(type, instance, handle, dueAt, details) {
+      var event = Object.assign({
+        id: "irq-" + (++runtime.interrupts.sequence),
+        key: type + ":" + instance,
+        type: type,
+        instance: instance,
+        handle: handle,
+        active: true,
+        processing: false,
+        startedAt: runtime.time,
+        dueAt: dueAt
+      }, details || {});
+      runtime.interrupts.events.push(event);
+      pruneInterruptEvents();
+      interruptHistory({
+        type: type,
+        phase: "started",
+        id: event.id,
+        key: event.key,
+        instance: instance,
+        handle: handle,
+        dueAt: dueAt,
+        periodMs: event.periodMs == null ? null : event.periodMs,
+        time: runtime.time,
+        timeMs: runtime.time
+      });
+      return event;
+    }
+
+    function sampleAdcInterrupt(event, eventTime) {
+      var descriptor = adcDescriptor(event.handle) || {};
+      var channels = Array.isArray(descriptor.channels) ? descriptor.channels : [];
+      var channel = channels[0] || null;
+      var sample = callHook("onAdcRead", {
+        instance: event.instance,
+        adc: event.handle,
+        started: true,
+        ready: true,
+        interrupt: true,
+        interruptId: event.id,
+        channelIndex: 0,
+        channel: channel,
+        time: eventTime,
+        timeMs: eventTime
+      });
+      var value = sample && typeof sample === "object" ? firstDefined(sample, ["value", "raw"], null) : sample;
+      value = Math.max(0, Math.round(Number(value) || 0));
+      var state = adcState(event.instance);
+      state.value = value;
+      state.voltage = sample && typeof sample === "object" && Number.isFinite(Number(sample.voltage)) ? Number(sample.voltage) : null;
+      state.ready = true;
+      state.interruptValueReady = true;
+      state.interruptSample = cloneValue(sample);
+      state.samples += 1;
+      callHook("onAdcValue", {
+        instance: event.instance,
+        value: value,
+        voltage: state.voltage,
+        sample: cloneValue(sample),
+        interrupt: true,
+        interruptId: event.id,
+        time: eventTime,
+        timeMs: eventTime
+      });
+    }
+
+    function interruptCallbackName(event) {
+      if (event.type === "adc") return "HAL_ADC_ConvCpltCallback";
+      if (event.type === "uartTx") return "HAL_UART_TxCpltCallback";
+      if (event.type === "uartRx") return "HAL_UART_RxCpltCallback";
+      if (event.type === "timer") return event.pwm ? "HAL_TIM_PWM_PulseFinishedCallback" : "HAL_TIM_PeriodElapsedCallback";
+      return "";
+    }
+
+    function completeInterruptEvent(event, eventTime) {
+      if (!event.active) return;
+      event.processing = true;
+      if (event.type === "adc") sampleAdcInterrupt(event, eventTime);
+      var callbackName = interruptCallbackName(event);
+      var parameterName = event.type === "adc" ? "hadc" : event.type.indexOf("uart") === 0 ? "huart" : "htim";
+      interruptHistory({
+        type: event.type,
+        phase: "complete",
+        callback: callbackName,
+        id: event.id,
+        key: event.key,
+        instance: event.instance,
+        handle: event.handle,
+        time: eventTime,
+        timeMs: eventTime
+      });
+      if (callbackName) {
+        runFirmwareCallback(callbackName, {
+          type: event.type,
+          phase: "complete",
+          id: event.id,
+          key: event.key,
+          instance: event.instance,
+          handle: event.handle,
+          time: eventTime,
+          timeMs: eventTime
+        }, peripheralCallbackBindings(parameterName, event), "Interrupt");
+      }
+      event.processing = false;
+      if (event.periodic && event.periodMs > 0) {
+        event.cycle = Number(event.cycle || 0) + 1;
+        event.dueAt += event.periodMs;
+      } else {
+        event.active = false;
+        if (event.type === "adc") adcState(event.instance).interruptActive = false;
+      }
+      pruneInterruptEvents();
+    }
+
+    function startAdcInterrupt(operation) {
+      var instance = operationAdcInstance(operation);
+      if (interruptBusy("adc", instance)) {
+        setOperationResult(operation, BUILTIN_CONSTANTS.HAL_BUSY);
+        return;
+      }
+      var handle = firstDefined(operation, ["adc", "handle"], instance);
+      var descriptor = adcDescriptor(handle) || {};
+      var samplePeriodMs = Math.max(0.001, evaluatedNumber(firstDefined(operation, ["samplePeriodMs"], descriptor.samplePeriodMs), 1));
+      var event = startInterruptEvent("adc", instance, handle, runtime.time + samplePeriodMs, { durationMs: samplePeriodMs });
+      var state = adcState(instance);
+      state.started = true;
+      state.ready = false;
+      state.interruptActive = true;
+      callHook("onAdcStart", { instance: instance, adc: handle, interrupt: true, interruptId: event.id, time: runtime.time, timeMs: runtime.time });
+      setOperationResult(operation, BUILTIN_CONSTANTS.HAL_OK);
+    }
+
+    function stopAdcInterrupt(operation) {
+      var instance = operationAdcInstance(operation);
+      cancelInterruptEvents(function (event) { return event.type === "adc" && event.instance === instance; }, runtime.time, "HAL_ADC_Stop_IT");
+      var state = adcState(instance);
+      state.started = false;
+      state.ready = false;
+      state.interruptActive = false;
+      state.interruptValueReady = false;
+      setOperationResult(operation, BUILTIN_CONSTANTS.HAL_OK);
+    }
+
+    function startTimerInterrupt(operation) {
+      var descriptor = timerDescriptor(firstDefined(operation, ["timer", "handle", "instance"], "TIM")) || {};
+      var instance = descriptor.instance || resolveTimerInstance(firstDefined(operation, ["instance", "timer", "handle"], "TIM"));
+      var handle = descriptor.handle || firstDefined(operation, ["timer", "handle"], instance);
+      if (activeInterruptEvent("timer", instance)) {
+        setOperationResult(operation, BUILTIN_CONSTANTS.HAL_BUSY);
+        return;
+      }
+      var frequencyHz = evaluatedNumber(firstDefined(operation, ["frequencyHz"], descriptor.frequencyHz), Number(descriptor.frequencyHz));
+      if (!Number.isFinite(frequencyHz) || frequencyHz <= 0) {
+        setOperationResult(operation, BUILTIN_CONSTANTS.HAL_ERROR);
+        return;
+      }
+      var periodMs = 1000 / frequencyHz;
+      startInterruptEvent("timer", instance, handle, runtime.time + periodMs, {
+        periodMs: periodMs,
+        periodic: true,
+        cycle: 0,
+        pwm: Boolean(operation.pwm)
+      });
+      setOperationResult(operation, BUILTIN_CONSTANTS.HAL_OK);
+    }
+
+    function stopTimerInterrupt(operation) {
+      var instance = resolveTimerInstance(firstDefined(operation, ["instance", "timer", "handle"], "TIM"));
+      cancelInterruptEvents(function (event) { return event.type === "timer" && event.instance === instance; }, runtime.time, "HAL_TIM_Base_Stop_IT");
+      setOperationResult(operation, BUILTIN_CONSTANTS.HAL_OK);
+    }
+
+    function startUartTxInterrupt(operation) {
+      var instance = operationInstance(operation);
+      var length = operationLength(operation);
+      if (length == null || length < 1) {
+        setOperationResult(operation, BUILTIN_CONSTANTS.HAL_ERROR);
+        return;
+      }
+      if (interruptBusy("uartTx", instance)) {
+        setOperationResult(operation, BUILTIN_CONSTANTS.HAL_BUSY);
+        return;
+      }
+      var handle = firstDefined(operation, ["uart", "handle"], instance);
+      var descriptor = uartDescriptor(handle) || {};
+      var baudRate = Math.max(1, Number(descriptor.baudRate) || 115200);
+      var durationMs = Math.max(0.001, length * uartFrameBits(descriptor) * 1000 / baudRate);
+      var event = startInterruptEvent("uartTx", instance, handle, runtime.time + durationMs, {
+        buffer: firstDefined(operation, ["buffer", "source"], null),
+        length: length,
+        durationMs: durationMs
+      });
+      transmit(Object.assign({}, operation, { interrupt: true, interruptId: event.id, durationMs: durationMs }));
+    }
+
+    function startUartRxInterrupt(operation) {
+      var instance = operationInstance(operation);
+      var length = operationLength(operation);
+      var buffer = firstDefined(operation, ["buffer", "target", "destination"], null);
+      if (!buffer || length == null || length < 1) {
+        setOperationResult(operation, BUILTIN_CONSTANTS.HAL_ERROR);
+        return;
+      }
+      if (interruptBusy("uartRx", instance)) {
+        setOperationResult(operation, BUILTIN_CONSTANTS.HAL_BUSY);
+        return;
+      }
+      var event = startInterruptEvent("uartRx", instance, firstDefined(operation, ["uart", "handle"], instance), null, {
+        buffer: buffer,
+        length: length,
+        transferred: 0
+      });
+      setOperationResult(operation, BUILTIN_CONSTANTS.HAL_OK);
+      serviceUartRxInterrupt(instance, runtime.time);
+      return event;
+    }
+
+    function serviceUartRxInterrupt(instance, eventTime) {
+      runtime.interrupts.events.forEach(function (event) {
+        if (!event.active || event.type !== "uartRx" || event.instance !== instance) return;
+        var queue = uartQueue(instance);
+        var needed = event.length - event.transferred;
+        if (needed <= 0 || !queue.length) return;
+        var received = queue.splice(0, Math.min(needed, queue.length));
+        var array = Array.isArray(runtime.variables[event.buffer]) ? runtime.variables[event.buffer] : [];
+        received.forEach(function (byte, offset) { array[event.transferred + offset] = byte; });
+        runtime.variables[event.buffer] = array;
+        event.transferred += received.length;
+        if (event.transferred >= event.length) completeInterruptEvent(event, eventTime);
+      });
+    }
+
+    function serviceAllUartRxInterrupts(eventTime) {
+      var instances = new Set();
+      runtime.interrupts.events.forEach(function (event) {
+        if (event.active && event.type === "uartRx") instances.add(event.instance);
+      });
+      instances.forEach(function (instance) { serviceUartRxInterrupt(instance, eventTime); });
+    }
+
+    function abortUartInterrupt(operation) {
+      var instance = operationInstance(operation);
+      var direction = String(operation.direction || "both");
+      cancelInterruptEvents(function (event) {
+        return event.instance === instance && (direction === "both" || event.type === (direction === "tx" ? "uartTx" : "uartRx"));
+      }, runtime.time, "HAL_UART_Abort_IT");
+      var callbackName = direction === "tx" ? "HAL_UART_AbortTransmitCpltCallback" : direction === "rx" ? "HAL_UART_AbortReceiveCpltCallback" : "HAL_UART_AbortCpltCallback";
+      var handle = firstDefined(operation, ["uart", "handle"], instance);
+      runFirmwareCallback(callbackName, { type: "uartAbort", phase: "complete", instance: instance, handle: handle, time: runtime.time, timeMs: runtime.time }, peripheralCallbackBindings("huart", { instance: instance, handle: handle }), "Interrupt");
+      setOperationResult(operation, BUILTIN_CONSTANTS.HAL_OK);
+    }
+
+    function syncGpioInputs(levels) {
+      levels = levels && typeof levels === "object" ? levels : {};
+      var pins = model.pins && typeof model.pins === "object" ? model.pins : {};
+      Object.keys(levels).forEach(function (rawPin) {
+        var pin = physicalPin(rawPin);
+        if (!pin || levels[rawPin] == null) return;
+        var next = logicValue(levels[rawPin]);
+        var hadPrevious = hasOwn(runtime.interrupts.gpioLevels, pin);
+        var previous = hadPrevious ? runtime.interrupts.gpioLevels[pin] : next;
+        runtime.interrupts.gpioLevels[pin] = next;
+        if (!hadPrevious || previous === next) return;
+        var descriptor = pins[pin] || {};
+        var edge = String(descriptor.interruptEdge || "").toLowerCase();
+        var triggered = edge === "both" || edge === "rising" && previous === 0 && next === 1 || edge === "falling" && previous === 1 && next === 0;
+        if (!triggered) return;
+        var pinNumber = Number((pin.match(/\d+$/) || [0])[0]);
+        var pinMask = Math.pow(2, pinNumber);
+        var event = {
+          type: "gpioExti",
+          phase: "edge",
+          pin: pin,
+          pinMask: pinMask,
+          edge: previous === 0 ? "rising" : "falling",
+          previous: previous,
+          value: next,
+          time: runtime.time,
+          timeMs: runtime.time
+        };
+        interruptHistory(event);
+        runFirmwareCallback("HAL_GPIO_EXTI_Callback", event, { GPIO_Pin: pinMask }, "Interrupt");
+      });
+      return snapshot();
+    }
+
     function dmaHasFirmwareCallbacks(transfer) {
       var callbacks = model.callbacks && typeof model.callbacks === "object" ? model.callbacks : {};
       return [dmaCallbackName(transfer, "half"), dmaCallbackName(transfer, "complete")].some(function (name) {
@@ -1626,6 +2631,10 @@
         var due = !transfer.halfFired && transfer.halfAt != null ? transfer.halfAt : transfer.completeAt;
         if (due != null && due <= limit + 1e-9 && due < selected) selected = due;
       });
+      runtime.interrupts.events.forEach(function (event) {
+        if (!event.active || event.processing || event.dueAt == null) return;
+        if (event.dueAt <= limit + 1e-9 && event.dueAt < selected) selected = event.dueAt;
+      });
       return Number.isFinite(selected) ? selected : null;
     }
 
@@ -1636,6 +2645,7 @@
       while (eventBudget.remaining > 0) {
         var candidate = null;
         var candidatePhase = null;
+        var interruptCandidate = null;
         var candidateTime = Infinity;
         runtime.dma.transfers.forEach(function (transfer) {
           if (!transfer.active || transfer.processing || transfer.type === "uartRx") return;
@@ -1647,8 +2657,17 @@
             candidateTime = due;
           }
         });
-        if (!candidate) break;
-        completeDmaPhase(candidate, candidatePhase, candidateTime);
+        runtime.interrupts.events.forEach(function (event) {
+          if (!event.active || event.processing || event.dueAt == null) return;
+          if (event.dueAt <= targetTime + 1e-9 && event.dueAt < candidateTime) {
+            candidate = null;
+            interruptCandidate = event;
+            candidateTime = event.dueAt;
+          }
+        });
+        if (!candidate && !interruptCandidate) break;
+        if (interruptCandidate) completeInterruptEvent(interruptCandidate, candidateTime);
+        else completeDmaPhase(candidate, candidatePhase, candidateTime);
         processed += 1;
         eventBudget.remaining -= 1;
         lastEventTime = candidateTime;
@@ -1683,6 +2702,26 @@
               timeMs: targetTime
             });
           }
+        });
+        runtime.interrupts.events.forEach(function (event) {
+          if (!event.active || !event.periodic || !(event.periodMs > 0) || event.dueAt == null || event.dueAt > targetTime) return;
+          var callbacks = model.callbacks && typeof model.callbacks === "object" ? model.callbacks : {};
+          var callback = callbacks[interruptCallbackName(event)];
+          if (callback && Array.isArray(callback.operations) && callback.operations.length) return;
+          var skipped = Math.floor((targetTime - event.dueAt) / event.periodMs) + 1;
+          event.cycle = Number(event.cycle || 0) + skipped;
+          event.dueAt += skipped * event.periodMs;
+          event.coalescedCycles = Number(event.coalescedCycles || 0) + skipped;
+          interruptHistory({
+            type: event.type,
+            phase: "coalesced",
+            id: event.id,
+            key: event.key,
+            instance: event.instance,
+            skippedCycles: skipped,
+            time: targetTime,
+            timeMs: targetTime
+          });
         });
       }
       return {
@@ -2364,6 +3403,50 @@
         runtime.pc += 1;
         return;
       }
+      if (instruction.kind === "formatstring") {
+        writeFormattedString(operation);
+        runtime.pc += 1;
+        return;
+      }
+      if (instruction.kind === "stdiowrite") {
+        writeStdio(operation);
+        runtime.pc += 1;
+        return;
+      }
+      if (instruction.kind === "stdioscan") {
+        scanStdio(operation);
+        runtime.pc += 1;
+        return;
+      }
+      if (instruction.kind === "libcmemory") {
+        executeLibcMemory(operation);
+        runtime.pc += 1;
+        return;
+      }
+      if (instruction.kind === "heapallocate") {
+        executeHeapAllocate(operation);
+        runtime.pc += 1;
+        return;
+      }
+      if (instruction.kind === "heapfree") {
+        freeHeap(evaluate(operation.pointer));
+        runtime.pc += 1;
+        return;
+      }
+      if (instruction.kind === "libcseed") {
+        runtime.randomState = Math.trunc(Number(evaluate(operation.seed)) || 1) & 0x7fffffff;
+        if (sharedStore) sharedStore.randomState = runtime.randomState;
+        runtime.pc += 1;
+        return;
+      }
+      if (instruction.kind === "processexit") {
+        runtime.returnValue = Math.trunc(Number(evaluate(operation.status)) || 0);
+        runtime.pc = instructions.length;
+        runtime.running = false;
+        runtime.status = operation.abnormal ? "error" : "completed";
+        if (operation.abnormal) runtime.error = { code: "ABORT", message: "Firmware called abort()", pc: runtime.pc, source: cloneValue(operation.source || null) };
+        return;
+      }
       if (instruction.kind === "uartreceive") {
         if (operationLength(operation) == null) {
           setOperationResult(operation, BUILTIN_CONSTANTS.HAL_ERROR);
@@ -2392,8 +3475,23 @@
         runtime.pc += 1;
         return;
       }
+      if (instruction.kind === "uarttransmitit") {
+        startUartTxInterrupt(operation);
+        runtime.pc += 1;
+        return;
+      }
       if (instruction.kind === "uartreceivedma") {
         startUartRxDma(operation);
+        runtime.pc += 1;
+        return;
+      }
+      if (instruction.kind === "uartreceiveit") {
+        startUartRxInterrupt(operation);
+        runtime.pc += 1;
+        return;
+      }
+      if (instruction.kind === "uartabortit") {
+        abortUartInterrupt(operation);
         runtime.pc += 1;
         return;
       }
@@ -2427,8 +3525,18 @@
         runtime.pc += 1;
         return;
       }
+      if (instruction.kind === "adcstartit") {
+        startAdcInterrupt(operation);
+        runtime.pc += 1;
+        return;
+      }
       if (instruction.kind === "adcstopdma") {
         stopAdcDma(operation);
+        runtime.pc += 1;
+        return;
+      }
+      if (instruction.kind === "adcstopit") {
+        stopAdcInterrupt(operation);
         runtime.pc += 1;
         return;
       }
@@ -2444,11 +3552,23 @@
       }
       if (instruction.kind === "pwmstart") {
         updatePwm(operation, { active: true });
+        if (operation.interrupt) startTimerInterrupt(Object.assign({}, operation, { pwm: true }));
         runtime.pc += 1;
         return;
       }
       if (instruction.kind === "pwmstop") {
         updatePwm(operation, { active: false });
+        if (operation.interrupt) stopTimerInterrupt(operation);
+        runtime.pc += 1;
+        return;
+      }
+      if (instruction.kind === "timerstartit") {
+        startTimerInterrupt(operation);
+        runtime.pc += 1;
+        return;
+      }
+      if (instruction.kind === "timerstopit") {
+        stopTimerInterrupt(operation);
         runtime.pc += 1;
         return;
       }
@@ -2555,8 +3675,12 @@
         spiTxCount: runtime.spiTxCount,
         adc: cloneValue(runtime.adc),
         dma: cloneValue(runtime.dma),
+        interrupts: cloneValue(runtime.interrupts),
         pwm: cloneValue(runtime.pwm),
         peripherals: cloneValue(runtime.peripherals),
+        heap: cloneValue(runtime.heap),
+        stdio: cloneValue(runtime.stdio),
+        stdioCount: runtime.stdioCount,
         blocked: blocked,
         sleepUntil: runtime.sleepUntil,
         pendingAdvanceMs: runtime.pendingAdvanceMs,
@@ -2577,6 +3701,7 @@
       runtime.running = true;
       runtime.status = runtime.blocked ? "blocked" : (runtime.sleepUntil == null ? "running" : "sleeping");
       serviceAllUartRxDma(runtime.time);
+      serviceAllUartRxInterrupts(runtime.time);
       return notifyState();
     }
 
@@ -2600,17 +3725,31 @@
         runtime.dma.transfers.splice(0, runtime.dma.transfers.length);
         runtime.dma.history.splice(0, runtime.dma.history.length);
         runtime.dma.sequence = 0;
+        runtime.interrupts.events.splice(0, runtime.interrupts.events.length);
+        runtime.interrupts.history.splice(0, runtime.interrupts.history.length);
+        runtime.interrupts.sequence = 0;
+        runtime.interrupts.gpioLevels = {};
         Object.keys(runtime.pwm).forEach(function (name) { delete runtime.pwm[name]; });
         Object.keys(runtime.peripherals).forEach(function (name) { delete runtime.peripherals[name]; });
         Object.assign(runtime.peripherals, cloneValue(peripheralDefaults));
+        Object.keys(runtime.heap.allocations).forEach(function (name) { delete runtime.heap.allocations[name]; });
+        runtime.heap.usedBytes = 0;
+        runtime.heap.peakBytes = 0;
+        runtime.heap.nextId = 0;
+        runtime.stdio.splice(0, runtime.stdio.length);
+        runtime.randomState = 1;
       } else {
         runtime.variables = cloneValue(initialVariables);
         runtime.gpio = {};
         runtime.uartRx = new Map();
         runtime.adc = {};
         runtime.dma = { transfers: [], history: [], sequence: 0 };
+        runtime.interrupts = { events: [], history: [], sequence: 0, gpioLevels: {} };
         runtime.pwm = {};
         runtime.peripherals = cloneValue(peripheralDefaults);
+        runtime.heap = emptyHeap();
+        runtime.stdio = [];
+        runtime.randomState = 1;
       }
       runtime.uartTx = [];
       runtime.i2cTx = [];
@@ -2618,6 +3757,7 @@
       runtime.uartTxCount = 0;
       runtime.i2cTxCount = 0;
       runtime.spiTxCount = 0;
+      runtime.stdioCount = 0;
       runtime.blocked = null;
       runtime.sleepUntil = null;
       runtime.pendingAdvanceMs = 0;
@@ -2631,7 +3771,10 @@
       var resolved = resolveInstance(instance);
       var queue = uartQueue(resolved);
       Array.prototype.push.apply(queue, byteArray(text));
-      if (runtime.running) serviceUartRxDma(resolved, runtime.time);
+      if (runtime.running) {
+        serviceUartRxDma(resolved, runtime.time);
+        serviceUartRxInterrupt(resolved, runtime.time);
+      }
       return notifyState();
     }
 
@@ -2663,6 +3806,7 @@
       var dmaLimited = false;
       try {
         serviceAllUartRxDma(runtime.time);
+        serviceAllUartRxInterrupts(runtime.time);
         while (runtime.running) {
           if (runtime.sleepUntil != null) {
             var sleepBoundary = Math.min(runtime.sleepUntil, targetTime);
@@ -2786,6 +3930,7 @@
       step: step,
       advanceTimeTo: advanceTimeTo,
       enqueueUart: enqueueUart,
+      syncGpioInputs: syncGpioInputs,
       getState: snapshot
     });
   }
