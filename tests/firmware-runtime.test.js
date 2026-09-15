@@ -10,6 +10,8 @@ const variable = name => ({ type: "variable", name });
 const char = value => ({ type: "char", value });
 const arrayIndex = (array, index) => ({ type: "arrayIndex", array, index: literal(index) });
 const eq = (left, right) => ({ type: "eq", left, right });
+const halCall = (operation, returnKind = "status") => ({ type: "halCall", operation, returnKind });
+const inlineCall = operations => ({ type: "inlineCall", operations });
 
 function screenshotModel() {
   return {
@@ -244,6 +246,30 @@ test("default Blinky accepts hal_model milliseconds delay without exhausting the
   assert.equal(state.timeMs, 1000);
   assert.equal(state.gpio.PC13, 1);
   assert.deepEqual(gpio.map(event => [event.time, event.value]), [[0, 1], [500, 0], [1000, 1]]);
+});
+
+test("long simulated time jumps reset the operation guard after firmware delays", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { count: 0 },
+    program: {
+      operations: [{
+        op: "while",
+        condition: literal(true),
+        body: [
+          { op: "assign", target: "count", value: { kind: "add", left: variable("count"), right: literal(1) } },
+          { op: "delay", milliseconds: literal(100) }
+        ]
+      }]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(60000);
+  assert.notEqual(state.status, "budget-exceeded");
+  assert.equal(state.time, 60000);
+  // The first iteration runs at t=0 and the boundary iteration starts at
+  // t=60000 before its next delay extends beyond this step.
+  assert.equal(state.variables.count, 601);
 });
 
 test("hal_model comparison operations execute with C precedence", () => {
@@ -543,6 +569,561 @@ test("ADC poll expressions return HAL_OK only after the ADC has started", () => 
   assert.equal(polls[0].ready, true);
 });
 
+test("halCall conditions use private result slots and run ADC GPIO PWM side effects once", () => {
+  const adcStarts = [];
+  const adcReads = [];
+  const gpioReads = [];
+  const pwmEvents = [];
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { adcStarted: 0, gpioHigh: 0, adcArithmetic: 0, pwmStarted: 0 },
+    adcs: { hadc1: { handle: "hadc1", instance: "ADC1", channels: [] } },
+    program: {
+      operations: [
+        {
+          op: "if",
+          condition: eq(
+            halCall({ op: "adcStart", adc: "hadc1", instance: "ADC1" }),
+            constant("HAL_OK")
+          ),
+          then: [{ op: "assign", target: "adcStarted", value: literal(1) }]
+        },
+        {
+          op: "if",
+          condition: eq(
+            halCall({ op: "gpioRead", pin: "PA1" }, "value"),
+            constant("GPIO_PIN_SET")
+          ),
+          then: [{ op: "assign", target: "gpioHigh", value: literal(1) }]
+        },
+        {
+          op: "if",
+          condition: eq({
+            op: "add",
+            left: halCall({ op: "adcGetValue", adc: "hadc1", instance: "ADC1" }, "value"),
+            right: literal(5)
+          }, literal(2053)),
+          then: [{ op: "assign", target: "adcArithmetic", value: literal(1) }]
+        },
+        {
+          op: "if",
+          condition: eq(
+            halCall({ op: "pwmStart", timer: "htim2", instance: "TIM2", channel: 1, period: 999, frequencyHz: 1000 }),
+            constant("HAL_OK")
+          ),
+          then: [{ op: "assign", target: "pwmStarted", value: literal(1) }]
+        }
+      ]
+    }
+  }, {
+    onAdcStart(event) { adcStarts.push(event); },
+    onAdcRead(event) { adcReads.push(event); return { value: 2048 }; },
+    onGpioRead(event) { gpioReads.push(event); return { value: 1 }; },
+    onPwm(event) { pwmEvents.push(event); }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+
+  assert.equal(state.status, "completed");
+  assert.deepEqual(
+    [state.variables.adcStarted, state.variables.gpioHigh, state.variables.adcArithmetic, state.variables.pwmStarted],
+    [1, 1, 1, 1]
+  );
+  assert.equal(adcStarts.length, 1);
+  assert.equal(adcReads.length, 1);
+  assert.equal(gpioReads.length, 1);
+  assert.equal(pwmEvents.length, 1);
+  assert.equal(state.pwm["TIM2:CH1"].active, true);
+  assert.equal(Object.keys(state.variables).some(name => /^call-\d+$/.test(name)), false, "expression result slots must stay private");
+});
+
+test("conditional expressions execute only the selected HAL branch and preserve blocking", () => {
+  const gpioReads = [];
+  const selectedReceive = AliceFirmwareRuntime.create({
+    variables: { chooseReceive: 1, rx: [0], result: -1 },
+    uarts: { huart2: { handle: "huart2", instance: "USART2" } },
+    program: {
+      operations: [{
+        op: "assign",
+        target: "result",
+        value: {
+          kind: "conditional",
+          condition: variable("chooseReceive"),
+          consequent: halCall({
+            op: "uartReceive", uart: "huart2", instance: "USART2", buffer: "rx", length: literal(1), timeout: literal(10)
+          }),
+          alternate: {
+            kind: "conditional",
+            condition: literal(true),
+            consequent: halCall({ op: "gpioRead", pin: "PA1" }, "value"),
+            alternate: halCall({ op: "gpioRead", pin: "PA2" }, "value")
+          }
+        }
+      }]
+    }
+  }, {
+    onGpioRead(event) { gpioReads.push(event); return { value: 1 }; }
+  });
+
+  selectedReceive.start();
+  let state = selectedReceive.step(0);
+  assert.equal(state.status, "blocked");
+  assert.equal(gpioReads.length, 0, "the alternate HAL call must not run while the receive branch is selected");
+
+  selectedReceive.enqueueUart("USART2", [0x41]);
+  state = selectedReceive.step(0);
+  assert.equal(state.status, "completed");
+  assert.equal(state.variables.result, 0);
+  assert.deepEqual(state.variables.rx, [0x41]);
+
+  const selectedGpio = AliceFirmwareRuntime.create({
+    variables: { chooseReceive: 0, rx: [0], result: -1 },
+    uarts: { huart2: { handle: "huart2", instance: "USART2" } },
+    program: {
+      operations: [{
+        op: "assign",
+        target: "result",
+        value: {
+          kind: "conditional",
+          condition: variable("chooseReceive"),
+          consequent: halCall({
+            op: "uartReceive", uart: "huart2", instance: "USART2", buffer: "rx", length: literal(1), timeout: literal(10)
+          }),
+          alternate: {
+            kind: "conditional",
+            condition: literal(true),
+            consequent: halCall({ op: "gpioRead", pin: "PA1" }, "value"),
+            alternate: halCall({ op: "gpioRead", pin: "PA2" }, "value")
+          }
+        }
+      }]
+    }
+  }, {
+    onGpioRead(event) { gpioReads.push(event); return { value: 1 }; }
+  });
+
+  selectedGpio.start();
+  state = selectedGpio.step(0);
+  assert.equal(state.status, "completed");
+  assert.equal(state.blocked, null);
+  assert.equal(state.variables.result, 1);
+  assert.equal(gpioReads.length, 1, "the GPIO branch must run once when selected");
+  assert.equal(gpioReads[0].pin, "PA1", "nested conditional branches must also short-circuit");
+  assert.equal(Object.keys(state.variables).some(name => /^(?:call|conditional)-\d+$/.test(name)), false);
+});
+
+test("logical-not precedence is preserved around a HAL value expression", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { selected: 0 },
+    adcs: { hadc1: { handle: "hadc1", instance: "ADC1", channels: [] } },
+    program: {
+      operations: [{
+        op: "if",
+        condition: {
+          op: "eq",
+          left: {
+            kind: "logicalNot",
+            value: halCall({ op: "adcGetValue", adc: "hadc1", instance: "ADC1" }, "value")
+          },
+          right: literal(1)
+        },
+        then: [{ op: "assign", target: "selected", value: literal(1) }],
+        else: [{ op: "assign", target: "selected", value: literal(2) }]
+      }]
+    }
+  }, {
+    onAdcRead() { return { value: 2 }; }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.status, "completed");
+  assert.equal(state.variables.selected, 2, "!2 == 1 is false; !(2 == 1) would be true");
+});
+
+test("increment expressions preserve C values in HAL parameters and compound lvalues", () => {
+  const uartTx = [];
+  const adcStarts = [];
+  const adcReads = [];
+  const postIncrement = target => ({ kind: "postIncrement", target });
+  const preIncrement = target => ({ kind: "preIncrement", target });
+  const postDecrement = target => ({ kind: "postDecrement", target });
+  const preDecrement = target => ({ kind: "preDecrement", target });
+  const runtime = AliceFirmwareRuntime.create({
+    variables: {
+      conditionIndex: 1,
+      postLength: 1,
+      preLength: 1,
+      postDecrementLength: 2,
+      preDecrementLength: 3,
+      arrayIndex: 1,
+      samples: [10, 20, 30],
+      tx: [0x41, 0x42, 0x43],
+      pointer: 0,
+      pointerResult: 0,
+      conditionTaken: 0
+    },
+    variableTypes: { pointer: "int*" },
+    adcs: { hadc1: { handle: "hadc1", instance: "ADC1", channels: [] } },
+    uarts: { huart2: { handle: "huart2", instance: "USART2" } },
+    program: {
+      operations: [
+        {
+          op: "if",
+          condition: {
+            op: "and",
+            left: {
+              op: "lt",
+              left: postIncrement(variable("conditionIndex")),
+              right: literal(2)
+            },
+            right: eq(halCall({ op: "adcStart", adc: "hadc1", instance: "ADC1" }), constant("HAL_OK"))
+          },
+          then: [{ op: "assign", target: "conditionTaken", value: literal(1) }]
+        },
+        {
+          op: "uartTransmit",
+          uart: "huart2",
+          instance: "USART2",
+          buffer: "tx",
+          length: postIncrement(variable("postLength")),
+          timeout: literal(0)
+        },
+        {
+          op: "uartTransmit",
+          uart: "huart2",
+          instance: "USART2",
+          buffer: "tx",
+          length: preIncrement(variable("preLength")),
+          timeout: literal(0)
+        },
+        {
+          op: "uartTransmit",
+          uart: "huart2",
+          instance: "USART2",
+          buffer: "tx",
+          length: postDecrement(variable("postDecrementLength")),
+          timeout: literal(0)
+        },
+        {
+          op: "uartTransmit",
+          uart: "huart2",
+          instance: "USART2",
+          buffer: "tx",
+          length: preDecrement(variable("preDecrementLength")),
+          timeout: literal(0)
+        },
+        {
+          op: "compoundAssign",
+          target: {
+            kind: "arrayIndex",
+            name: "samples",
+            index: postIncrement(variable("arrayIndex"))
+          },
+          operator: "add",
+          value: halCall({ op: "adcGetValue", adc: "hadc1", instance: "ADC1" }, "value")
+        },
+        { op: "heapAllocate", function: "malloc", size: literal(4), resultTarget: "pointer" },
+        {
+          op: "assign",
+          target: { kind: "dereference", pointer: variable("pointer") },
+          value: literal(8)
+        },
+        {
+          op: "compoundAssign",
+          target: { kind: "dereference", pointer: variable("pointer") },
+          operator: "add",
+          value: literal(7)
+        },
+        {
+          op: "assign",
+          target: "pointerResult",
+          value: { kind: "dereference", pointer: variable("pointer") }
+        }
+      ]
+    }
+  }, {
+    onAdcStart(event) { adcStarts.push(event); },
+    onAdcRead(event) { adcReads.push(event); return { value: 5 }; },
+    onUartTx(event) { uartTx.push(event); }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+
+  assert.equal(state.status, "completed");
+  assert.equal(state.variables.conditionTaken, 1);
+  assert.equal(state.variables.conditionIndex, 2, "postfix condition uses the old value, then increments once");
+  assert.equal(adcStarts.length, 1, "the right side of && runs after the postfix comparison succeeds");
+  assert.deepEqual(uartTx.map(event => event.bytes), [[0x41], [0x41, 0x42], [0x41, 0x42], [0x41, 0x42]]);
+  assert.equal(state.variables.postLength, 2);
+  assert.equal(state.variables.preLength, 2);
+  assert.equal(state.variables.postDecrementLength, 1);
+  assert.equal(state.variables.preDecrementLength, 2);
+  assert.deepEqual(state.variables.samples, [10, 25, 30], "array index is captured before the RHS HAL call");
+  assert.equal(state.variables.arrayIndex, 2);
+  assert.equal(adcReads.length, 1);
+  assert.equal(state.variables.pointerResult, 15, "dereferenced compound assignment writes back to the pointed value");
+  assert.deepEqual(state.heap.allocations["1"].bytes, [15, 0, 0, 0]);
+});
+
+test("halCall UART receive condition blocks then resumes into the HAL_OK branch", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { rx: [0, 0], success: 0, failure: 0 },
+    uarts: { huart2: { handle: "huart2", instance: "USART2" } },
+    program: {
+      operations: [{
+        op: "if",
+        condition: eq(
+          halCall({
+            op: "uartReceive", uart: "huart2", instance: "USART2", buffer: "rx", length: literal(2), timeout: literal(10)
+          }),
+          constant("HAL_OK")
+        ),
+        then: [{ op: "assign", target: "success", value: literal(1) }],
+        else: [{ op: "assign", target: "failure", value: literal(1) }]
+      }]
+    }
+  });
+
+  runtime.start();
+  let state = runtime.step(0);
+  assert.equal(state.status, "blocked");
+  assert.equal(state.variables.success, 0);
+  assert.equal(state.variables.failure, 0);
+
+  runtime.enqueueUart("USART2", [0x41, 0x42]);
+  state = runtime.step(0);
+
+  assert.equal(state.status, "completed");
+  assert.deepEqual(state.variables.rx, [0x41, 0x42]);
+  assert.equal(state.variables.success, 1);
+  assert.equal(state.variables.failure, 0);
+  assert.equal(Object.keys(state.variables).some(name => /^call-\d+$/.test(name)), false);
+});
+
+test("halCall UART receive condition chooses the timeout branch after its deadline", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { rx: [0, 0], success: 0, failure: 0 },
+    uarts: { huart2: { handle: "huart2", instance: "USART2" } },
+    program: {
+      operations: [{
+        op: "if",
+        condition: eq(
+          halCall({
+            op: "uartReceive", uart: "huart2", instance: "USART2", buffer: "rx", length: literal(2), timeout: "5U"
+          }),
+          constant("HAL_OK")
+        ),
+        then: [{ op: "assign", target: "success", value: literal(1) }],
+        else: [{ op: "assign", target: "failure", value: literal(1) }]
+      }]
+    }
+  });
+
+  runtime.start();
+  let state = runtime.step(0);
+  assert.equal(state.status, "blocked");
+
+  state = runtime.step(5);
+  assert.equal(state.status, "completed");
+  assert.equal(state.timeMs, 5);
+  assert.deepEqual(state.variables.rx, [0, 0]);
+  assert.equal(state.variables.success, 0);
+  assert.equal(state.variables.failure, 1);
+});
+
+test("halCall conditions preserve && and || short circuit side effects", () => {
+  const adcStarts = [];
+  const gpioReads = [];
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { andBranch: 0, orBranch: 0, negatedBranch: 0 },
+    adcs: { hadc1: { handle: "hadc1", instance: "ADC1", channels: [] } },
+    program: {
+      operations: [
+        {
+          op: "if",
+          condition: {
+            op: "and",
+            left: literal(false),
+            right: eq(halCall({ op: "adcStart", adc: "hadc1", instance: "ADC1" }), constant("HAL_OK"))
+          },
+          then: [{ op: "assign", target: "andBranch", value: literal(1) }]
+        },
+        {
+          op: "if",
+          condition: {
+            op: "or",
+            left: literal(true),
+            right: eq(halCall({ op: "gpioRead", pin: "PA1" }, "value"), constant("GPIO_PIN_SET"))
+          },
+          then: [{ op: "assign", target: "orBranch", value: literal(1) }]
+        },
+        {
+          op: "if",
+          condition: {
+            kind: "logicalNot",
+            value: {
+              op: "and",
+              left: literal(false),
+              right: eq(halCall({ op: "adcStart", adc: "hadc1", instance: "ADC1" }), constant("HAL_OK"))
+            }
+          },
+          then: [{ op: "assign", target: "negatedBranch", value: literal(1) }]
+        }
+      ]
+    }
+  }, {
+    onAdcStart(event) { adcStarts.push(event); },
+    onGpioRead(event) { gpioReads.push(event); return { value: 1 }; }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+
+  assert.equal(state.status, "completed");
+  assert.equal(state.variables.andBranch, 0);
+  assert.equal(state.variables.orBranch, 1);
+  assert.equal(state.variables.negatedBranch, 1);
+  assert.equal(adcStarts.length, 0);
+  assert.equal(gpioReads.length, 0);
+});
+
+test("halCall expressions execute once per for check and once for switch dispatch", () => {
+  const gpioReads = [];
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { index: 0, loopBody: 0, selected: 0, stopped: 0 },
+    adcs: { hadc1: { handle: "hadc1", instance: "ADC1", channels: [] } },
+    program: {
+      operations: [
+        {
+          op: "for",
+          init: [{ op: "assign", target: "index", value: literal(0) }],
+          condition: {
+            op: "and",
+            left: { op: "lt", left: variable("index"), right: literal(2) },
+            right: eq(halCall({ op: "gpioRead", pin: "PA1" }, "value"), constant("GPIO_PIN_SET"))
+          },
+          increment: [{
+            op: "assign",
+            target: "index",
+            value: { op: "add", left: variable("index"), right: literal(1) }
+          }],
+          body: [{
+            op: "assign",
+            target: "loopBody",
+            value: { op: "add", left: variable("loopBody"), right: literal(1) }
+          }]
+        },
+        {
+          op: "switch",
+          expression: halCall({ op: "gpioRead", pin: "PA2" }, "value"),
+          entries: [
+            {
+              value: literal(1),
+              body: [
+                { op: "assign", target: "selected", value: literal(1) },
+                { op: "break" }
+              ]
+            },
+            { default: true, body: [{ op: "assign", target: "selected", value: literal(2) }] }
+          ]
+        },
+        {
+          op: "if",
+          condition: eq(halCall({ op: "adcStop", adc: "hadc1", instance: "ADC1" }), constant("HAL_OK")),
+          then: [{ op: "assign", target: "stopped", value: literal(1) }]
+        }
+      ]
+    }
+  }, {
+    onGpioRead(event) {
+      gpioReads.push(event.pin);
+      return { value: 1 };
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+
+  assert.equal(state.status, "completed");
+  assert.equal(state.variables.loopBody, 2);
+  assert.equal(state.variables.selected, 1);
+  assert.equal(state.variables.stopped, 1);
+  assert.deepEqual(gpioReads, ["PA1", "PA1", "PA2"]);
+  assert.equal(state.adc.ADC1.started, false);
+});
+
+test("halCall values lower before assignments and return statements", () => {
+  const starts = [];
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { statusPlusOne: 0 },
+    adcs: { hadc1: { handle: "hadc1", instance: "ADC1", channels: [] } },
+    program: {
+      operations: [
+        {
+          op: "assign",
+          target: "statusPlusOne",
+          value: {
+            op: "add",
+            left: halCall({ op: "adcStart", adc: "hadc1", instance: "ADC1" }),
+            right: literal(1)
+          }
+        },
+        { op: "return", value: halCall({ op: "adcStop", adc: "hadc1", instance: "ADC1" }) }
+      ]
+    }
+  }, {
+    onAdcStart(event) { starts.push(event); }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+
+  assert.equal(state.status, "completed");
+  assert.equal(state.variables.statusPlusOne, 1);
+  assert.equal(state.returnValue, 0);
+  assert.equal(starts.length, 1);
+  assert.equal(state.adc.ADC1.started, false);
+});
+
+test("value helpers lower before HAL delay and UART transfer arguments", () => {
+  const uartTx = [];
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { tx: [0x41, 0x42, 0x43] },
+    uarts: { huart2: { handle: "huart2", instance: "USART2" } },
+    program: {
+      operations: [
+        {
+          op: "delay",
+          milliseconds: null,
+          expression: inlineCall([{ op: "return", value: literal(5) }])
+        },
+        {
+          op: "uartTransmit",
+          uart: "huart2",
+          instance: "USART2",
+          buffer: "tx",
+          length: inlineCall([{ op: "return", value: literal(2) }]),
+          timeout: literal(10)
+        }
+      ]
+    }
+  }, {
+    onUartTx(event) { uartTx.push(event); }
+  });
+
+  runtime.start();
+  let state = runtime.step(0);
+  assert.equal(state.status, "sleeping");
+  assert.equal(state.sleepUntil, 5);
+
+  state = runtime.step(5);
+  assert.equal(state.status, "completed");
+  assert.deepEqual(uartTx.map(event => event.bytes), [[0x41, 0x42]]);
+  assert.equal(Object.keys(state.variables).some(name => /^inline-\d+$/.test(name)), false);
+});
+
 test("ADC UART and timer interrupt APIs complete asynchronously and execute callbacks", () => {
   const uartTx = [];
   const runtime = AliceFirmwareRuntime.create({
@@ -597,6 +1178,135 @@ test("ADC UART and timer interrupt APIs complete asynchronously and execute call
   state = runtime.step(18);
   assert.equal(state.variables.txDone, 1);
   assert.equal(state.variables.timerTicks, 2);
+});
+
+test("fatal firmware callback failures stop and fault the parent runtime", () => {
+  const callbackName = "HAL_TIM_PeriodElapsedCallback";
+  const source = { file: "Core/Src/stm32f1xx_it.c", line: 42, column: 3 };
+  const cases = [
+    {
+      name: "Error_Handler",
+      operations: [{ op: "fault", message: "Firmware entered Error_Handler()", source }],
+      status: "error",
+      code: "RUNTIME_ERROR",
+      message: /Error_Handler/
+    },
+    {
+      name: "unsupported expression",
+      operations: [{ op: "assign", target: "value", value: { kind: "mysteryExpression", text: "__WFI()" }, source }],
+      status: "error",
+      code: "RUNTIME_ERROR",
+      message: /Unsupported firmware expression.*__WFI/
+    },
+    {
+      name: "unsupported operation",
+      operations: [{ op: "mysteryOperation", statement: "custom_instruction();", source }],
+      status: "error",
+      code: "RUNTIME_ERROR",
+      message: /Unsupported firmware operation.*custom_instruction/
+    },
+    {
+      name: "operation budget",
+      operations: [{ op: "while", condition: literal(true), body: [{ op: "assign", target: "spin", value: literal(1), source }], source }],
+      status: "budget-exceeded",
+      code: "OPERATION_BUDGET_EXCEEDED",
+      message: /operations without yielding/
+    }
+  ];
+
+  for (const scenario of cases) {
+    const runtime = AliceFirmwareRuntime.create({
+      maxOperationsPerStep: 12,
+      timers: { htim2: { handle: "htim2", instance: "TIM2", frequencyHz: 1000 } },
+      callbacks: { [callbackName]: { operations: scenario.operations } },
+      program: {
+        operations: [
+          { op: "timerStartIt", timer: "htim2", instance: "TIM2", frequencyHz: 1000 },
+          { op: "while", condition: literal(true), body: [{ op: "delay", milliseconds: 100 }] }
+        ]
+      }
+    });
+
+    runtime.start();
+    runtime.step(0);
+    const state = runtime.step(1);
+    assert.equal(state.status, scenario.status, scenario.name);
+    assert.equal(state.running, false, scenario.name);
+    assert.equal(state.error && state.error.code, scenario.code, scenario.name);
+    assert.equal(state.error && state.error.callback, callbackName, scenario.name);
+    assert.match(state.error && state.error.message, scenario.message, scenario.name);
+    assert.deepEqual(state.error && state.error.source, source, scenario.name);
+    assert.equal(runtime.step(100).time, 1, scenario.name + " must stop simulated time");
+  }
+});
+
+test("I2C and SPI abort IT cancel active interrupt and DMA transfers", () => {
+  const cases = [
+    {
+      name: "I2C interrupt",
+      bus: "i2c",
+      start: { op: "i2cMasterTransmitIt", i2c: "hi2c1", instance: "I2C1", deviceAddress: 0x78, buffer: "tx", length: 4 },
+      abort: { op: "i2cAbortIt", i2c: "hi2c1", instance: "I2C1", deviceAddress: 0x78, resultTarget: "abortStatus" },
+      abortCallback: "HAL_I2C_AbortCpltCallback",
+      completionCallback: "HAL_I2C_MasterTxCpltCallback",
+      history: "interrupts"
+    },
+    {
+      name: "I2C DMA",
+      bus: "i2c",
+      start: { op: "i2cMasterTransmitDma", i2c: "hi2c1", instance: "I2C1", deviceAddress: 0x78, buffer: "tx", length: 4 },
+      abort: { op: "i2cAbortIt", i2c: "hi2c1", instance: "I2C1", deviceAddress: 0x78, resultTarget: "abortStatus" },
+      abortCallback: "HAL_I2C_AbortCpltCallback",
+      completionCallback: "HAL_I2C_MasterTxCpltCallback",
+      history: "dma"
+    },
+    {
+      name: "SPI interrupt",
+      bus: "spi",
+      start: { op: "spiTransmitIt", spi: "hspi1", instance: "SPI1", buffer: "tx", length: 4 },
+      abort: { op: "spiAbortIt", spi: "hspi1", instance: "SPI1", resultTarget: "abortStatus" },
+      abortCallback: "HAL_SPI_AbortCpltCallback",
+      completionCallback: "HAL_SPI_TxCpltCallback",
+      history: "interrupts"
+    },
+    {
+      name: "SPI DMA",
+      bus: "spi",
+      start: { op: "spiTransmitDma", spi: "hspi1", instance: "SPI1", buffer: "tx", length: 4 },
+      abort: { op: "spiAbortIt", spi: "hspi1", instance: "SPI1", resultTarget: "abortStatus" },
+      abortCallback: "HAL_SPI_AbortCpltCallback",
+      completionCallback: "HAL_SPI_TxCpltCallback",
+      history: "dma"
+    }
+  ];
+
+  for (const scenario of cases) {
+    const busEvents = [];
+    const runtime = AliceFirmwareRuntime.create({
+      variables: { tx: [1, 2, 3, 4], abortStatus: -1, abortDone: 0, transferDone: 0 },
+      i2cs: { hi2c1: { handle: "hi2c1", instance: "I2C1", clockSpeed: 1000 } },
+      spis: { hspi1: { handle: "hspi1", instance: "SPI1", baudRate: 1000 } },
+      callbacks: {
+        [scenario.abortCallback]: { operations: [{ op: "assign", target: "abortDone", value: literal(1) }] },
+        [scenario.completionCallback]: { operations: [{ op: "assign", target: "transferDone", value: literal(1) }] }
+      },
+      program: { operations: [scenario.start, scenario.abort, { op: "delay", milliseconds: 100 }] }
+    }, {
+      onI2cTx(event) { if (scenario.bus === "i2c") busEvents.push(event); return { accepted: true }; },
+      onSpiTx(event) { if (scenario.bus === "spi") busEvents.push(event); return { accepted: true }; }
+    });
+
+    runtime.start();
+    const state = runtime.step(100);
+    assert.equal(state.status, "completed", scenario.name);
+    assert.equal(state.variables.abortStatus, 0, scenario.name);
+    assert.equal(state.variables.abortDone, 1, scenario.name);
+    assert.equal(state.variables.transferDone, 0, scenario.name);
+    assert.equal(state.interrupts.events.some(event => event.active && event.bus === scenario.bus), false, scenario.name);
+    assert.equal(state.dma.transfers.some(transfer => transfer.active && transfer.bus === scenario.bus), false, scenario.name);
+    assert.equal(state[scenario.history].history.some(event => event.phase === "stopped"), true, scenario.name);
+    assert.deepEqual(busEvents.map(event => event.kind), ["abort"], scenario.name);
+  }
 });
 
 test("GPIO EXTI callbacks honor configured edges and callback parameter names", () => {
@@ -952,6 +1662,89 @@ test("UART DMA uses baud timing for TX and incoming bytes for RX callbacks", () 
   ]);
 });
 
+test("UART IT and DMA receive honor address and offset buffer expressions", () => {
+  const addressOf = (value) => ({ kind: "addressOf", value });
+  const arrayElement = (name, index) => ({ kind: "arrayIndex", name, index: literal(index) });
+
+  const interruptRuntime = AliceFirmwareRuntime.create({
+    variableTypes: { storage: "uint8_t" },
+    variables: { storage: [0, 0, 0, 0] },
+    program: {
+      operations: [
+        {
+          op: "uartReceiveIt",
+          uart: "huart2",
+          instance: "USART2",
+          buffer: addressOf(arrayElement("storage", 1)),
+          length: literal(2)
+        },
+        { op: "delay", milliseconds: literal(1) }
+      ]
+    }
+  });
+  interruptRuntime.start();
+  interruptRuntime.step(0);
+  interruptRuntime.enqueueUart("USART2", [0x41]);
+  let state = interruptRuntime.enqueueUart("USART2", [0x42]);
+  assert.deepEqual(state.variables.storage, [0, 0x41, 0x42, 0]);
+
+  const dmaRuntime = AliceFirmwareRuntime.create({
+    variableTypes: { storage: "uint8_t", rx: "uint8_t*" },
+    variables: {
+      storage: [0, 0, 0, 0],
+      rx: { __alicePointer: "variable", name: "storage", offset: 1, elementSize: 1, pointeeType: "uint8_t", unsigned: true }
+    },
+    callbacks: {
+      HAL_UART_RxCpltCallback: { operations: [{ op: "assign", target: "done", value: literal(1) }] }
+    },
+    program: {
+      operations: [
+        { op: "uartReceiveDma", uart: "huart2", instance: "USART2", buffer: "rx", length: literal(2) },
+        { op: "delay", milliseconds: literal(1) }
+      ]
+    }
+  });
+  // Callback variables are intentionally allowed to be introduced by the
+  // model, matching the existing ad-hoc test fixtures.
+  dmaRuntime.start();
+  dmaRuntime.step(0);
+  dmaRuntime.enqueueUart("USART2", [0x43]);
+  state = dmaRuntime.enqueueUart("USART2", [0x44]);
+  assert.deepEqual(state.variables.storage, [0, 0x43, 0x44, 0]);
+  assert.equal(state.variables.done, 1);
+});
+
+test("ADC DMA writes through typed pointer and address-of offset buffers", () => {
+  const makeModel = (buffer, variables) => ({
+    variableTypes: { storage: "uint16_t", samples: "uint16_t*" },
+    variables,
+    adcs: { hadc1: { handle: "hadc1", instance: "ADC1", samplePeriodMs: 1 } },
+    program: {
+      operations: [
+        { op: "adcStartDma", adc: "hadc1", instance: "ADC1", buffer, length: literal(2) },
+        { op: "delay", milliseconds: literal(10) }
+      ]
+    }
+  });
+  const sampleHook = (event) => ({ value: event.sampleIndex ? 0x5678 : 0x1234 });
+
+  let runtime = AliceFirmwareRuntime.create(makeModel("samples", {
+    storage: [0, 0, 0, 0],
+    samples: { __alicePointer: "variable", name: "storage", offset: 2, elementSize: 2, pointeeType: "uint16_t", unsigned: true }
+  }), { onAdcRead: sampleHook });
+  runtime.start();
+  let state = runtime.step(2);
+  assert.deepEqual(state.variables.storage, [0, 0x1234, 0x5678, 0]);
+
+  runtime = AliceFirmwareRuntime.create(makeModel({
+    kind: "addressOf",
+    value: { kind: "arrayIndex", name: "storage", index: literal(1) }
+  }, { storage: [9, 0, 0, 9] }), { onAdcRead: sampleHook });
+  runtime.start();
+  state = runtime.step(2);
+  assert.deepEqual(state.variables.storage, [9, 0x1234, 0x5678, 9]);
+});
+
 test("HAL SPI transmit forwards exact bytes to a schematic display hook", () => {
   const spiTx = [];
   const runtime = AliceFirmwareRuntime.create({
@@ -976,6 +1769,123 @@ test("HAL SPI transmit forwards exact bytes to a schematic display hook", () => 
   assert.deepEqual(spiTx[0].bytes, [0xf8, 0x00, 0x07, 0xe0]);
   assert.equal(state.spiTx.length, 1);
   assert.equal(state.spiTx[0].accepted, true);
+});
+
+test("HAL I2C and SPI receive operations write verified device bytes and preserve read metadata", () => {
+  const i2cReads = [];
+  const spiReads = [];
+  const runtime = AliceFirmwareRuntime.create({
+    variables: {
+      master: [0, 0],
+      register: [0, 0, 0],
+      spi: [0, 0],
+      masterStatus: -1,
+      registerStatus: -1,
+      spiStatus: -1
+    },
+    i2cs: { hi2c1: { handle: "hi2c1", instance: "I2C1" } },
+    spis: { hspi1: { handle: "hspi1", instance: "SPI1" } },
+    program: {
+      operations: [
+        { op: "i2cMasterReceive", i2c: "hi2c1", instance: "I2C1", deviceAddress: 0x76, buffer: "master", length: 2, timeout: 10, resultTarget: "masterStatus" },
+        { op: "i2cMemRead", i2c: "hi2c1", instance: "I2C1", deviceAddress: 0x76, memoryAddress: 0xd0, memoryAddressSize: 1, buffer: "register", length: 3, timeout: 10, resultTarget: "registerStatus" },
+        { op: "spiReceive", spi: "hspi1", instance: "SPI1", buffer: "spi", length: 2, timeout: 10, resultTarget: "spiStatus" }
+      ]
+    }
+  }, {
+    onI2cRx(event) {
+      i2cReads.push(event);
+      return event.kind === "masterReceive"
+        ? { accepted: true, bytes: [0x12, 0x34] }
+        : { accepted: true, bytes: [0x58, 0x00, 0x01] };
+    },
+    onSpiRx(event) {
+      spiReads.push(event);
+      return { accepted: true, bytes: [0xef, 0x40] };
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.status, "completed");
+  assert.deepEqual(state.variables.master, [0x12, 0x34]);
+  assert.deepEqual(state.variables.register, [0x58, 0x00, 0x01]);
+  assert.deepEqual(state.variables.spi, [0xef, 0x40]);
+  assert.equal(state.variables.masterStatus, 0);
+  assert.equal(state.variables.registerStatus, 0);
+  assert.equal(state.variables.spiStatus, 0);
+  assert.equal(i2cReads.length, 2);
+  assert.equal(i2cReads[1].memoryAddress, 0xd0);
+  assert.equal(i2cReads[1].memoryAddressSize, 1);
+  assert.equal(spiReads.length, 1);
+  assert.deepEqual(state.i2cRx.map(event => event.kind), ["masterReceive", "memRead"]);
+  assert.deepEqual(state.i2cRx[1].bytes, [0x58, 0x00, 0x01]);
+  assert.deepEqual(state.spiRx[0].bytes, [0xef, 0x40]);
+});
+
+test("HAL bus receive rejects missing or short device responses without overwriting firmware buffers", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { i2cBuffer: [9, 9], spiBuffer: [8, 8], i2cStatus: -1, spiStatus: -1 },
+    program: {
+      operations: [
+        { op: "i2cMasterReceive", i2c: "hi2c1", instance: "I2C1", deviceAddress: 0x76, buffer: "i2cBuffer", length: 2, resultTarget: "i2cStatus" },
+        { op: "spiReceive", spi: "hspi1", instance: "SPI1", buffer: "spiBuffer", length: 2, resultTarget: "spiStatus" }
+      ]
+    }
+  }, {
+    onI2cRx() { return { accepted: false, reason: "not-connected" }; },
+    onSpiRx() { return { accepted: true, bytes: [0x55] }; }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.status, "completed");
+  assert.equal(state.variables.i2cStatus, 1);
+  assert.equal(state.variables.spiStatus, 1);
+  assert.deepEqual(state.variables.i2cBuffer, [9, 9]);
+  assert.deepEqual(state.variables.spiBuffer, [8, 8]);
+  assert.equal(state.i2cRx[0].reason, "not-connected");
+  assert.equal(state.spiRx[0].reason, "short-read");
+});
+
+test("HAL bus receive status calls can control firmware branches without duplicate reads", () => {
+  let i2cCalls = 0;
+  let spiCalls = 0;
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { i2cBuffer: [0], spiBuffer: [0], i2cBranch: 0, spiBranch: 0 },
+    program: {
+      operations: [
+        {
+          op: "if",
+          condition: eq(
+            halCall({ op: "i2cMasterReceive", i2c: "hi2c1", instance: "I2C1", deviceAddress: 0x23, buffer: "i2cBuffer", length: 1 }),
+            constant("HAL_OK")
+          ),
+          then: [{ op: "assign", target: "i2cBranch", value: literal(1) }]
+        },
+        {
+          op: "if",
+          condition: eq(
+            halCall({ op: "spiReceive", spi: "hspi1", instance: "SPI1", buffer: "spiBuffer", length: 1 }),
+            constant("HAL_OK")
+          ),
+          then: [{ op: "assign", target: "spiBranch", value: literal(1) }]
+        }
+      ]
+    }
+  }, {
+    onI2cRx() { i2cCalls += 1; return { accepted: true, bytes: [0x5a] }; },
+    onSpiRx() { spiCalls += 1; return { accepted: true, bytes: [0xa5] }; }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.variables.i2cBranch, 1);
+  assert.equal(state.variables.spiBranch, 1);
+  assert.deepEqual(state.variables.i2cBuffer, [0x5a]);
+  assert.deepEqual(state.variables.spiBuffer, [0xa5]);
+  assert.equal(i2cCalls, 1);
+  assert.equal(spiCalls, 1);
 });
 
 test("AliceSIM high-level OLED and light sensor drivers reach the same I2C, ADC and GPIO hooks", () => {
@@ -1130,6 +2040,161 @@ test("snprintf formatting writes decimal millivolts and strlen drives UART lengt
   assert.equal(state.variables.report_length, uart[0].bytes.length);
 });
 
+test("snprintf writes to addressed array offsets without changing the prefix", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variableTypes: { line: "char" },
+    variables: { line: [88, 88, 88, 0, 0, 0, 0, 0] },
+    program: {
+      operations: [{
+        op: "formatString",
+        buffer: {
+          kind: "addressOf",
+          value: { kind: "arrayIndex", name: "line", index: literal(3) }
+        },
+        capacity: literal(5),
+        format: { kind: "string", value: "%s" },
+        arguments: [{ kind: "string", value: "ADC" }]
+      }]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.status, "completed");
+  assert.deepEqual(state.variables.line, [88, 88, 88, 65, 68, 67, 0, 0]);
+});
+
+test("printf formatting preserves non-finite values and emits C hex floats", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { line: new Array(128).fill(0) },
+    program: {
+      operations: [{
+        op: "formatString",
+        buffer: "line",
+        capacity: literal(128),
+        format: { kind: "string", value: "%f %+F %08g %.3a %.2A %#.0a %.1a" },
+        arguments: [literal(NaN), literal(Infinity), literal(-Infinity), literal(1.5), literal(0.1), literal(1), literal(Number.MAX_VALUE)]
+      }]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  const length = state.variables.line.indexOf(0);
+  assert.equal(state.status, "completed", JSON.stringify(state.error));
+  assert.equal(Buffer.from(state.variables.line.slice(0, length)).toString(), "nan +INF     -inf 0x1.800p+0 0X1.9AP-4 0x1.p+0 0x1.0p+1024");
+});
+
+test("printf pointer formatting is deterministic and preserves Alice pointer offsets", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    heapBytes: 16,
+    variableTypes: { heap: "char*", storage: "char" },
+    variables: {
+      heap: 0,
+      storage: [1, 2, 3, 4],
+      line: new Array(128).fill(0)
+    },
+    program: {
+      operations: [
+        { op: "heapAllocate", function: "malloc", size: literal(4), resultTarget: "heap" },
+        {
+          op: "formatString",
+          buffer: "line",
+          capacity: literal(128),
+          format: { kind: "string", value: "%p %p %p %p %p" },
+          arguments: [
+            { kind: "addressOf", value: { kind: "arrayIndex", name: "storage", index: literal(0) } },
+            { kind: "addressOf", value: { kind: "arrayIndex", name: "storage", index: literal(2) } },
+            variable("heap"),
+            variable("heap"),
+            literal(0)
+          ]
+        }
+      ]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  const length = state.variables.line.indexOf(0);
+  const pointers = Buffer.from(state.variables.line.slice(0, length)).toString().split(" ");
+  assert.equal(state.status, "completed", JSON.stringify(state.error));
+  assert.match(pointers[0], /^0x2[0-9a-f]{7}$/);
+  assert.equal(Number.parseInt(pointers[1], 16) - Number.parseInt(pointers[0], 16), 2);
+  assert.match(pointers[2], /^0x3[0-9a-f]{7}$/);
+  assert.equal(pointers[2], pointers[3]);
+  assert.equal(pointers[4], "0x0");
+});
+
+test("printf integer widths, zero precision and alternate octal follow STM32 C rules", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { line: new Array(128).fill(0) },
+    program: {
+      operations: [{
+        op: "formatString",
+        buffer: "line",
+        capacity: literal(128),
+        format: { kind: "string", value: "%hhu %hhd %hu %hd %ld %zu %llu %.0u %#.0o %#.3o" },
+        arguments: [257, 255, 65537, 65535, -1, 42, -1, 0, 0, 1].map(literal)
+      }]
+    }
+  });
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.status, "completed", JSON.stringify(state.error));
+  assert.equal(Buffer.from(state.variables.line.slice(0, state.variables.line.indexOf(0))).toString(),
+    "1 -1 1 -1 -1 42 18446744073709551615  0 001");
+});
+
+test("snprintf respects fixed array bounds and returns the untruncated length", () => {
+  for (const [capacity, expectedStatus, expectedBytes] of [
+    [0, "completed", [88, 88, 88, 88]],
+    [4, "completed", [72, 69, 76, 0]],
+    [8, "error", [88, 88, 88, 88]]
+  ]) {
+    const runtime = AliceFirmwareRuntime.create({
+      variables: { line: [88, 88, 88, 88], result: -1 },
+      program: { operations: [{
+        op: "formatString", buffer: "line", capacity: literal(capacity),
+        format: { kind: "string", value: "HELLO" }, arguments: [], resultTarget: "result"
+      }] }
+    });
+    runtime.start();
+    const state = runtime.step(0);
+    assert.equal(state.status, expectedStatus, JSON.stringify(state.error));
+    assert.deepEqual(state.variables.line, expectedBytes);
+    if (expectedStatus === "completed") assert.equal(state.variables.result, 5);
+    else assert.match(state.error.message, /out of bounds/);
+  }
+});
+
+test("printf rejects unknown, unsupported and incomplete conversions", () => {
+  for (const [format, expected] of [
+    ["value=%q", /Unsupported printf conversion: %q/],
+    ["count=%n", /Unsupported printf conversion: %n/],
+    ["wide=%ls", /Unsupported printf conversion: %ls/],
+    ["trailing%", /Incomplete printf conversion/]
+  ]) {
+    const runtime = AliceFirmwareRuntime.create({
+      variables: { line: new Array(32).fill(0) },
+      program: {
+        operations: [{
+          op: "formatString",
+          buffer: "line",
+          capacity: literal(32),
+          format: { kind: "string", value: format },
+          arguments: [literal(1)]
+        }]
+      }
+    });
+
+    runtime.start();
+    const state = runtime.step(0);
+    assert.equal(state.status, "error");
+    assert.match(state.error.message, expected);
+  }
+});
+
 test("C floating literals, casts and division preserve ADC millivolt decimals", () => {
   const runtime = AliceFirmwareRuntime.create({
     variables: { raw: 2048, millivolts: 0, line: new Array(32).fill(0) },
@@ -1250,6 +2315,467 @@ test("stdio string stdlib and heap operations preserve C behavior", () => {
   assert.equal(state.heap.peakBytes, 4);
 });
 
+test("bounded string inspection reads raw bytes only until its C stopping point", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    heapBytes: 8,
+    variableTypes: {
+      terminated: "char*",
+      unterminated: "char*"
+    },
+    variables: {
+      highLeft: [0x80, 0],
+      highRight: [0x81, 0],
+      oneByteLeft: [0x41],
+      oneByteRight: [0x41],
+      terminated: 0,
+      unterminated: 0,
+      rawCompare: 0,
+      earlyCompare: 0,
+      oneByteCompare: 1,
+      terminatedLength: 0,
+      boundedLength: 0
+    },
+    program: {
+      operations: [
+        { op: "assign", target: "rawCompare", value: { kind: "libcCall", function: "strcmp", arguments: [variable("highLeft"), variable("highRight")] } },
+        { op: "assign", target: "earlyCompare", value: { kind: "libcCall", function: "strncmp", arguments: [variable("highLeft"), variable("highRight"), literal(32)] } },
+        { op: "assign", target: "oneByteCompare", value: { kind: "libcCall", function: "strncmp", arguments: [variable("oneByteLeft"), variable("oneByteRight"), literal(1)] } },
+        { op: "heapAllocate", function: "malloc", size: literal(2), resultTarget: "terminated" },
+        { op: "assign", target: { kind: "dereference", pointer: variable("terminated") }, value: literal(0x41) },
+        { op: "assign", target: { kind: "dereference", pointer: { kind: "add", left: variable("terminated"), right: literal(1) } }, value: literal(0) },
+        { op: "assign", target: "terminatedLength", value: { kind: "libcCall", function: "strnlen", arguments: [variable("terminated"), literal(100)] } },
+        { op: "heapAllocate", function: "malloc", size: literal(2), resultTarget: "unterminated" },
+        { op: "assign", target: { kind: "dereference", pointer: variable("unterminated") }, value: literal(0x42) },
+        { op: "assign", target: { kind: "dereference", pointer: { kind: "add", left: variable("unterminated"), right: literal(1) } }, value: literal(0x43) },
+        { op: "assign", target: "boundedLength", value: { kind: "libcCall", function: "strnlen", arguments: [variable("unterminated"), literal(2)] } }
+      ]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+
+  assert.equal(state.status, "completed", JSON.stringify(state.error));
+  assert.ok(state.variables.rawCompare < 0);
+  assert.ok(state.variables.earlyCompare < 0);
+  assert.equal(state.variables.oneByteCompare, 0);
+  assert.equal(state.variables.terminatedLength, 1);
+  assert.equal(state.variables.boundedLength, 2);
+});
+
+test("strncpy and strncat honor bounded non-terminated sources and C padding", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    heapBytes: 8,
+    variableTypes: {
+      copySource: "char*",
+      concatSource: "char*"
+    },
+    variables: {
+      copySource: 0,
+      concatSource: 0,
+      copied: new Array(5).fill(0x55),
+      padded: new Array(5).fill(0x55),
+      combined: [0x58, 0, 0x55, 0x55, 0x55]
+    },
+    program: {
+      operations: [
+        { op: "heapAllocate", function: "malloc", size: literal(3), resultTarget: "copySource" },
+        { op: "assign", target: { kind: "dereference", pointer: variable("copySource") }, value: literal(0x41) },
+        { op: "assign", target: { kind: "dereference", pointer: { kind: "add", left: variable("copySource"), right: literal(1) } }, value: literal(0x42) },
+        { op: "assign", target: { kind: "dereference", pointer: { kind: "add", left: variable("copySource"), right: literal(2) } }, value: literal(0x43) },
+        { op: "libcMemory", function: "strncpy", arguments: [variable("copied"), variable("copySource"), literal(3)] },
+        { op: "libcMemory", function: "strncpy", arguments: [variable("padded"), { kind: "string", value: "A" }, literal(4)] },
+        { op: "heapAllocate", function: "malloc", size: literal(2), resultTarget: "concatSource" },
+        { op: "assign", target: { kind: "dereference", pointer: variable("concatSource") }, value: literal(0x59) },
+        { op: "assign", target: { kind: "dereference", pointer: { kind: "add", left: variable("concatSource"), right: literal(1) } }, value: literal(0x5a) },
+        { op: "libcMemory", function: "strncat", arguments: [variable("combined"), variable("concatSource"), literal(2)] }
+      ]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+
+  assert.equal(state.status, "completed", JSON.stringify(state.error));
+  assert.deepEqual(state.variables.copied, [0x41, 0x42, 0x43, 0x55, 0x55]);
+  assert.deepEqual(state.variables.padded, [0x41, 0, 0, 0, 0x55]);
+  assert.deepEqual(state.variables.combined, [0x58, 0x59, 0x5a, 0, 0x55]);
+});
+
+test("declared math and string helpers execute with C-compatible results", () => {
+  const source = Array.from(Buffer.from("alpha,beta;gamma\0"));
+  const runtime = AliceFirmwareRuntime.create({
+    variableTypes: {
+      source: "char",
+      found: "char*",
+      token1: "char*",
+      token2: "char*",
+      token3: "char*",
+      token4: "char*",
+      message: "char*",
+      integerEnd: "char*",
+      floatEnd: "char*",
+      exponent: "int",
+      integral: "double",
+      nanValue: "double",
+      negativeZero: "double",
+      infiniteValue: "float",
+      heapFloat: "float*",
+      heapNan: "float",
+      piMacro: "double",
+      eofMacro: "int",
+      randMaxMacro: "int"
+    },
+    variables: {
+      source,
+      found: 0,
+      foundByte: 0,
+      token1: 0,
+      token2: 0,
+      token3: 0,
+      token4: 1,
+      firstMatches: 1,
+      secondMatches: 1,
+      thirdMatches: 1,
+      message: 0,
+      messageMatches: 1,
+      integerEnd: 0,
+      floatEnd: 0,
+      parsedOctal: 0,
+      parseTail: 0,
+      parsedFloat: 0,
+      floatTail: 0,
+      eofUpper: 0,
+      highByteUpper: 0,
+      highByteSpace: 1,
+      ceiling: 0,
+      floatingDivision: 0,
+      hyperbolic: 0,
+      powerOfTwo: 0,
+      binaryLog: 0,
+      cubeRoot: 0,
+      nearbyEven: 0,
+      rintEven: 0,
+      roundedAway: 0,
+      ieeeRemainder: 0,
+      exponent: 0,
+      fraction: 0,
+      integral: 0,
+      fractional: 0,
+      nanValue: 0,
+      negativeZero: 0,
+      infiniteValue: 0,
+      heapFloat: 0,
+      heapNan: 0,
+      piMacro: 0,
+      eofMacro: 0,
+      randMaxMacro: 0
+    },
+    program: {
+      operations: [
+        { op: "assign", target: "found", value: { kind: "libcCall", function: "memchr", arguments: [variable("source"), literal("p".charCodeAt(0)), literal(source.length)] } },
+        { op: "assign", target: "foundByte", value: { kind: "dereference", pointer: variable("found") } },
+        { op: "assign", target: "token1", value: { kind: "libcCall", function: "strtok", arguments: [variable("source"), { kind: "string", value: ",;" }] } },
+        { op: "assign", target: "token2", value: { kind: "libcCall", function: "strtok", arguments: [literal(0), { kind: "string", value: ",;" }] } },
+        { op: "assign", target: "token3", value: { kind: "libcCall", function: "strtok", arguments: [literal(0), { kind: "string", value: ",;" }] } },
+        { op: "assign", target: "token4", value: { kind: "libcCall", function: "strtok", arguments: [literal(0), { kind: "string", value: ",;" }] } },
+        { op: "assign", target: "firstMatches", value: { kind: "libcCall", function: "strcmp", arguments: [variable("token1"), { kind: "string", value: "alpha" }] } },
+        { op: "assign", target: "secondMatches", value: { kind: "libcCall", function: "strcmp", arguments: [variable("token2"), { kind: "string", value: "beta" }] } },
+        { op: "assign", target: "thirdMatches", value: { kind: "libcCall", function: "strcmp", arguments: [variable("token3"), { kind: "string", value: "gamma" }] } },
+        { op: "assign", target: "message", value: { kind: "libcCall", function: "strerror", arguments: [literal(22)] } },
+        { op: "assign", target: "messageMatches", value: { kind: "libcCall", function: "strcmp", arguments: [variable("message"), { kind: "string", value: "Invalid argument" }] } },
+        { op: "assign", target: "parsedOctal", value: { kind: "libcCall", function: "strtol", arguments: [{ kind: "string", value: " 010tail" }, { kind: "addressOf", value: variable("integerEnd") }, literal(0)] } },
+        { op: "assign", target: "parseTail", value: { kind: "dereference", pointer: variable("integerEnd") } },
+        { op: "assign", target: "parsedFloat", value: { kind: "libcCall", function: "strtof", arguments: [{ kind: "string", value: "1.5V" }, { kind: "addressOf", value: variable("floatEnd") }] } },
+        { op: "assign", target: "floatTail", value: { kind: "dereference", pointer: variable("floatEnd") } },
+        { op: "assign", target: "eofUpper", value: { kind: "libcCall", function: "toupper", arguments: [literal(-1)] } },
+        { op: "assign", target: "highByteUpper", value: { kind: "libcCall", function: "toupper", arguments: [literal(0xe0)] } },
+        { op: "assign", target: "highByteSpace", value: { kind: "libcCall", function: "isspace", arguments: [literal(0xa0)] } },
+        { op: "assign", target: "ceiling", value: { kind: "libcCall", function: "ceil", arguments: [literal(1.2)] } },
+        { op: "assign", target: "floatingDivision", value: { kind: "div", left: { kind: "libcCall", function: "hypot", arguments: [literal(3), literal(4)] }, right: literal(2) } },
+        { op: "assign", target: "hyperbolic", value: { kind: "libcCall", function: "cosh", arguments: [literal(0)] } },
+        { op: "assign", target: "powerOfTwo", value: { kind: "libcCall", function: "exp2", arguments: [literal(3)] } },
+        { op: "assign", target: "binaryLog", value: { kind: "libcCall", function: "log2", arguments: [literal(8)] } },
+        { op: "assign", target: "cubeRoot", value: { kind: "libcCall", function: "cbrt", arguments: [literal(27)] } },
+        { op: "assign", target: "nearbyEven", value: { kind: "libcCall", function: "nearbyint", arguments: [literal(2.5)] } },
+        { op: "assign", target: "rintEven", value: { kind: "libcCall", function: "rint", arguments: [literal(3.5)] } },
+        { op: "assign", target: "roundedAway", value: { kind: "libcCall", function: "round", arguments: [literal(-1.5)] } },
+        { op: "assign", target: "ieeeRemainder", value: { kind: "libcCall", function: "remainder", arguments: [literal(7), literal(2)] } },
+        { op: "assign", target: "fraction", value: { kind: "libcCall", function: "frexp", arguments: [literal(8), { kind: "addressOf", value: variable("exponent") }] } },
+        { op: "assign", target: "fractional", value: { kind: "libcCall", function: "modf", arguments: [literal(-2.75), { kind: "addressOf", value: variable("integral") }] } },
+        { op: "assign", target: "nanValue", value: { kind: "constant", name: "NAN" } },
+        { op: "assign", target: "negativeZero", value: { kind: "libcCall", function: "copysign", arguments: [literal(0), literal(-1)] } },
+        { op: "assign", target: "infiniteValue", value: { kind: "constant", name: "INFINITY" } },
+        { op: "heapAllocate", function: "malloc", size: literal(4), resultTarget: "heapFloat" },
+        { op: "assign", target: { kind: "dereference", pointer: variable("heapFloat") }, value: { kind: "constant", name: "NAN" } },
+        { op: "assign", target: "heapNan", value: { kind: "dereference", pointer: variable("heapFloat") } },
+        { op: "assign", target: "piMacro", value: { kind: "constant", name: "M_PI" } },
+        { op: "assign", target: "eofMacro", value: { kind: "constant", name: "EOF" } },
+        { op: "assign", target: "randMaxMacro", value: { kind: "constant", name: "RAND_MAX" } }
+      ]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.status, "completed", JSON.stringify(state.error));
+  assert.equal(state.variables.foundByte, "p".charCodeAt(0));
+  assert.equal(state.variables.token4, 0);
+  assert.equal(state.variables.firstMatches, 0);
+  assert.equal(state.variables.secondMatches, 0);
+  assert.equal(state.variables.thirdMatches, 0);
+  assert.equal(state.variables.messageMatches, 0);
+  assert.equal(state.variables.parsedOctal, 8);
+  assert.equal(state.variables.parseTail, "t".charCodeAt(0));
+  assert.equal(state.variables.parsedFloat, 1.5);
+  assert.equal(state.variables.floatTail, "V".charCodeAt(0));
+  assert.equal(state.variables.eofUpper, -1);
+  assert.equal(state.variables.highByteUpper, 0xe0);
+  assert.equal(state.variables.highByteSpace, 0);
+  assert.equal(state.variables.ceiling, 2);
+  assert.equal(state.variables.floatingDivision, 2.5);
+  assert.equal(state.variables.hyperbolic, 1);
+  assert.equal(state.variables.powerOfTwo, 8);
+  assert.equal(state.variables.binaryLog, 3);
+  assert.equal(state.variables.cubeRoot, 3);
+  assert.equal(state.variables.nearbyEven, 2);
+  assert.equal(state.variables.rintEven, 4);
+  assert.equal(state.variables.roundedAway, -2);
+  assert.equal(state.variables.ieeeRemainder, -1);
+  assert.equal(state.variables.exponent, 4);
+  assert.equal(state.variables.fraction, 0.5);
+  assert.equal(state.variables.integral, -2);
+  assert.equal(state.variables.fractional, -0.75);
+  assert.ok(Number.isNaN(state.variables.nanValue));
+  assert.ok(Object.is(state.variables.negativeZero, -0));
+  assert.equal(state.variables.infiniteValue, Infinity);
+  assert.ok(Number.isNaN(state.variables.heapNan));
+  assert.equal(state.variables.piMacro, Math.PI);
+  assert.equal(state.variables.eofMacro, -1);
+  assert.equal(state.variables.randMaxMacro, 0x7fffffff);
+});
+
+test("srand accepts zero as a real seed", () => {
+  function randomAfterSeed(seed) {
+    const runtime = AliceFirmwareRuntime.create({
+      variables: { result: 0 },
+      program: {
+        operations: [
+          { op: "libcSeed", seed: literal(seed) },
+          { op: "assign", target: "result", value: { kind: "libcCall", function: "rand", arguments: [] } }
+        ]
+      }
+    });
+    runtime.start();
+    return runtime.step(0).variables.result;
+  }
+
+  assert.equal(randomAfterSeed(0), 12345);
+  assert.notEqual(randomAfterSeed(0), randomAfterSeed(1));
+});
+
+test("sscanf consumes whitespace per conversion and preserves partial assignments", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: {
+      compact_left: 0,
+      compact_right: 0,
+      compact_count: 0,
+      signed_value: 0,
+      word: new Array(8).fill(0),
+      spaced_count: 0,
+      partial_value: 0,
+      untouched_value: 99,
+      partial_count: 0,
+      eof_count: 0,
+      mismatch_count: 0
+    },
+    program: {
+      operations: [
+        {
+          op: "stdioScan",
+          input: { kind: "string", value: "12,34 trailing input" },
+          format: { kind: "string", value: "%d , %d" },
+          targets: [
+            { kind: "addressOf", value: variable("compact_left") },
+            { kind: "addressOf", value: variable("compact_right") }
+          ],
+          resultTarget: "compact_count"
+        },
+        {
+          op: "stdioScan",
+          input: { kind: "string", value: "\t-7 \nname" },
+          format: { kind: "string", value: "%d%s" },
+          targets: [
+            { kind: "addressOf", value: variable("signed_value") },
+            { kind: "addressOf", value: variable("word") }
+          ],
+          resultTarget: "spaced_count"
+        },
+        {
+          op: "stdioScan",
+          input: { kind: "string", value: "41 nope" },
+          format: { kind: "string", value: "%d %d" },
+          targets: [
+            { kind: "addressOf", value: variable("partial_value") },
+            { kind: "addressOf", value: variable("untouched_value") }
+          ],
+          resultTarget: "partial_count"
+        },
+        {
+          op: "stdioScan",
+          input: { kind: "string", value: "" },
+          format: { kind: "string", value: "%d" },
+          targets: [{ kind: "addressOf", value: variable("partial_value") }],
+          resultTarget: "eof_count"
+        },
+        {
+          op: "stdioScan",
+          input: { kind: "string", value: "not-a-number" },
+          format: { kind: "string", value: "%d" },
+          targets: [{ kind: "addressOf", value: variable("partial_value") }],
+          resultTarget: "mismatch_count"
+        }
+      ]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  const wordLength = state.variables.word.indexOf(0);
+
+  assert.equal(state.status, "completed");
+  assert.deepEqual([state.variables.compact_left, state.variables.compact_right, state.variables.compact_count], [12, 34, 2]);
+  assert.equal(state.variables.signed_value, -7);
+  assert.equal(Buffer.from(state.variables.word.slice(0, wordLength)).toString(), "name");
+  assert.equal(state.variables.spaced_count, 2);
+  assert.equal(state.variables.partial_value, 41);
+  assert.equal(state.variables.untouched_value, 99);
+  assert.equal(state.variables.partial_count, 1);
+  assert.equal(state.variables.eof_count, -1);
+  assert.equal(state.variables.mismatch_count, 0);
+});
+
+test("sscanf supports scansets, field widths, suppressed fields and percent-n", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: {
+      channel: new Array(9).fill(0),
+      suffix: new Array(5).fill(0),
+      channel_count: 0,
+      channel_consumed: 0,
+      letters: new Array(4).fill(0),
+      range_count: 0,
+      range_consumed: 0,
+      first_character: new Array(1).fill(0),
+      next_characters: new Array(2).fill(0),
+      character_count: 0,
+      character_consumed: 0,
+      leading_scanset: new Array(5).fill(0),
+      leading_scanset_count: 0,
+      selected_value: 0,
+      suppressed_count: 0,
+      suppressed_consumed: 0,
+      narrow_value: 0,
+      narrow_count: 0,
+      narrow_consumed: 0,
+      whitespace_value: 0,
+      whitespace_count: 0,
+      whitespace_consumed: 0
+    },
+    program: {
+      operations: [
+        {
+          op: "stdioScan",
+          input: { kind: "string", value: "sensor-A,rest+extra" },
+          format: { kind: "string", value: "%8[^,],%4s%n" },
+          targets: [
+            { kind: "addressOf", value: variable("channel") },
+            { kind: "addressOf", value: variable("suffix") },
+            { kind: "addressOf", value: variable("channel_consumed") }
+          ],
+          resultTarget: "channel_count"
+        },
+        {
+          op: "stdioScan",
+          input: { kind: "string", value: "abc123" },
+          format: { kind: "string", value: "%3[a-z]%*3[0-9]%n" },
+          targets: [
+            { kind: "addressOf", value: variable("letters") },
+            { kind: "addressOf", value: variable("range_consumed") }
+          ],
+          resultTarget: "range_count"
+        },
+        {
+          op: "stdioScan",
+          input: { kind: "string", value: " xy" },
+          format: { kind: "string", value: "%c%2c%n" },
+          targets: [
+            { kind: "addressOf", value: variable("first_character") },
+            { kind: "addressOf", value: variable("next_characters") },
+            { kind: "addressOf", value: variable("character_consumed") }
+          ],
+          resultTarget: "character_count"
+        },
+        {
+          op: "stdioScan",
+          input: { kind: "string", value: " abc,tail" },
+          format: { kind: "string", value: "%4[^,]" },
+          targets: [{ kind: "addressOf", value: variable("leading_scanset") }],
+          resultTarget: "leading_scanset_count"
+        },
+        {
+          op: "stdioScan",
+          input: { kind: "string", value: "10,20" },
+          format: { kind: "string", value: "%*d,%d%n" },
+          targets: [
+            { kind: "addressOf", value: variable("selected_value") },
+            { kind: "addressOf", value: variable("suppressed_consumed") }
+          ],
+          resultTarget: "suppressed_count"
+        },
+        {
+          op: "stdioScan",
+          input: { kind: "string", value: "1234" },
+          format: { kind: "string", value: "%2d%n" },
+          targets: [
+            { kind: "addressOf", value: variable("narrow_value") },
+            { kind: "addressOf", value: variable("narrow_consumed") }
+          ],
+          resultTarget: "narrow_count"
+        },
+        {
+          op: "stdioScan",
+          input: { kind: "string", value: "7   " },
+          format: { kind: "string", value: "%d%n" },
+          targets: [
+            { kind: "addressOf", value: variable("whitespace_value") },
+            { kind: "addressOf", value: variable("whitespace_consumed") }
+          ],
+          resultTarget: "whitespace_count"
+        }
+      ]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  const cStringFrom = name => Buffer.from(state.variables[name].slice(0, state.variables[name].indexOf(0))).toString();
+
+  assert.equal(state.status, "completed");
+  assert.equal(cStringFrom("channel"), "sensor-A");
+  assert.equal(cStringFrom("suffix"), "rest");
+  assert.deepEqual([state.variables.channel_count, state.variables.channel_consumed], [2, 13]);
+  assert.equal(cStringFrom("letters"), "abc");
+  assert.deepEqual([state.variables.range_count, state.variables.range_consumed], [1, 6]);
+  assert.deepEqual(state.variables.first_character, [32]);
+  assert.deepEqual(state.variables.next_characters, [120, 121]);
+  assert.deepEqual([state.variables.character_count, state.variables.character_consumed], [2, 3]);
+  assert.equal(cStringFrom("leading_scanset"), " abc");
+  assert.equal(state.variables.leading_scanset_count, 1);
+  assert.deepEqual([state.variables.selected_value, state.variables.suppressed_count, state.variables.suppressed_consumed], [20, 1, 5]);
+  assert.deepEqual([state.variables.narrow_value, state.variables.narrow_count, state.variables.narrow_consumed], [12, 1, 2]);
+  assert.deepEqual([state.variables.whitespace_value, state.variables.whitespace_count, state.variables.whitespace_consumed], [7, 1, 1]);
+});
+
 test("freed heap memory cannot be dereferenced", () => {
   const runtime = AliceFirmwareRuntime.create({
     heapBytes: 16,
@@ -1288,6 +2814,153 @@ test("typed heap pointer indexing uses the C element width", () => {
   assert.equal(state.status, "completed");
   assert.equal(state.variables.result, 1000);
   assert.deepEqual(state.heap.allocations["1"].bytes, [0, 0, 0, 0, 0xe8, 0x03, 0, 0]);
+});
+
+test("typed variable pointers use byte offsets and sizeof follows C object widths", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variableTypes: {
+      samples: "uint16_t",
+      cursor: "uint16_t*",
+      count: "size_t",
+      elementBytes: "size_t",
+      arrayBytes: "size_t",
+      pointedBytes: "size_t",
+      pointedValue: "uint16_t"
+    },
+    variables: {
+      samples: [11, 22, 33, 44],
+      cursor: 0,
+      count: 0,
+      elementBytes: 0,
+      arrayBytes: 0,
+      pointedBytes: 0,
+      pointedValue: 0
+    },
+    program: {
+      operations: [
+        { op: "assign", target: "count", value: { kind: "div", left: { kind: "sizeOf", value: variable("samples") }, right: { kind: "sizeOf", value: { kind: "arrayIndex", name: "samples", index: 0 } } } },
+        { op: "assign", target: "elementBytes", value: { kind: "sizeOf", cType: "uint16_t" } },
+        { op: "assign", target: "arrayBytes", value: { kind: "sizeOf", value: variable("samples") } },
+        { op: "assign", target: "cursor", value: { kind: "addressOf", value: { kind: "arrayIndex", name: "samples", index: 0 } } },
+        { op: "assign", target: "cursor", value: { kind: "add", left: variable("cursor"), right: literal(2) } },
+        { op: "assign", target: "pointedValue", value: { kind: "dereference", pointer: variable("cursor") } },
+        { op: "assign", target: "pointedBytes", value: { kind: "sub", left: variable("cursor"), right: { kind: "addressOf", value: { kind: "arrayIndex", name: "samples", index: 0 } } } }
+      ]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.status, "completed");
+  assert.equal(state.variables.count, 4);
+  assert.equal(state.variables.elementBytes, 2);
+  assert.equal(state.variables.arrayBytes, 8);
+  assert.equal(state.variables.pointedValue, 33);
+  assert.equal(state.variables.pointedBytes, 2);
+});
+
+test("sizeof does not execute increments or HAL calls in its operand", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { index: 0, incrementWidth: 0, halWidth: 0 },
+    program: {
+      operations: [
+        {
+          op: "assign",
+          target: "incrementWidth",
+          value: { kind: "sizeOf", value: { kind: "postIncrement", target: variable("index") } }
+        },
+        {
+          op: "assign",
+          target: "halWidth",
+          value: {
+            kind: "sizeOf",
+            value: {
+              kind: "halCall",
+              operation: { op: "adcStart", adc: "hadc1", instance: "ADC1" },
+              returnKind: "status"
+            }
+          }
+        }
+      ]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+
+  assert.equal(state.status, "completed");
+  assert.equal(state.variables.index, 0);
+  assert.equal(state.variables.incrementWidth, 4);
+  assert.equal(state.variables.halWidth, 4);
+  assert.equal(state.adc.ADC1, undefined);
+});
+
+test("standalone expression statements execute once and advance", () => {
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { index: 0 },
+    program: {
+      operations: [
+        { op: "expression", expression: { kind: "postIncrement", target: variable("index") } },
+        { op: "return", value: variable("index") }
+      ]
+    }
+  });
+
+  runtime.start();
+  const state = runtime.step(0);
+
+  assert.equal(state.status, "completed");
+  assert.equal(state.variables.index, 1);
+  assert.equal(state.returnValue, 1);
+});
+
+test("HAL transfers read pointer and literal buffer expressions", () => {
+  const uart = [];
+  const runtime = AliceFirmwareRuntime.create({
+    variables: { frame: [65, 66, 67, 0], offset: 1 },
+    program: {
+      operations: [
+        { op: "uartTransmit", uart: "huart2", buffer: { kind: "string", value: "OK" }, length: literal(2) },
+        {
+          op: "uartTransmit",
+          uart: "huart2",
+          buffer: { kind: "addressOf", value: { kind: "arrayIndex", name: "frame", index: variable("offset") } },
+          length: literal(2)
+        }
+      ]
+    }
+  }, { onUartTx(event) { uart.push(event); } });
+
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.status, "completed");
+  assert.deepEqual(uart.map((event) => event.text), ["OK", "BC"]);
+});
+
+test("UART receive and snprintf honor pointer-valued buffer variables", () => {
+  const uart = [];
+  const runtime = AliceFirmwareRuntime.create({
+    variableTypes: { rx: "uint8_t*", line: "char*" },
+    variables: {
+      storage: [0, 0, 0, 0],
+      rx: { __alicePointer: "variable", name: "storage", offset: 1, elementSize: 1, pointeeType: "uint8_t", unsigned: true },
+      lineStorage: new Array(12).fill(0),
+      line: { __alicePointer: "variable", name: "lineStorage", offset: 2, elementSize: 1, pointeeType: "char", unsigned: false }
+    },
+    program: {
+      operations: [
+        { op: "uartReceive", instance: "USART2", buffer: "rx", length: literal(2), timeout: literal(0) },
+        { op: "formatString", buffer: "line", capacity: literal(8), format: { kind: "string", value: "OK" }, arguments: [] }
+      ]
+    }
+  }, { onUartTx(event) { uart.push(event); } });
+
+  runtime.start();
+  runtime.enqueueUart("USART2", [65, 66]);
+  const state = runtime.step(0);
+  assert.equal(state.status, "completed");
+  assert.deepEqual(state.variables.storage, [0, 65, 66, 0]);
+  assert.deepEqual(state.variables.lineStorage.slice(2, 5), [79, 75, 0]);
 });
 
 test("peripheral transfer history stays bounded while cumulative counters keep increasing", () => {

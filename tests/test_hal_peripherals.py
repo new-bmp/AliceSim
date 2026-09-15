@@ -43,6 +43,7 @@ MAIN_C = """\
 I2C_HandleTypeDef hi2c1;
 ADC_HandleTypeDef hadc1;
 uint8_t tx_data[2] = {0x00, 0xAF};
+uint8_t rx_data[2];
 
 static void MX_I2C1_Init(void)
 {
@@ -71,6 +72,9 @@ int main(void)
   MX_ADC1_Init();
   HAL_I2C_Master_Transmit(&hi2c1, OLED_ADDRESS, tx_data, 2, I2C_TIMEOUT_MS);
   HAL_I2C_Mem_Write(&hi2c1, OLED_ADDRESS, 0x10U, I2C_MEMADD_SIZE_8BIT, tx_data, 2, HAL_MAX_DELAY);
+  if (HAL_I2C_Master_Receive(&hi2c1, OLED_ADDRESS, rx_data, 2U, I2C_TIMEOUT_MS) == HAL_OK) {
+    HAL_I2C_Mem_Read(&hi2c1, OLED_ADDRESS, 0x10U, I2C_MEMADD_SIZE_8BIT, rx_data, 2U, HAL_MAX_DELAY);
+  }
   HAL_ADC_Start(&hadc1);
   HAL_ADC_PollForConversion(&hadc1, 50U);
   uint32_t sample = HAL_ADC_GetValue(&hadc1);
@@ -164,12 +168,14 @@ SPI1.FirstBit=SPI_FIRSTBIT_MSB
 #include "main.h"
 SPI_HandleTypeDef hspi1;
 uint8_t pixels[4] = {0xF8, 0x00, 0x07, 0xE0};
+uint8_t received[2];
 int main(void)
 {
   hspi1.Instance = SPI1;
   hspi1.Init.Mode = SPI_MODE_MASTER;
   hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
   HAL_SPI_Transmit(&hspi1, pixels, 4, 100U);
+  HAL_SPI_Receive(&hspi1, (uint8_t *)received, 2U, 100U);
   while (1) {}
 }
 """
@@ -187,7 +193,11 @@ int main(void)
         self.assertEqual("SPI1", transmit["instance"])
         self.assertEqual("pixels", transmit["buffer"])
         self.assertEqual(4, transmit["length"])
+        receive = next(item for item in operations if item["op"] == "spiReceive")
+        self.assertEqual("received", receive["buffer"])
+        self.assertEqual(2, receive["length"])
         self.assertEqual(1, len(spi["transmitCalls"]))
+        self.assertEqual(1, len(spi["receiveCalls"]))
         self.assertEqual([0xF8, 0x00, 0x07, 0xE0], model["variables"]["pixels"])
 
     def test_i2c_ioc_pins_configuration_and_calls(self) -> None:
@@ -218,6 +228,16 @@ int main(void)
             memory_write["memoryAddressSize"],
         )
         self.assertEqual(1, len(i2c["masterTransmitCalls"]))
+        receive_condition = next(item for item in operations if item["op"] == "if")["condition"]
+        master_receive = receive_condition["left"]["operation"]
+        self.assertEqual("halCall", receive_condition["left"]["kind"])
+        self.assertEqual("rx_data", master_receive["buffer"])
+        self.assertEqual(2, master_receive["length"])
+        self.assertEqual(1, len(i2c["masterReceiveCalls"]))
+        memory_read = next(item for item in operations if item["op"] == "i2cMemRead")
+        self.assertEqual("rx_data", memory_read["buffer"])
+        self.assertEqual({"kind": "literal", "value": 16}, memory_read["memoryAddress"])
+        self.assertEqual(1, len(i2c["memReadCalls"]))
         self.assertEqual(1, len(i2c["memWriteCalls"]))
         self.assertEqual([0x00, 0xAF], model["variables"]["tx_data"])
         self.assertFalse([item for item in model["diagnostics"] if item["severity"] == "error"])

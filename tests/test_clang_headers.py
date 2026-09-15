@@ -62,6 +62,35 @@ clock_t _times(struct tms *buffer) {
         )
         self.assert_no_diagnostics(result)
 
+    def test_common_math_float_and_integer_format_headers_are_available(self) -> None:
+        source = r"""
+#include <float.h>
+#include <inttypes.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int main(void) {
+  uint32_t raw = 2048U;
+  char text[16] = "alpha,beta";
+  char *token = strtok(text, ",");
+  int exponent = 0;
+  double integral = 0.0;
+  double millivolts = sqrt(4.0) + fmin(1.0, 2.0) + sin(M_PI_2)
+      + cosh(0.0) + exp2(1.0) + log2(2.0) + cbrt(8.0)
+      + nearbyint(2.5) + rint(3.5) + remainder(7.0, 2.0)
+      + frexp(8.0, &exponent) + modf(-2.75, &integral);
+  const void *match = memchr(text, 'p', sizeof(text));
+  long long magnitude = llabs(-4LL);
+  float parsed = strtof("1.5", NULL);
+  printf("raw=%" PRIu32 " mv=%.1f eps=%g\n", raw, millivolts, DBL_EPSILON);
+  return isfinite(millivolts) && token && match && magnitude == 4LL && parsed > 1.0f ? 0 : 1;
+}
+"""
+        self.assert_no_diagnostics(server.clang_check(source, "main.c"))
+
     def test_single_file_cube_main_gets_common_module_headers(self) -> None:
         source = r"""
 #include "main.h"
@@ -103,6 +132,92 @@ int main(void) {
   HAL_UART_Transmit_DMA(&huart2, uart_data, 4U);
   HAL_UART_Receive_DMA(&huart2, uart_data, 4U);
   return 0;
+}
+"""
+        result = server.clang_check(source, "main.c")
+        self.assert_no_diagnostics(result)
+
+    def test_single_file_common_hal_status_and_io_calls_get_compatibility_declarations(self) -> None:
+        source = r"""
+#include "main.h"
+#include "adc.h"
+#include "i2c.h"
+#include "spi.h"
+#include "usart.h"
+
+uint8_t tx_data[4];
+uint8_t rx_data[4];
+
+int main(void) {
+  HAL_StatusTypeDef status = HAL_OK;
+  GPIO_PinState switch_level = HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_1);
+  uint32_t started_at = HAL_GetTick();
+
+  status = HAL_ADCEx_Calibration_Start(&hadc1);
+  status = HAL_Init();
+  status = HAL_ADC_Start(&hadc1);
+  status = HAL_ADC_Stop(&hadc1);
+  status = HAL_ADC_Start_IT(&hadc1);
+  status = HAL_ADC_Stop_IT(&hadc1);
+
+  status = HAL_I2C_Master_Transmit(&hi2c1, 0x78U, tx_data, 1U, HAL_MAX_DELAY);
+  status = HAL_I2C_Master_Receive(&hi2c1, 0x78U, rx_data, 1U, 10U);
+  status = HAL_I2C_Mem_Write(&hi2c1, 0x78U, 0U, I2C_MEMADD_SIZE_8BIT, tx_data, 1U, 10U);
+  status = HAL_I2C_Mem_Read(&hi2c1, 0x78U, 0U, I2C_MEMADD_SIZE_16BIT, rx_data, 1U, 10U);
+  status = HAL_I2C_Master_Transmit_IT(&hi2c1, 0x78U, tx_data, 1U);
+  status = HAL_I2C_Master_Receive_IT(&hi2c1, 0x78U, rx_data, 1U);
+  status = HAL_I2C_Mem_Write_IT(&hi2c1, 0x78U, 0U, I2C_MEMADD_SIZE_8BIT, tx_data, 1U);
+  status = HAL_I2C_Mem_Read_IT(&hi2c1, 0x78U, 0U, I2C_MEMADD_SIZE_8BIT, rx_data, 1U);
+  status = HAL_I2C_Master_Transmit_DMA(&hi2c1, 0x78U, tx_data, 1U);
+  status = HAL_I2C_Master_Receive_DMA(&hi2c1, 0x78U, rx_data, 1U);
+  status = HAL_I2C_Mem_Write_DMA(&hi2c1, 0x78U, 0U, I2C_MEMADD_SIZE_8BIT, tx_data, 1U);
+  status = HAL_I2C_Mem_Read_DMA(&hi2c1, 0x78U, 0U, I2C_MEMADD_SIZE_8BIT, rx_data, 1U);
+  status = HAL_I2C_Master_Abort_IT(&hi2c1, 0x78U);
+
+  status = HAL_SPI_Transmit(&hspi1, tx_data, 1U, 10U);
+  status = HAL_SPI_Receive(&hspi1, rx_data, 1U, 10U);
+  status = HAL_SPI_TransmitReceive(&hspi1, tx_data, rx_data, 1U, 10U);
+  status = HAL_SPI_Transmit_IT(&hspi1, tx_data, 1U);
+  status = HAL_SPI_Receive_IT(&hspi1, rx_data, 1U);
+  status = HAL_SPI_TransmitReceive_IT(&hspi1, tx_data, rx_data, 1U);
+  status = HAL_SPI_Transmit_DMA(&hspi1, tx_data, 1U);
+  status = HAL_SPI_Receive_DMA(&hspi1, rx_data, 1U);
+  status = HAL_SPI_TransmitReceive_DMA(&hspi1, tx_data, rx_data, 1U);
+  status = HAL_SPI_Abort_IT(&hspi1);
+
+  status = HAL_UART_Transmit_IT(&huart2, tx_data, 1U);
+  status = HAL_UART_Receive_IT(&huart2, rx_data, 1U);
+  status = HAL_UART_Abort_IT(&huart2);
+  status = HAL_UART_AbortReceive_IT(&huart2);
+  status = HAL_UART_AbortTransmit_IT(&huart2);
+
+  if (status == HAL_ERROR || status == HAL_BUSY || status == HAL_TIMEOUT) return 1;
+  return switch_level == GPIO_PIN_SET && started_at == 0U ? 0 : 0;
+}
+"""
+        result = server.clang_check(source, "main.c")
+        self.assert_no_diagnostics(result)
+
+    def test_direct_stm32_hal_module_includes_get_the_same_compatibility_declarations(self) -> None:
+        source = r"""
+#include "stm32f1xx_hal.h"
+#include "stm32f1xx_hal_adc_ex.h"
+#include "stm32f1xx_hal_i2c.h"
+#include "stm32f1xx_hal_spi.h"
+#include "stm32f1xx_hal_uart.h"
+
+ADC_HandleTypeDef hadc1;
+I2C_HandleTypeDef hi2c1;
+SPI_HandleTypeDef hspi1;
+UART_HandleTypeDef huart2;
+uint8_t data[1];
+
+int main(void) {
+  HAL_StatusTypeDef status = HAL_ADCEx_Calibration_Start(&hadc1);
+  status = HAL_I2C_Mem_Read(&hi2c1, 0x78U, 0U, I2C_MEMADD_SIZE_8BIT, data, 1U, HAL_MAX_DELAY);
+  status = HAL_SPI_Receive(&hspi1, data, 1U, HAL_MAX_DELAY);
+  status = HAL_UART_Receive_IT(&huart2, data, 1U);
+  return status == HAL_OK ? 0 : 1;
 }
 """
         result = server.clang_check(source, "main.c")

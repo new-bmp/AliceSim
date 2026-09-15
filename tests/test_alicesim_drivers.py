@@ -301,6 +301,8 @@ int main(void) {
         kinds = [operation["op"] for operation in operations]
         self.assertEqual(
             [
+                "assign",
+                "assign",
                 "aliceOledInit",
                 "aliceOledClear",
                 "aliceOledDrawString",
@@ -314,16 +316,28 @@ int main(void) {
             ],
             kinds,
         )
-        self.assertEqual("LUX", operations[2]["text"]["value"])
-        self.assertEqual("PB0", operations[4]["digitalPin"])
-        self.assertEqual("raw", operations[5]["target"])
-        self.assertEqual("lux", operations[6]["target"])
-        self.assertEqual("status", operations[0]["resultTarget"])
-        self.assertEqual("status", operations[7]["resultTarget"])
-        self.assertEqual("sample", operations[7]["target"])
+        oled_init = next(operation for operation in operations if operation["op"] == "aliceOledInit")
+        draw_string = next(operation for operation in operations if operation["op"] == "aliceOledDrawString")
+        light_init = next(operation for operation in operations if operation["op"] == "aliceLightInit")
+        raw_read = next(operation for operation in operations if operation["op"] == "aliceLightReadRaw")
+        lux_read = next(operation for operation in operations if operation["op"] == "aliceLightReadLux")
+        sample_read = next(operation for operation in operations if operation["op"] == "aliceLightRead")
+        copied_lux = next(
+            operation
+            for operation in operations
+            if operation["op"] == "assign" and operation.get("target") == "copied_lux"
+        )
+
+        self.assertEqual("LUX", draw_string["text"]["value"])
+        self.assertEqual("PB0", light_init["digitalPin"])
+        self.assertEqual("raw", raw_read["target"])
+        self.assertEqual("lux", lux_read["target"])
+        self.assertEqual("status", oled_init["resultTarget"])
+        self.assertEqual("status", sample_read["resultTarget"])
+        self.assertEqual("sample", sample_read["target"])
         self.assertEqual(
             {"kind": "member", "object": {"kind": "variable", "name": "sample"}, "member": "lux", "pointer": False},
-            operations[8]["value"],
+            copied_lux["value"],
         )
 
 

@@ -145,6 +145,7 @@ typedef unsigned short uint16_t;
 typedef unsigned int uint32_t;
 typedef signed int int32_t;
 typedef int HAL_StatusTypeDef;
+typedef uint32_t GPIO_PinState;
 
 typedef struct { volatile uint32_t ODR; } GPIO_TypeDef;
 typedef struct {
@@ -159,6 +160,7 @@ typedef struct {
 typedef struct DMA_HandleTypeDef { void *Instance; DMA_InitTypeDef Init; } DMA_HandleTypeDef;
 typedef struct ADC_HandleTypeDef { void *Instance; DMA_HandleTypeDef *DMA_Handle; } ADC_HandleTypeDef;
 typedef struct I2C_HandleTypeDef { void *Instance; } I2C_HandleTypeDef;
+typedef struct SPI_HandleTypeDef { void *Instance; DMA_HandleTypeDef *hdmatx; DMA_HandleTypeDef *hdmarx; } SPI_HandleTypeDef;
 typedef struct TIM_HandleTypeDef { void *Instance; } TIM_HandleTypeDef;
 typedef struct UART_HandleTypeDef { void *Instance; DMA_HandleTypeDef *hdmatx; DMA_HandleTypeDef *hdmarx; } UART_HandleTypeDef;
 typedef struct {
@@ -204,9 +206,22 @@ extern GPIO_TypeDef alice_gpio_c;
 #define GPIOB (&alice_gpio_b)
 #define GPIOC (&alice_gpio_c)
 #endif
+#define GPIO_PIN_0             (1U << 0)
 #define GPIO_PIN_1             (1U << 1)
+#define GPIO_PIN_2             (1U << 2)
+#define GPIO_PIN_3             (1U << 3)
+#define GPIO_PIN_4             (1U << 4)
+#define GPIO_PIN_5             (1U << 5)
+#define GPIO_PIN_6             (1U << 6)
+#define GPIO_PIN_7             (1U << 7)
+#define GPIO_PIN_8             (1U << 8)
+#define GPIO_PIN_9             (1U << 9)
+#define GPIO_PIN_10            (1U << 10)
+#define GPIO_PIN_11            (1U << 11)
 #define GPIO_PIN_12            (1U << 12)
 #define GPIO_PIN_13            (1U << 13)
+#define GPIO_PIN_14            (1U << 14)
+#define GPIO_PIN_15            (1U << 15)
 #define GPIO_PIN_RESET         0U
 #define GPIO_PIN_SET           1U
 #define RUN_SWITCH_Pin         GPIO_PIN_1
@@ -214,6 +229,12 @@ extern GPIO_TypeDef alice_gpio_c;
 #define STATUS_LED_Pin         GPIO_PIN_12
 #define STATUS_LED_GPIO_Port   GPIOB
 #define HAL_OK                 0
+#define HAL_ERROR              1
+#define HAL_BUSY               2
+#define HAL_TIMEOUT            3
+#define HAL_MAX_DELAY          0xFFFFFFFFU
+#define I2C_MEMADD_SIZE_8BIT   0x00000001U
+#define I2C_MEMADD_SIZE_16BIT  0x00000010U
 #define DMA_NORMAL             0U
 #define DMA_CIRCULAR           1U
 #define DMA_PERIPH_TO_MEMORY   0U
@@ -262,9 +283,10 @@ extern GPIO_TypeDef alice_gpio_c;
 #define __disable_irq() ((void)0)
 #define __HAL_LINKDMA(handle, field, dma) ((handle)->field = &(dma))
 
-static inline void HAL_Init(void) {}
+static inline HAL_StatusTypeDef HAL_Init(void) { return HAL_OK; }
 static inline void HAL_Delay(uint32_t delay) { (void)delay; }
-static inline uint32_t HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint32_t pin) { (void)port; (void)pin; return GPIO_PIN_SET; }
+static inline uint32_t HAL_GetTick(void) { return 0U; }
+static inline GPIO_PinState HAL_GPIO_ReadPin(GPIO_TypeDef *port, uint32_t pin) { (void)port; (void)pin; return GPIO_PIN_SET; }
 static inline void HAL_GPIO_TogglePin(GPIO_TypeDef *port, uint32_t pin) { (void)port; (void)pin; }
 static inline void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint32_t pin, uint32_t state) { (void)port; (void)pin; (void)state; }
 static inline void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *config) { (void)port; (void)config; }
@@ -287,10 +309,14 @@ extern ADC_HandleTypeDef hadc2;
 void MX_ADC1_Init(void);
 void MX_ADC2_Init(void);
 HAL_StatusTypeDef HAL_ADC_Start(ADC_HandleTypeDef *handle);
+HAL_StatusTypeDef HAL_ADC_Stop(ADC_HandleTypeDef *handle);
+HAL_StatusTypeDef HAL_ADC_Start_IT(ADC_HandleTypeDef *handle);
+HAL_StatusTypeDef HAL_ADC_Stop_IT(ADC_HandleTypeDef *handle);
 HAL_StatusTypeDef HAL_ADC_Start_DMA(ADC_HandleTypeDef *handle, uint32_t *data, uint32_t length);
 HAL_StatusTypeDef HAL_ADC_Stop_DMA(ADC_HandleTypeDef *handle);
 HAL_StatusTypeDef HAL_ADC_PollForConversion(ADC_HandleTypeDef *handle, uint32_t timeout);
 uint32_t HAL_ADC_GetValue(ADC_HandleTypeDef *handle);
+HAL_StatusTypeDef HAL_ADCEx_Calibration_Start(ADC_HandleTypeDef *handle);
 #endif
 """,
     "i2c.h": r"""
@@ -301,6 +327,43 @@ extern I2C_HandleTypeDef hi2c1;
 extern I2C_HandleTypeDef hi2c2;
 void MX_I2C1_Init(void);
 void MX_I2C2_Init(void);
+HAL_StatusTypeDef HAL_I2C_Init(I2C_HandleTypeDef *handle);
+HAL_StatusTypeDef HAL_I2C_DeInit(I2C_HandleTypeDef *handle);
+HAL_StatusTypeDef HAL_I2C_Master_Transmit(I2C_HandleTypeDef *handle, uint16_t address, uint8_t *data, uint16_t length, uint32_t timeout);
+HAL_StatusTypeDef HAL_I2C_Master_Receive(I2C_HandleTypeDef *handle, uint16_t address, uint8_t *data, uint16_t length, uint32_t timeout);
+HAL_StatusTypeDef HAL_I2C_Mem_Write(I2C_HandleTypeDef *handle, uint16_t address, uint16_t memory_address, uint16_t memory_address_size, uint8_t *data, uint16_t length, uint32_t timeout);
+HAL_StatusTypeDef HAL_I2C_Mem_Read(I2C_HandleTypeDef *handle, uint16_t address, uint16_t memory_address, uint16_t memory_address_size, uint8_t *data, uint16_t length, uint32_t timeout);
+HAL_StatusTypeDef HAL_I2C_Master_Transmit_IT(I2C_HandleTypeDef *handle, uint16_t address, uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_I2C_Master_Receive_IT(I2C_HandleTypeDef *handle, uint16_t address, uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_I2C_Mem_Write_IT(I2C_HandleTypeDef *handle, uint16_t address, uint16_t memory_address, uint16_t memory_address_size, uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_I2C_Mem_Read_IT(I2C_HandleTypeDef *handle, uint16_t address, uint16_t memory_address, uint16_t memory_address_size, uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_I2C_Master_Transmit_DMA(I2C_HandleTypeDef *handle, uint16_t address, uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_I2C_Master_Receive_DMA(I2C_HandleTypeDef *handle, uint16_t address, uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_I2C_Mem_Write_DMA(I2C_HandleTypeDef *handle, uint16_t address, uint16_t memory_address, uint16_t memory_address_size, uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_I2C_Mem_Read_DMA(I2C_HandleTypeDef *handle, uint16_t address, uint16_t memory_address, uint16_t memory_address_size, uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_I2C_Master_Abort_IT(I2C_HandleTypeDef *handle, uint16_t address);
+#endif
+""",
+    "spi.h": r"""
+#ifndef ALICE_STM32_SPI_H
+#define ALICE_STM32_SPI_H
+#include "main.h"
+extern SPI_HandleTypeDef hspi1;
+extern SPI_HandleTypeDef hspi2;
+void MX_SPI1_Init(void);
+void MX_SPI2_Init(void);
+HAL_StatusTypeDef HAL_SPI_Init(SPI_HandleTypeDef *handle);
+HAL_StatusTypeDef HAL_SPI_DeInit(SPI_HandleTypeDef *handle);
+HAL_StatusTypeDef HAL_SPI_Transmit(SPI_HandleTypeDef *handle, const uint8_t *data, uint16_t length, uint32_t timeout);
+HAL_StatusTypeDef HAL_SPI_Receive(SPI_HandleTypeDef *handle, uint8_t *data, uint16_t length, uint32_t timeout);
+HAL_StatusTypeDef HAL_SPI_TransmitReceive(SPI_HandleTypeDef *handle, const uint8_t *tx_data, uint8_t *rx_data, uint16_t length, uint32_t timeout);
+HAL_StatusTypeDef HAL_SPI_Transmit_IT(SPI_HandleTypeDef *handle, const uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_SPI_Receive_IT(SPI_HandleTypeDef *handle, uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_SPI_TransmitReceive_IT(SPI_HandleTypeDef *handle, const uint8_t *tx_data, uint8_t *rx_data, uint16_t length);
+HAL_StatusTypeDef HAL_SPI_Transmit_DMA(SPI_HandleTypeDef *handle, const uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_SPI_Receive_DMA(SPI_HandleTypeDef *handle, uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_SPI_TransmitReceive_DMA(SPI_HandleTypeDef *handle, const uint8_t *tx_data, uint8_t *rx_data, uint16_t length);
+HAL_StatusTypeDef HAL_SPI_Abort_IT(SPI_HandleTypeDef *handle);
 #endif
 """,
     "tim.h": r"""
@@ -329,6 +392,11 @@ void MX_USART2_UART_Init(void);
 void MX_USART3_UART_Init(void);
 HAL_StatusTypeDef HAL_UART_Receive(UART_HandleTypeDef *handle, uint8_t *data, uint16_t length, uint32_t timeout);
 HAL_StatusTypeDef HAL_UART_Transmit(UART_HandleTypeDef *handle, const uint8_t *data, uint16_t length, uint32_t timeout);
+HAL_StatusTypeDef HAL_UART_Receive_IT(UART_HandleTypeDef *handle, uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_UART_Transmit_IT(UART_HandleTypeDef *handle, const uint8_t *data, uint16_t length);
+HAL_StatusTypeDef HAL_UART_Abort_IT(UART_HandleTypeDef *handle);
+HAL_StatusTypeDef HAL_UART_AbortReceive_IT(UART_HandleTypeDef *handle);
+HAL_StatusTypeDef HAL_UART_AbortTransmit_IT(UART_HandleTypeDef *handle);
 HAL_StatusTypeDef HAL_UART_Receive_DMA(UART_HandleTypeDef *handle, uint8_t *data, uint16_t length);
 HAL_StatusTypeDef HAL_UART_Transmit_DMA(UART_HandleTypeDef *handle, const uint8_t *data, uint16_t length);
 HAL_StatusTypeDef HAL_UART_DMAStop(UART_HandleTypeDef *handle);
@@ -663,8 +731,11 @@ unsigned long strtoul(const char *text, char **end, int base);
 long long strtoll(const char *text, char **end, int base);
 unsigned long long strtoull(const char *text, char **end, int base);
 double strtod(const char *text, char **end);
+float strtof(const char *text, char **end);
+long double strtold(const char *text, char **end);
 int abs(int value);
 long labs(long value);
+long long llabs(long long value);
 div_t div(int numerator, int denominator);
 ldiv_t ldiv(long numerator, long denominator);
 int rand(void);
@@ -689,6 +760,7 @@ char *strncat(char *destination, const char *source, size_t count);
 int strcmp(const char *left, const char *right);
 int strncmp(const char *left, const char *right, size_t count);
 size_t strlen(const char *text);
+size_t strnlen(const char *text, size_t maximum);
 char *strchr(const char *text, int character);
 char *strrchr(const char *text, int character);
 char *strstr(const char *text, const char *needle);
@@ -696,6 +768,7 @@ char *strtok(char *text, const char *delimiters);
 size_t strspn(const char *text, const char *accept);
 size_t strcspn(const char *text, const char *reject);
 char *strpbrk(const char *text, const char *accept);
+int strcoll(const char *left, const char *right);
 char *strerror(int error_number);
 #endif
 """,
@@ -785,6 +858,131 @@ int isupper(int character);
 int isxdigit(int character);
 int tolower(int character);
 int toupper(int character);
+#endif
+""",
+    "math.h": r"""
+#ifndef ALICE_FREESTANDING_MATH_H
+#define ALICE_FREESTANDING_MATH_H
+#include <stddef.h>
+/* The simulator models these calls with deterministic IEEE-style math. */
+#define M_E        2.7182818284590452354
+#define M_LOG2E    1.4426950408889634074
+#define M_LOG10E   0.43429448190325182765
+#define M_LN2      0.69314718055994530942
+#define M_LN10     2.30258509299404568402
+#define M_PI       3.14159265358979323846
+#define M_PI_2     1.57079632679489661923
+#define M_PI_4     0.785398163397448309616
+#define M_1_PI     0.318309886183790671538
+#define M_2_PI     0.636619772367581343076
+#define M_2_SQRTPI 1.12837916709551257390
+#define M_SQRT2    1.41421356237309504880
+#define M_SQRT1_2  0.707106781186547524401
+#define HUGE_VAL   (__builtin_huge_val())
+#define HUGE_VALF  (__builtin_huge_valf())
+#define HUGE_VALL  (__builtin_huge_vall())
+#define INFINITY   (__builtin_inff())
+#define NAN        (__builtin_nanf(""))
+double acos(double value); float acosf(float value); long double acosl(long double value);
+double asin(double value); float asinf(float value); long double asinl(long double value);
+double atan(double value); float atanf(float value); long double atanl(long double value);
+double atan2(double y, double x); float atan2f(float y, float x); long double atan2l(long double y, long double x);
+double cos(double value); float cosf(float value); long double cosl(long double value);
+double sin(double value); float sinf(float value); long double sinl(long double value);
+double tan(double value); float tanf(float value); long double tanl(long double value);
+double cosh(double value); float coshf(float value); long double coshl(long double value);
+double sinh(double value); float sinhf(float value); long double sinhl(long double value);
+double tanh(double value); float tanhf(float value); long double tanhl(long double value);
+double exp(double value); float expf(float value); long double expl(long double value);
+double exp2(double value); float exp2f(float value); long double exp2l(long double value);
+double log(double value); float logf(float value); long double logl(long double value);
+double log10(double value); float log10f(float value); long double log10l(long double value);
+double log2(double value); float log2f(float value); long double log2l(long double value);
+double pow(double base, double exponent); float powf(float base, float exponent); long double powl(long double base, long double exponent);
+double sqrt(double value); float sqrtf(float value); long double sqrtl(long double value);
+double cbrt(double value); float cbrtf(float value); long double cbrtl(long double value);
+double ceil(double value); float ceilf(float value); long double ceill(long double value);
+double floor(double value); float floorf(float value); long double floorl(long double value);
+double round(double value); float roundf(float value); long double roundl(long double value);
+double trunc(double value); float truncf(float value); long double truncl(long double value);
+double nearbyint(double value); float nearbyintf(float value); long double nearbyintl(long double value);
+double rint(double value); float rintf(float value); long double rintl(long double value);
+double fmod(double left, double right); float fmodf(float left, float right); long double fmodl(long double left, long double right);
+double remainder(double left, double right); float remainderf(float left, float right); long double remainderl(long double left, long double right);
+double fabs(double value); float fabsf(float value); long double fabsl(long double value);
+double fmin(double left, double right); float fminf(float left, float right); long double fminl(long double left, long double right);
+double fmax(double left, double right); float fmaxf(float left, float right); long double fmaxl(long double left, long double right);
+double copysign(double magnitude, double sign); float copysignf(float magnitude, float sign); long double copysignl(long double magnitude, long double sign);
+double hypot(double x, double y); float hypotf(float x, float y); long double hypotl(long double x, long double y);
+double ldexp(double value, int exponent); float ldexpf(float value, int exponent); long double ldexpl(long double value, int exponent);
+double frexp(double value, int *exponent); float frexpf(float value, int *exponent); long double frexpl(long double value, int *exponent);
+double modf(double value, double *integral); float modff(float value, float *integral); long double modfl(long double value, long double *integral);
+int isnan(double value); int isfinite(double value); int isinf(double value); int signbit(double value);
+#endif
+""",
+    "float.h": r"""
+#ifndef ALICE_FREESTANDING_FLOAT_H
+#define ALICE_FREESTANDING_FLOAT_H
+#define FLT_RADIX 2
+#define FLT_MANT_DIG 24
+#define DBL_MANT_DIG 53
+#define LDBL_MANT_DIG 53
+#define FLT_DIG 6
+#define DBL_DIG 15
+#define LDBL_DIG 15
+#define FLT_MIN_10_EXP (-37)
+#define DBL_MIN_10_EXP (-307)
+#define LDBL_MIN_10_EXP (-307)
+#define FLT_MAX_10_EXP 38
+#define DBL_MAX_10_EXP 308
+#define LDBL_MAX_10_EXP 308
+#define FLT_MIN 1.17549435e-38F
+#define DBL_MIN 2.2250738585072014e-308
+#define LDBL_MIN 2.2250738585072014e-308L
+#define FLT_MAX 3.40282347e+38F
+#define DBL_MAX 1.7976931348623157e+308
+#define LDBL_MAX 1.7976931348623157e+308L
+#define FLT_EPSILON 1.19209290e-7F
+#define DBL_EPSILON 2.2204460492503131e-16
+#define LDBL_EPSILON 2.2204460492503131e-16L
+#endif
+""",
+    "inttypes.h": r"""
+#ifndef ALICE_FREESTANDING_INTTYPES_H
+#define ALICE_FREESTANDING_INTTYPES_H
+#include <stdint.h>
+#include <stddef.h>
+typedef struct { intmax_t quot; intmax_t rem; } imaxdiv_t;
+#define PRId8 "d"
+#define PRId16 "d"
+#define PRId32 "d"
+#define PRId64 "lld"
+#define PRIi8 "i"
+#define PRIi16 "i"
+#define PRIi32 "i"
+#define PRIi64 "lli"
+#define PRIu8 "u"
+#define PRIu16 "u"
+#define PRIu32 "u"
+#define PRIu64 "llu"
+#define PRIx8 "x"
+#define PRIx16 "x"
+#define PRIx32 "x"
+#define PRIx64 "llx"
+#define PRIX8 "X"
+#define PRIX16 "X"
+#define PRIX32 "X"
+#define PRIX64 "llX"
+#define SCNd8 "hhd"
+#define SCNd16 "hd"
+#define SCNd32 "d"
+#define SCNd64 "lld"
+#define SCNu8 "hhu"
+#define SCNu16 "hu"
+#define SCNu32 "u"
+#define SCNu64 "llu"
+intmax_t imaxabs(intmax_t value);
+imaxdiv_t imaxdiv(intmax_t numerator, intmax_t denominator);
 #endif
 """,
     "assert.h": r"""
@@ -1298,6 +1496,12 @@ def clang_check_files(
                 "main.h": STM32_STUB_HEADER,
                 "stm32f1xx_it.h": STM32_STUB_HEADER,
                 "stm32f1xx.h": STM32_STUB_HEADER,
+                "stm32f1xx_hal.h": STM32_STUB_HEADER,
+                "stm32f1xx_hal_adc.h": STM32_CUBEMX_MODULE_STUB_HEADERS["adc.h"],
+                "stm32f1xx_hal_adc_ex.h": STM32_CUBEMX_MODULE_STUB_HEADERS["adc.h"],
+                "stm32f1xx_hal_i2c.h": STM32_CUBEMX_MODULE_STUB_HEADERS["i2c.h"],
+                "stm32f1xx_hal_spi.h": STM32_CUBEMX_MODULE_STUB_HEADERS["spi.h"],
+                "stm32f1xx_hal_uart.h": STM32_CUBEMX_MODULE_STUB_HEADERS["usart.h"],
                 **STM32_CUBEMX_MODULE_STUB_HEADERS,
             }
             for stub_name, stub_content in legacy_headers.items():

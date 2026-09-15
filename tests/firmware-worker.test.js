@@ -42,8 +42,12 @@ test("firmware Worker uses synchronized I2C and SPI wiring state for HAL results
       bytes: [0x11],
       i2cWrong: -1,
       i2cOk: -1,
+      i2cRead: [0, 0],
+      i2cReadStatus: -1,
       spiDeselected: -1,
-      spiSelected: -1
+      spiSelected: -1,
+      spiRead: [0, 0],
+      spiReadStatus: -1
     },
     i2cs: { hi2c1: { handle: "hi2c1", instance: "I2C1" } },
     spis: { hspi1: { handle: "hspi1", instance: "SPI1" } },
@@ -52,10 +56,12 @@ test("firmware Worker uses synchronized I2C and SPI wiring state for HAL results
       operations: [
         { op: "i2cTransmit", i2c: "hi2c1", instance: "I2C1", deviceAddress: 0x7a, buffer: "bytes", length: 1, resultTarget: "i2cWrong" },
         { op: "i2cTransmit", i2c: "hi2c1", instance: "I2C1", deviceAddress: 0x78, buffer: "bytes", length: 1, resultTarget: "i2cOk" },
+        { op: "i2cMasterReceive", i2c: "hi2c1", instance: "I2C1", deviceAddress: 0x78, buffer: "i2cRead", length: 2, resultTarget: "i2cReadStatus" },
         { op: "spiTransmit", spi: "hspi1", instance: "SPI1", buffer: "bytes", length: 1, resultTarget: "spiDeselected" },
         { op: "gpioWrite", pin: "PB0", value: 0 },
         { op: "gpioWrite", pin: "PB1", value: 1 },
-        { op: "spiTransmit", spi: "hspi1", instance: "SPI1", buffer: "bytes", length: 1, resultTarget: "spiSelected" }
+        { op: "spiTransmit", spi: "hspi1", instance: "SPI1", buffer: "bytes", length: 1, resultTarget: "spiSelected" },
+        { op: "spiReceive", spi: "hspi1", instance: "SPI1", buffer: "spiRead", length: 2, resultTarget: "spiReadStatus" }
       ]
     }
   };
@@ -68,8 +74,8 @@ test("firmware Worker uses synchronized I2C and SPI wiring state for HAL results
     inputs: {
       gpio: {},
       adc: {},
-      i2c: [{ componentId: "oled", instance: "I2C1", handle: "hi2c1", address: 0x3c, ready: true }],
-      spi: [{ componentId: "tft", instance: "SPI1", handle: "hspi1", csPin: "PB0", dcPin: "PB1", selected: false, dataMode: false, ready: true }],
+      i2c: [{ componentId: "sensor", instance: "I2C1", handle: "hi2c1", address: 0x3c, readBytes: [0x60, 0x01], ready: true }],
+      spi: [{ componentId: "flash", instance: "SPI1", handle: "hspi1", csPin: "PB0", dcPin: "PB1", selected: false, dataMode: false, readBytes: [0xef, 0x17], ready: true }],
       peripherals: []
     }
   });
@@ -77,10 +83,16 @@ test("firmware Worker uses synchronized I2C and SPI wiring state for HAL results
   assert.equal(state.status, "completed", JSON.stringify({ status: state.status, error: state.error, pc: state.pc, operationsExecuted: state.operationsExecuted, events: worker.messages.filter((message) => message.type === "event").map((message) => message.kind) }));
   assert.equal(state.variables.i2cWrong, 1);
   assert.equal(state.variables.i2cOk, 0);
+  assert.equal(state.variables.i2cReadStatus, 0);
+  assert.deepEqual(Array.from(state.variables.i2cRead), [0x60, 0x01]);
   assert.equal(state.variables.spiDeselected, 1);
   assert.equal(state.variables.spiSelected, 0);
+  assert.equal(state.variables.spiReadStatus, 0);
+  assert.deepEqual(Array.from(state.variables.spiRead), [0xef, 0x17]);
   assert.deepEqual(Array.from(state.i2cTx, (event) => event.accepted), [false, true]);
   assert.deepEqual(Array.from(state.spiTx, (event) => event.accepted), [false, true]);
+  assert.deepEqual(Array.from(state.i2cRx, (event) => event.bytes), [[0x60, 0x01]]);
+  assert.deepEqual(Array.from(state.spiRx, (event) => event.bytes), [[0xef, 0x17]]);
 
   const events = worker.messages.filter((message) => message.type === "event");
   const selectedTransfer = events.findIndex((message, index) =>
@@ -88,6 +100,8 @@ test("firmware Worker uses synchronized I2C and SPI wiring state for HAL results
   );
   const chipSelectLow = events.findIndex((message) => message.kind === "gpio" && message.detail.pin === "PB0" && message.detail.value === 0);
   assert.ok(chipSelectLow >= 0 && selectedTransfer > chipSelectLow);
+  assert.ok(events.some((message) => message.kind === "i2c-rx"));
+  assert.ok(events.some((message) => message.kind === "spi-rx"));
 });
 
 test("firmware Worker returns synchronized ADC and high-level sensor values", () => {

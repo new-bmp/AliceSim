@@ -1,5 +1,7 @@
 from pathlib import Path
 import json
+import shutil
+import subprocess
 import unittest
 
 from hal_model import build_hal_model
@@ -99,6 +101,8 @@ class HalExampleProjectTests(unittest.TestCase):
         ))
         self.assertEqual("PA0", model["adcs"]["hadc1"]["channels"][0]["pin"])
         self.assertEqual("PB0", model["adcs"]["hadc2"]["channels"][0]["pin"])
+        self.assertEqual({}, model["spis"])
+        self.assertEqual({}, model["dmas"])
         timer = model["timers"]["htim1"]
         self.assertEqual(72000000, timer["clockHz"])
         self.assertEqual("PA8", timer["channels"][0]["pin"])
@@ -145,6 +149,64 @@ class HalExampleProjectTests(unittest.TestCase):
         self.assertIn('"PB0 0000.0 mV"', main_source)
         self.assertIn('"PA0=0000.0mV PB0=0000.0mV\\r\\n"', main_source)
         self.assertIn('"READY"', main_source)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js runtime is unavailable")
+    def test_example_model_executes_adc_oled_and_uart_end_to_end(self) -> None:
+        paths = [EXAMPLE / "STM32F103_HAL_Init.ioc"]
+        paths.extend(sorted((EXAMPLE / "Core").rglob("*.c")))
+        paths.extend(sorted((EXAMPLE / "Core").rglob("*.h")))
+        files = [
+            (path.relative_to(EXAMPLE), path.read_text(encoding="utf-8", errors="replace"))
+            for path in paths
+        ]
+        model = build_hal_model(files)
+        self.assertFalse(
+            [item for item in model["diagnostics"] if item["severity"] == "error"]
+        )
+
+        runtime_probe = r"""
+const fs = require("node:fs");
+const AliceFirmwareRuntime = require(process.argv[1]);
+const model = JSON.parse(fs.readFileSync(0, "utf8"));
+const uart = [];
+const runtime = AliceFirmwareRuntime.create(model, {
+  onGpioRead(event) { return event.pin === "PA1" ? 0 : 1; },
+  onAdcRead(event) { return event.instance === "ADC1" ? 2048 : 1024; },
+  onI2cTx() { return { accepted: true, targetCount: 1 }; },
+  onUartTx(event) { uart.push(event.text); }
+});
+runtime.start();
+const state = runtime.step(100);
+const display = state.peripherals.oled.oled;
+process.stdout.write(JSON.stringify({
+  status: state.status,
+  error: state.error,
+  adc1Raw: state.variables.adc1_raw,
+  adc2Raw: state.variables.adc2_raw,
+  adc1Mv10: state.variables.adc1_mv10,
+  adc2Mv10: state.variables.adc2_mv10,
+  uart: uart[uart.length - 1],
+  litDisplayBytes: display.framebuffer.filter((value) => value !== 0).length
+}));
+"""
+        result = subprocess.run(
+            [shutil.which("node"), "-e", runtime_probe, str(ROOT / "firmware-runtime.js")],
+            input=json.dumps(model),
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            timeout=15,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        state = json.loads(result.stdout)
+
+        self.assertEqual("sleeping", state["status"])
+        self.assertIsNone(state["error"])
+        self.assertEqual((2048, 1024), (state["adc1Raw"], state["adc2Raw"]))
+        self.assertEqual((16504, 8252), (state["adc1Mv10"], state["adc2Mv10"]))
+        self.assertEqual("PA0=1650.4mV PB0=0825.2mV\r\n", state["uart"])
+        self.assertGreater(state["litDisplayBytes"], 0)
 
 
 if __name__ == "__main__":

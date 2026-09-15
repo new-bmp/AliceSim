@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 import unittest
 
@@ -588,9 +589,13 @@ int main(void)
 
         self.assertEqual(2048, raw_initializer["value"]["value"])
         self.assertEqual(0, millivolts_initializer["value"]["value"])
-        self.assertEqual("div", converted["value"]["kind"])
-        self.assertEqual(3300, converted["value"]["left"]["left"]["right"]["value"])
-        self.assertEqual(4095, converted["value"]["right"]["value"])
+        self.assertEqual("inlineCall", converted["value"]["kind"])
+        self.assertEqual("Convert_Raw_To_mV_x10", converted["value"]["function"])
+        returned = converted["value"]["operations"][-1]
+        self.assertEqual("return", returned["op"])
+        self.assertEqual("div", returned["value"]["kind"])
+        self.assertEqual(3300, returned["value"]["left"]["left"]["right"]["value"])
+        self.assertEqual(4095, returned["value"]["right"]["value"])
         self.assertEqual(32, len(buffer["value"]))
         self.assertEqual("buf", formatted["buffer"])
 
@@ -618,8 +623,207 @@ int main(void)
         self.assertFalse(errors, errors)
         condition = next(item for item in walk_operations(model["program"]["operations"]) if item["op"] == "if")["condition"]
         self.assertEqual("eq", condition["op"])
-        self.assertEqual("adcPoll", condition["left"]["kind"])
-        self.assertEqual("hadc1", condition["left"]["adc"])
+        self.assertEqual("halCall", condition["left"]["kind"])
+        self.assertEqual("status", condition["left"]["returnKind"])
+        self.assertEqual("adcPollForConversion", condition["left"]["operation"]["op"])
+        self.assertEqual("hadc1", condition["left"]["operation"]["adc"])
+
+    def test_common_hal_return_values_are_lowered_inside_conditions_and_arithmetic(self) -> None:
+        """Status and value-returning HAL calls must share the expression IR path.
+
+        This protects the common pattern ``if (HAL_Foo(...) == HAL_OK)`` from
+        regressing into a generic unsupported-expression diagnostic.  The ADC
+        value case is deliberately nested in arithmetic because a complete
+        assignment RHS takes a different parser path.
+        """
+        source = r'''
+#include "main.h"
+
+ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
+UART_HandleTypeDef huart2;
+TIM_HandleTypeDef htim2;
+uint32_t samples[4];
+uint8_t tx_data[1] = {0x55U};
+uint32_t raw = 0U;
+HAL_StatusTypeDef start_status;
+uint32_t adc_started = 0U;
+uint32_t switch_high = 0U;
+uint32_t sample_above_limit = 0U;
+uint32_t dma_started = 0U;
+uint32_t uart_started = 0U;
+uint32_t pwm_started = 0U;
+
+int main(void)
+{
+  start_status = HAL_ADC_Start(&hadc1);
+
+  if (HAL_ADC_Start(&hadc1) == HAL_OK)
+    adc_started = 1U;
+
+  if (HAL_GPIO_ReadPin(RED_GPIO_Port, RED_Pin) == GPIO_PIN_SET)
+    switch_high = 1U;
+
+  if (HAL_ADC_GetValue(&hadc1) + 1U > 1024U)
+    sample_above_limit = 1U;
+
+  if (HAL_ADC_Start_DMA(&hadc1, samples, 4U) == HAL_OK)
+    dma_started = 1U;
+
+  if (HAL_UART_Transmit_IT(&huart2, tx_data, 1U) == HAL_OK)
+    uart_started = 1U;
+
+  if (HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1) == HAL_OK)
+    pwm_started = 1U;
+
+  if (HAL_ADC_Stop(&hadc1) == HAL_OK)
+    adc_started += 1U;
+
+  while (1) { HAL_Delay(10U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+
+        operations = list(walk_operations(model["program"]["operations"]))
+        direct_start = next(
+            item
+            for item in operations
+            if item["op"] == "adcStart" and item.get("resultTarget") == "start_status"
+        )
+        self.assertEqual("hadc1", direct_start["adc"])
+
+        conditions = [item["condition"] for item in operations if item["op"] == "if"]
+        self.assertEqual(7, len(conditions))
+
+        expected_call_conditions = [
+            (conditions[0], "adcStart", "status"),
+            (conditions[1], "gpioRead", "value"),
+            (conditions[3], "adcStartDma", "status"),
+            (conditions[4], "uartTransmitIt", "status"),
+            (conditions[5], "pwmStart", "status"),
+            (conditions[6], "adcStop", "status"),
+        ]
+        for condition, expected_operation, expected_return_kind in expected_call_conditions:
+            self.assertEqual("eq", condition["op"])
+            self.assertEqual("halCall", condition["left"]["kind"])
+            self.assertEqual(expected_operation, condition["left"]["operation"]["op"])
+            self.assertEqual(expected_return_kind, condition["left"]["returnKind"])
+
+        adc_value_condition = conditions[2]
+        self.assertEqual("gt", adc_value_condition["op"])
+        self.assertEqual("add", adc_value_condition["left"]["kind"])
+        adc_value_call = adc_value_condition["left"]["left"]
+        self.assertEqual("halCall", adc_value_call["kind"])
+        self.assertEqual("value", adc_value_call["returnKind"])
+        self.assertEqual("adcGetValue", adc_value_call["operation"]["op"])
+
+        # HAL calls nested in an expression still receive normal peripheral
+        # metadata. Without this, the runtime could execute them while the
+        # schematic binder incorrectly showed no configured ADC activity.
+        conditional_start = conditions[0]["left"]["operation"]
+        self.assertIn("id", conditional_start)
+        self.assertTrue(any(
+            item["operationId"] == conditional_start["id"]
+            for item in model["adcs"]["hadc1"]["startCalls"]
+        ))
+
+    def test_common_hal_initialization_status_calls_are_valid_expressions(self) -> None:
+        source = r'''
+#include "main.h"
+
+ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
+I2C_HandleTypeDef hi2c1;
+UART_HandleTypeDef huart2;
+TIM_HandleTypeDef htim2;
+HAL_StatusTypeDef init_status = HAL_ERROR;
+HAL_StatusTypeDef calibration_status = HAL_ERROR;
+
+int main(void)
+{
+  init_status = HAL_Init();
+  calibration_status = HAL_ADCEx_Calibration_Start(&hadc1);
+
+  if (HAL_DMA_Init(&hdma_adc1) != HAL_OK) return 1;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK) return 2;
+  if (HAL_UART_Init(&huart2) != HAL_OK) return 3;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK) return 4;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK) return 5;
+  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK) return 6;
+  if (HAL_TIM_PWM_ConfigChannel(&htim2, 0, TIM_CHANNEL_1) != HAL_OK) return 7;
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        operations = list(walk_operations(model["program"]["operations"]))
+        assignments = {
+            item["target"]: item["value"]
+            for item in operations
+            if item["op"] == "assign" and item.get("target") in {"init_status", "calibration_status"}
+        }
+        self.assertEqual({"kind": "constant", "name": "HAL_OK", "value": 0}, assignments["init_status"])
+        self.assertEqual({"kind": "constant", "name": "HAL_OK", "value": 0}, assignments["calibration_status"])
+
+    def test_hal_timeout_suffixes_keep_source_text_and_runtime_expression(self) -> None:
+        source = r'''
+#include "main.h"
+
+ADC_HandleTypeDef hadc1;
+UART_HandleTypeDef huart2;
+I2C_HandleTypeDef hi2c1;
+SPI_HandleTypeDef hspi1;
+uint8_t rx[2];
+uint8_t tx[2] = {1U, 2U};
+
+int main(void)
+{
+  if (HAL_UART_Receive(&huart2, rx, 2U, 10U) == HAL_TIMEOUT) return 1;
+  HAL_ADC_Start(&hadc1);
+  HAL_ADC_PollForConversion(&hadc1, 50UL);
+  HAL_I2C_Master_Transmit(&hi2c1, 0x78U, tx, 2U, 100U);
+  HAL_SPI_Transmit(&hspi1, tx, 2U, 0U);
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        operations = list(walk_operations(model["program"]["operations"]))
+        receive = next(item for item in operations if item["op"] == "if")["condition"]["left"]["operation"]
+        poll = next(item for item in operations if item["op"] == "adcPollForConversion")
+        i2c = next(item for item in operations if item["op"] == "i2cMasterTransmit")
+        spi = next(item for item in operations if item["op"] == "spiTransmit")
+
+        self.assertEqual(("10U", {"kind": "literal", "value": 10}), (receive["timeout"], receive["timeoutExpression"]))
+        self.assertEqual(("50UL", {"kind": "literal", "value": 50}), (poll["timeout"], poll["timeoutExpression"]))
+        self.assertEqual(("100U", {"kind": "literal", "value": 100}), (i2c["timeout"], i2c["timeoutExpression"]))
+        self.assertEqual(("0U", {"kind": "literal", "value": 0}, False), (spi["timeout"], spi["timeoutExpression"], spi["blocking"]))
+
+    def test_negated_hal_conditions_preserve_a_short_circuit_expression_tree(self) -> None:
+        source = r'''
+#include "main.h"
+
+ADC_HandleTypeDef hadc1;
+uint32_t handled = 0U;
+
+int main(void)
+{
+  if (!(0U && HAL_ADC_Start(&hadc1) == HAL_OK))
+    handled = 1U;
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        condition = next(item for item in walk_operations(model["program"]["operations"]) if item["op"] == "if")["condition"]
+        self.assertEqual("logicalNot", condition["kind"])
+        self.assertEqual("and", condition["value"]["op"])
+        self.assertEqual("halCall", condition["value"]["right"]["left"]["kind"])
 
     def test_parameterized_helper_argument_count_mismatch_is_reported(self) -> None:
         source = r'''
@@ -685,6 +889,45 @@ int main(void)
         self.assertEqual("stringLength", transmit["length"]["kind"])
         self.assertEqual("uart_report", transmit["length"]["value"]["name"])
 
+    def test_snprintf_preserves_an_addressed_destination_offset(self) -> None:
+        source = r'''
+#include "main.h"
+#include <stdio.h>
+char line[16] = {0};
+
+int main(void)
+{
+  snprintf(&line[3], sizeof(line) - 3U, "%s", "ADC");
+  return 0;
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        formatted = next(item for item in model["program"]["operations"] if item["op"] == "formatString")
+        self.assertEqual("addressOf", formatted["buffer"]["kind"])
+        self.assertEqual("arrayIndex", formatted["buffer"]["value"]["kind"])
+        self.assertEqual("line", formatted["buffer"]["value"]["name"])
+
+    def test_unresolvable_uart_length_reports_a_diagnostic_without_crashing(self) -> None:
+        source = r'''
+#include "main.h"
+UART_HandleTypeDef huart2;
+uint8_t tx_data[4] = {0};
+extern uint16_t External_Length(void);
+
+int main(void)
+{
+  HAL_UART_Transmit(&huart2, tx_data, External_Length(), 100U);
+  while (1) HAL_Delay(1U);
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+
+        self.assertTrue(any(item["code"] == "UART_LENGTH_UNRESOLVED" for item in errors), errors)
+        self.assertTrue(any("External_Length" in item["message"] or "External_Length" in str(item.get("details")) for item in errors), errors)
+
     def test_adc_float_math_and_c_float_literals_are_lowered(self) -> None:
         source = r'''
 #include "main.h"
@@ -715,22 +958,245 @@ int main(void)
         self.assertEqual("cast", calculation["value"]["left"]["left"]["kind"])
         self.assertEqual("float", calculation["value"]["left"]["right"]["numericType"])
 
-    def test_unmodeled_expression_fails_the_build_with_source_location(self) -> None:
+    def test_external_expression_fails_the_build_with_source_location(self) -> None:
         source = r'''
 #include "main.h"
 uint32_t raw = 1U;
 uint32_t selected = 0U;
 int main(void)
 {
-  selected = raw ? 1U : 0U;
+  selected = External_Value(raw);
   while (1) HAL_Delay(10U);
 }
 '''
         model = build_hal_model(fixture_files(main_c=source))
         error = next(item for item in model["diagnostics"] if item["code"] == "C_UNSUPPORTED_EXPRESSION")
-        self.assertIn("raw ? 1U : 0U", error["message"])
+        self.assertIn("External_Value ( raw )", error["message"])
         self.assertEqual("Core/Src/main.c", error["file"])
         self.assertEqual(7, error["line"])
+
+    def test_conditional_expressions_lower_hal_calls_and_dynamic_hal_arguments(self) -> None:
+        source = r'''
+#include "main.h"
+ADC_HandleTypeDef hadc1;
+uint32_t selected = 0U;
+
+int main(void)
+{
+  selected = HAL_ADC_Start(&hadc1) == HAL_OK
+    ? HAL_ADC_GetValue(&hadc1)
+    : HAL_GPIO_ReadPin(RED_GPIO_Port, RED_Pin) ? 7U : 9U;
+  HAL_Delay(selected ? 2U : 5U);
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+
+        operations = list(walk_operations(model["program"]["operations"]))
+        selected = next(item for item in operations if item.get("target") == "selected")
+        conditional = selected["value"]
+        self.assertEqual("conditional", conditional["kind"])
+        self.assertEqual("eq", conditional["condition"]["op"])
+        self.assertEqual("halCall", conditional["condition"]["left"]["kind"])
+        self.assertEqual("adcStart", conditional["condition"]["left"]["operation"]["op"])
+        self.assertEqual("halCall", conditional["consequent"]["kind"])
+        self.assertEqual("adcGetValue", conditional["consequent"]["operation"]["op"])
+        self.assertEqual("conditional", conditional["alternate"]["kind"])
+        self.assertEqual("halCall", conditional["alternate"]["condition"]["kind"])
+        self.assertEqual("gpioRead", conditional["alternate"]["condition"]["operation"]["op"])
+
+        delay = next(item for item in operations if item["op"] == "delay" and item["milliseconds"] is None)
+        self.assertEqual("conditional", delay["expression"]["kind"])
+
+    def test_prefix_not_binds_before_comparison_and_keeps_compound_short_circuiting(self) -> None:
+        source = r'''
+#include "main.h"
+ADC_HandleTypeDef hadc1;
+uint32_t first = 0U;
+uint32_t second = 0U;
+
+int main(void)
+{
+  if (!HAL_ADC_GetValue(&hadc1) == 1U)
+    first = 1U;
+  if (!(0U && HAL_ADC_Start(&hadc1) == HAL_OK))
+    second = 1U;
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        conditions = [item["condition"] for item in walk_operations(model["program"]["operations"]) if item["op"] == "if"]
+
+        self.assertEqual("eq", conditions[0]["op"])
+        self.assertEqual("logicalNot", conditions[0]["left"]["kind"])
+        self.assertEqual("halCall", conditions[0]["left"]["value"]["kind"])
+        self.assertEqual("adcGetValue", conditions[0]["left"]["value"]["operation"]["op"])
+
+        self.assertEqual("logicalNot", conditions[1]["kind"])
+        self.assertEqual("and", conditions[1]["value"]["op"])
+        self.assertEqual("halCall", conditions[1]["value"]["right"]["left"]["kind"])
+
+    def test_increment_expressions_and_compound_array_pointer_targets_are_lowered(self) -> None:
+        source = r'''
+#include "main.h"
+ADC_HandleTypeDef hadc1;
+UART_HandleTypeDef huart2;
+I2C_HandleTypeDef hi2c1;
+SPI_HandleTypeDef hspi1;
+uint8_t tx[4U] = {0};
+uint16_t samples[4U] = {0};
+uint16_t *cursor;
+uint32_t index = 0U;
+
+int main(void)
+{
+  if (index++ < 3U && HAL_ADC_Start(&hadc1) == HAL_OK)
+    samples[index] += HAL_ADC_GetValue(&hadc1);
+  HAL_UART_Transmit(&huart2, tx, index++, 0U);
+  HAL_I2C_Master_Transmit(&hi2c1, 0x78U, tx, index++, 0U);
+  HAL_SPI_Transmit(&hspi1, tx, index++, 0U);
+  HAL_ADC_Start_DMA(&hadc1, samples, index++);
+  HAL_Delay(--index);
+  HAL_Delay(index--);
+  for (index = 0U; index++ < 2U; ++index)
+    samples[index] += HAL_ADC_GetValue(&hadc1);
+  (*cursor) += HAL_ADC_GetValue(&hadc1);
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        operations = list(walk_operations(model["program"]["operations"]))
+
+        first_condition = next(item for item in operations if item["op"] == "if")["condition"]
+        self.assertEqual("postIncrement", first_condition["left"]["left"]["kind"])
+        self.assertEqual("index", first_condition["left"]["left"]["target"]["name"])
+
+        transfers = [
+            next(item for item in operations if item["op"] == operation_name)
+            for operation_name in ("uartTransmit", "i2cMasterTransmit", "spiTransmit", "adcStartDma")
+        ]
+        for transfer in transfers:
+            self.assertEqual("postIncrement", transfer["length"]["kind"])
+            self.assertEqual("index", transfer["length"]["target"]["name"])
+
+        dynamic_delays = [item for item in operations if item["op"] == "delay" and item["milliseconds"] is None]
+        self.assertEqual(["preDecrement", "postDecrement"], [item["expression"]["kind"] for item in dynamic_delays])
+
+        loop = next(item for item in operations if item["op"] == "for")
+        self.assertEqual("postIncrement", loop["condition"]["left"]["kind"])
+        self.assertEqual("assign", loop["increment"][0]["op"])
+
+        compound = [item for item in operations if item["op"] == "compoundAssign"]
+        array_targets = [item for item in compound if item["target"]["kind"] == "arrayIndex"]
+        pointer_target = next(item for item in compound if item["target"]["kind"] == "dereference")
+        self.assertGreaterEqual(len(array_targets), 2)
+        self.assertEqual("add", array_targets[0]["operator"])
+        self.assertEqual("cursor", pointer_target["target"]["pointer"]["name"])
+
+    def test_value_helpers_are_lowered_inside_control_flow_and_composite_expressions(self) -> None:
+        source = r'''
+#include "main.h"
+ADC_HandleTypeDef hadc1;
+uint32_t selected = 0U;
+uint32_t result = 0U;
+uint32_t loops = 0U;
+
+static HAL_StatusTypeDef Start_Checked(void)
+{
+  if (HAL_ADC_Start(&hadc1) != HAL_OK)
+    return HAL_ERROR;
+  return HAL_OK;
+}
+
+static uint32_t Read_Or(uint32_t fallback)
+{
+  if (Start_Checked() == HAL_OK)
+    return HAL_ADC_GetValue(&hadc1);
+  return fallback;
+}
+
+int main(void)
+{
+  if (Start_Checked() == HAL_OK && Read_Or(7U) > 0U)
+    selected = 1U;
+  while (Read_Or(0U) > 0U && loops < 1U)
+  {
+    loops++;
+    break;
+  }
+  for (loops = 0U; Read_Or(0U) > 0U && loops < 1U; loops++)
+    break;
+  switch (Start_Checked())
+  {
+    case HAL_OK: result = Read_Or(2U) + 1U; break;
+    default: result = 0U; break;
+  }
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        operations = model["program"]["operations"]
+
+        first_if = next(item for item in operations if item["op"] == "if")
+        self.assertEqual("inlineCall", first_if["condition"]["left"]["left"]["kind"])
+        self.assertEqual("Start_Checked", first_if["condition"]["left"]["left"]["function"])
+        self.assertEqual("inlineCall", first_if["condition"]["right"]["left"]["kind"])
+        self.assertEqual("Read_Or", first_if["condition"]["right"]["left"]["function"])
+
+        while_operation = next(item for item in operations if item["op"] == "while" and item["condition"].get("op") == "and")
+        self.assertEqual("inlineCall", while_operation["condition"]["left"]["left"]["kind"])
+        for_operation = next(item for item in operations if item["op"] == "for")
+        self.assertEqual("inlineCall", for_operation["condition"]["left"]["left"]["kind"])
+        switch_operation = next(item for item in operations if item["op"] == "switch")
+        self.assertEqual("inlineCall", switch_operation["expression"]["kind"])
+        switch_value = switch_operation["cases"][0]["body"][0]["value"]
+        self.assertEqual("inlineCall", switch_value["left"]["kind"])
+
+        inlined_start = first_if["condition"]["left"]["left"]["operations"][0]["condition"]["left"]["operation"]
+        self.assertEqual("adcStart", inlined_start["op"])
+        self.assertIn("id", inlined_start, "HAL operations inside a value helper still receive ids and metadata traversal")
+
+    def test_value_helpers_are_accepted_as_hal_delay_and_transfer_arguments(self) -> None:
+        source = r'''
+#include "main.h"
+UART_HandleTypeDef huart2;
+uint8_t tx[8] = {0};
+
+static uint32_t Sample_Period(void)
+{
+  return 25U;
+}
+
+static uint16_t Transfer_Length(void)
+{
+  return 4U;
+}
+
+int main(void)
+{
+  HAL_Delay(Sample_Period());
+  HAL_UART_Transmit(&huart2, tx, Transfer_Length(), 10U);
+  while (1) HAL_Delay(1U);
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        operations = list(walk_operations(model["program"]["operations"]))
+        delay = next(item for item in operations if item["op"] == "delay" and item["milliseconds"] is None)
+        transmit = next(item for item in operations if item["op"] == "uartTransmit")
+        self.assertEqual("inlineCall", delay["expression"]["kind"])
+        self.assertEqual("Sample_Period", delay["expression"]["function"])
+        self.assertEqual("inlineCall", transmit["length"]["kind"])
+        self.assertEqual("Transfer_Length", transmit["length"]["function"])
 
     def test_common_stdio_string_stdlib_and_heap_calls_are_lowered(self) -> None:
         source = r'''
@@ -778,6 +1244,160 @@ int main(void)
         self.assertEqual("int*", model["variableTypes"]["heap_value"])
         pointer_write = next(item for item in operations if item["op"] == "assign" and isinstance(item.get("target"), dict))
         self.assertEqual("dereference", pointer_write["target"]["kind"])
+
+    def test_extended_math_and_string_calls_are_lowered_as_real_expressions(self) -> None:
+        source = r'''
+#include "main.h"
+#include <math.h>
+#include <string.h>
+char text[24] = "alpha,beta";
+char *found = 0;
+char *token = 0;
+char *message = 0;
+int exponent = 0;
+double integral = 0.0;
+double result = 0.0;
+
+int main(void)
+{
+  rand();
+  found = memchr(text, 'p', sizeof(text));
+  token = strtok(text, ",");
+  message = strerror(22);
+  result = cosh(0.0) + exp2(3.0) + log2(8.0) + cbrt(27.0);
+  result += nearbyint(2.5) + rint(3.5) + remainder(7.0, 2.0);
+  result += frexp(8.0, &exponent) + modf(-2.75, &integral);
+  while (1) HAL_Delay(1U);
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        operations = list(walk_operations(model["program"]["operations"]))
+        functions = set()
+
+        def collect(value):
+            if isinstance(value, dict):
+                if value.get("kind") == "libcCall":
+                    functions.add(value["function"])
+                for nested in value.values():
+                    collect(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect(nested)
+
+        collect(operations)
+        self.assertTrue(
+            {
+                "memchr", "strtok", "strerror", "cosh", "exp2", "log2", "cbrt",
+                "nearbyint", "rint", "remainder", "frexp", "modf",
+            }.issubset(functions),
+            functions,
+        )
+        standalone = next(item for item in operations if item.get("op") == "expression")
+        self.assertEqual("rand", standalone["expression"]["function"])
+
+    def test_standard_header_constants_are_available_to_the_semantic_model(self) -> None:
+        source = r'''
+#include "main.h"
+#include <float.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+double pi_value = 0.0;
+double epsilon_value = 0.0;
+double infinity_value = 0.0;
+double nan_value = 0.0;
+int eof_value = 0;
+int random_limit = 0;
+
+int main(void)
+{
+  pi_value = M_PI;
+  epsilon_value = DBL_EPSILON;
+  infinity_value = INFINITY;
+  nan_value = NAN;
+  eof_value = EOF;
+  random_limit = RAND_MAX;
+  while (1) HAL_Delay(1U);
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        assignments = {
+            item["target"]: item["value"]
+            for item in walk_operations(model["program"]["operations"])
+            if item.get("op") == "assign" and isinstance(item.get("target"), str)
+        }
+        self.assertAlmostEqual(math.pi, assignments["pi_value"]["value"])
+        self.assertEqual(-1, assignments["eof_value"]["value"])
+        self.assertEqual(2147483647, assignments["random_limit"]["value"])
+        self.assertEqual("INFINITY", assignments["infinity_value"]["name"])
+        self.assertNotIn("value", assignments["infinity_value"])
+        self.assertEqual("NAN", assignments["nan_value"]["name"])
+
+    def test_integer_format_macros_concatenate_with_c_strings(self) -> None:
+        source = r'''
+#include "main.h"
+#include <stdio.h>
+#include <inttypes.h>
+#define LABEL "raw="
+uint32_t raw = 2048;
+char line[64];
+int main(void)
+{
+  snprintf(line, sizeof(line), LABEL "%" PRIu32 " hex=%" PRIX16 "\n", raw, raw);
+  printf("value=%" PRIu32 "\n", raw);
+  sscanf("4095", "%" SCNu32, &raw);
+  return 0;
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        operations = list(walk_operations(model["program"]["operations"]))
+        formats = [item["format"] for item in operations if item["op"] in {"formatString", "stdioWrite", "stdioScan"}]
+        self.assertEqual(["raw=%u hex=%X\n", "value=%u\n", "%u"], [item["value"] for item in formats])
+        for item in formats:
+            self.assertEqual(list(item["value"].encode("ascii")), item["bytes"])
+
+    def test_declaration_call_initializers_lower_hal_heap_and_format_results(self) -> None:
+        source = r'''
+#include "main.h"
+#include <stdio.h>
+#include <stdlib.h>
+ADC_HandleTypeDef hadc1;
+
+int main(void)
+{
+  uint32_t *samples = (uint32_t *)malloc(sizeof(uint32_t) * 4U);
+  uint16_t *zeroed = calloc(3U, sizeof(uint16_t));
+  uint16_t *grown = (uint16_t *)realloc(zeroed, sizeof(uint16_t) * 8U);
+  char line[24U] = {0};
+  int rendered = snprintf(line, sizeof(line), "samples=%u", 4U);
+  HAL_StatusTypeDef start_status = HAL_ADC_Start(&hadc1);
+  (void)samples;
+  (void)grown;
+  (void)rendered;
+  (void)start_status;
+  while (1) HAL_Delay(1U);
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        operations = list(walk_operations(model["program"]["operations"]))
+
+        allocations = [item for item in operations if item["op"] == "heapAllocate"]
+        self.assertEqual(
+            [("malloc", "samples"), ("calloc", "zeroed"), ("realloc", "grown")],
+            [(item["function"], item["resultTarget"]) for item in allocations],
+        )
+        formatted = next(item for item in operations if item["op"] == "formatString")
+        self.assertEqual(("line", "rendered"), (formatted["buffer"], formatted["resultTarget"]))
+        status = next(item for item in operations if item["op"] == "adcStart")
+        self.assertEqual("start_status", status["resultTarget"])
 
     def test_exti_adc_uart_and_timer_interrupts_are_lowered_with_callbacks(self) -> None:
         header = MAIN_H + r'''
@@ -969,6 +1589,297 @@ int main(void)
         self.assertEqual("hdma_adc1", model["adcs"]["hadc1"]["dmaHandle"])
         self.assertEqual("hdma_adc1", operation["dmaHandle"])
         self.assertTrue(operation["circular"])
+
+    def test_hal_status_comparisons_are_values_in_assignments_and_returns(self) -> None:
+        source = r'''
+#include "main.h"
+#include <stdbool.h>
+
+ADC_HandleTypeDef hadc1;
+uint32_t result = 0U;
+
+static bool ADC_Is_Ready(void)
+{
+  return HAL_ADC_Start(&hadc1) == HAL_OK;
+}
+
+int main(void)
+{
+  bool adc_ready = HAL_ADC_Start(&hadc1) == HAL_OK;
+  bool input_high = HAL_GPIO_ReadPin(RED_GPIO_Port, RED_Pin) == GPIO_PIN_SET;
+  bool should_sample = adc_ready && !input_high;
+  bool enabled = true;
+  bool disabled = false;
+  result = should_sample || enabled;
+
+  if (ADC_Is_Ready() && !disabled)
+    return HAL_ADC_Start(&hadc1) == HAL_OK;
+  return false;
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+
+        operations = model["program"]["operations"]
+        assignments = {
+            item["target"]: item["value"]
+            for item in operations
+            if item["op"] == "assign" and isinstance(item.get("target"), str)
+        }
+        self.assertEqual("eq", assignments["adc_ready"]["op"])
+        self.assertEqual("halCall", assignments["adc_ready"]["left"]["kind"])
+        self.assertEqual("eq", assignments["input_high"]["op"])
+        self.assertEqual("halCall", assignments["input_high"]["left"]["kind"])
+        self.assertEqual("and", assignments["should_sample"]["op"])
+        self.assertEqual("or", assignments["result"]["op"])
+        self.assertEqual({"kind": "constant", "name": "true", "value": True}, assignments["enabled"])
+        self.assertEqual({"kind": "constant", "name": "false", "value": False}, assignments["disabled"])
+
+        conditional_return = operations[-2]["then"][0]
+        self.assertEqual("return", conditional_return["op"])
+        self.assertEqual("eq", conditional_return["value"]["op"])
+        self.assertEqual("halCall", conditional_return["value"]["left"]["kind"])
+        self.assertEqual({"kind": "constant", "name": "false", "value": False}, operations[-1]["value"])
+
+    def test_hal_get_tick_is_supported_in_declaration_and_arithmetic(self) -> None:
+        source = r'''
+#include "main.h"
+
+uint32_t elapsed = 0U;
+
+int main(void)
+{
+  uint32_t started_at = HAL_GetTick();
+  uint32_t deadline = HAL_GetTick() + 25U;
+  elapsed = deadline - started_at;
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        operations = model["program"]["operations"]
+        started = next(item for item in operations if item.get("target") == "started_at")
+        deadline = next(item for item in operations if item.get("target") == "deadline")
+        self.assertEqual({"kind": "tick"}, started["value"])
+        self.assertEqual("add", deadline["value"]["kind"])
+        self.assertEqual({"kind": "tick"}, deadline["value"]["left"])
+
+    def test_parenthesis_free_sizeof_is_supported_in_transfer_and_arithmetic(self) -> None:
+        source = r'''
+#include "main.h"
+
+UART_HandleTypeDef huart2;
+uint8_t tx[4U] = {0};
+uint32_t total = 0U;
+
+int main(void)
+{
+  uint32_t length = sizeof tx;
+  total = sizeof tx + 1U;
+  HAL_UART_Transmit(&huart2, tx, sizeof tx, 10U);
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        operations = model["program"]["operations"]
+        length = next(item for item in operations if item.get("target") == "length")
+        total = next(item for item in operations if item.get("target") == "total")
+        transmit = next(item for item in operations if item["op"] == "uartTransmit")
+        self.assertEqual("sizeOf", length["value"]["kind"])
+        self.assertEqual("add", total["value"]["kind"])
+        self.assertEqual("sizeOf", total["value"]["left"]["kind"])
+        self.assertEqual("sizeOf", transmit["length"]["kind"])
+
+    def test_array_size_and_parenthesized_array_pointer_expressions_are_lowered(self) -> None:
+        source = r'''
+#include "main.h"
+#define ARRAY_SIZE(value) (sizeof(value) / sizeof((value)[0]))
+
+uint16_t samples[4] = {0};
+uint16_t *cursor = 0;
+uint32_t sample_count = 0U;
+uint32_t element_bytes = 0U;
+
+int main(void)
+{
+  sample_count = ARRAY_SIZE(samples);
+  element_bytes = sizeof(uint16_t);
+  cursor = &((samples))[0];
+  cursor = cursor + 1;
+  *cursor = 7U;
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        operations = model["program"]["operations"]
+        count = next(item for item in operations if item.get("target") == "sample_count")
+        width = next(item for item in operations if item.get("target") == "element_bytes")
+        pointer = next(item for item in operations if item.get("target") == "cursor" and item["value"].get("kind") == "addressOf")
+        self.assertEqual("div", count["value"]["kind"])
+        self.assertEqual("sizeOf", count["value"]["left"]["kind"])
+        self.assertEqual("arrayIndex", count["value"]["right"]["value"]["kind"])
+        self.assertEqual({"kind": "sizeOf", "cType": "uint16_t"}, width["value"])
+        self.assertEqual("arrayIndex", pointer["value"]["value"]["kind"])
+        self.assertEqual("samples", pointer["value"]["value"]["name"])
+
+    def test_pointer_cast_followed_by_address_of_is_not_mistaken_for_bitwise_and(self) -> None:
+        source = r'''
+#include "main.h"
+
+uint16_t sample = 0U;
+uint8_t *bytes = 0;
+
+int main(void)
+{
+  bytes = (uint8_t *)&sample;
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        assignment = next(item for item in model["program"]["operations"] if item.get("target") == "bytes")
+        self.assertEqual("addressOf", assignment["value"]["kind"])
+        self.assertEqual("sample", assignment["value"]["value"]["name"])
+
+    def test_hal_buffer_arguments_preserve_literal_and_pointer_expressions(self) -> None:
+        source = r'''
+#include "main.h"
+
+uint8_t frame[4] = { 'A', 'B', 'C', 0 };
+uint32_t offset = 1U;
+
+int main(void)
+{
+  HAL_UART_Transmit(&huart2, (uint8_t*)"OK", sizeof("OK") - 1U, 10U);
+  HAL_UART_Transmit(&huart2, &frame[offset], 2U, 10U);
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        transfers = [item for item in model["program"]["operations"] if item["op"] == "uartTransmit"]
+        self.assertEqual(2, len(transfers))
+        self.assertEqual({"kind": "string", "value": "OK", "bytes": [79, 75]}, transfers[0]["buffer"])
+        self.assertEqual("addressOf", transfers[1]["buffer"]["kind"])
+
+    def test_common_embedded_c_idioms_work_together_without_false_unsupported_errors(self) -> None:
+        source = r'''
+#include "main.h"
+#define ARRAY_SIZE(value) (sizeof(value) / sizeof((value)[0]))
+
+typedef enum
+{
+  MODE_IDLE,
+  MODE_RUN = 4,
+  MODE_ERROR
+} RunMode;
+
+typedef struct
+{
+  uint16_t millivolts;
+  uint8_t ready;
+} Sample;
+
+uint16_t samples[4] = {0};
+Sample current;
+
+static uint32_t Select_Result(uint8_t active)
+{
+  if (active)
+    return ARRAY_SIZE(samples);
+  else
+    return MODE_ERROR;
+}
+
+int main(void)
+{
+  uint32_t index = 0U;
+  uint32_t count = ARRAY_SIZE(samples);
+
+#if 0
+  Unsupported_Peripheral_That_Must_Not_Be_Parsed();
+#endif
+
+  current.millivolts = 1234U;
+  current.ready = 1U;
+
+  do
+  {
+    samples[index] = current.millivolts;
+    index++;
+    if (index == 2U)
+      continue;
+    if (index > 2U)
+      break;
+  } while (index < count);
+
+  return Select_Result(current.ready);
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+
+        operations = model["program"]["operations"]
+        count = next(item for item in operations if item.get("target") == "count")
+        loop = next(item for item in operations if item["op"] == "doWhile")
+        returned = next(item for item in operations if item["op"] == "return")
+
+        self.assertEqual("div", count["value"]["kind"])
+        self.assertEqual("sizeOf", count["value"]["left"]["kind"])
+        self.assertEqual("sizeOf", count["value"]["right"]["kind"])
+        self.assertEqual("member", loop["body"][0]["value"]["kind"])
+        self.assertTrue(any(item["op"] == "continue" for item in loop["body"][2]["then"]))
+        self.assertTrue(any(item["op"] == "break" for item in loop["body"][3]["then"]))
+        self.assertEqual("inlineCall", returned["value"]["kind"])
+        helper_branch = returned["value"]["operations"][0]
+        self.assertEqual("samples", helper_branch["then"][0]["value"]["left"]["value"]["name"])
+        self.assertEqual(5, helper_branch["else"][0]["value"]["value"])
+
+    def test_comparison_equality_and_bitwise_precedence_matches_c(self) -> None:
+        source = r'''
+#include "main.h"
+
+uint32_t a = 1U;
+uint32_t b = 2U;
+uint32_t c = 3U;
+uint32_t mask = 1U;
+uint32_t chained = 0U;
+uint32_t mixed = 0U;
+
+int main(void)
+{
+  chained = a < b < c;
+  mixed = a & mask == 0U;
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
+        self.assertFalse(errors, errors)
+        assignments = {
+            item["target"]: item["value"]
+            for item in model["program"]["operations"]
+            if item.get("op") == "assign" and isinstance(item.get("target"), str)
+        }
+
+        # Relational operators associate left-to-right: (a < b) < c.
+        self.assertEqual("lt", assignments["chained"]["op"])
+        self.assertEqual("lt", assignments["chained"]["left"]["op"])
+        self.assertEqual("c", assignments["chained"]["right"]["name"])
+
+        # Equality binds tighter than bitwise AND: a & (mask == 0U).
+        self.assertEqual("bitAnd", assignments["mixed"]["op"])
+        self.assertEqual("a", assignments["mixed"]["left"]["name"])
+        self.assertEqual("eq", assignments["mixed"]["right"]["op"])
 
 
 if __name__ == "__main__":

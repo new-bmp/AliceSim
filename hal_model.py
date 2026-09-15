@@ -33,6 +33,11 @@ class _Macro:
     file: str
     line: int
     priority: int
+    # ``None`` denotes an object-like macro.  A tuple denotes a function-like
+    # macro (including an empty tuple for ``NAME()``).  Keeping this distinction
+    # is important because C only treats ``NAME(...)`` as a function macro when
+    # the opening parenthesis is adjacent to the macro name.
+    parameters: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -179,20 +184,50 @@ def _collect_macros(
     records: Sequence[_ProjectFile], diagnostics: list[dict]
 ) -> dict[str, _Macro]:
     macros: dict[str, _Macro] = {}
+    # The whitespace before the replacement list is intentionally optional:
+    # ``#define BIT(n) ...`` is function-like, while ``#define VALUE (1)`` is
+    # object-like.  C uses the adjacency of ``name`` and ``(`` to tell them
+    # apart, so capture that shape explicitly instead of using a loose split.
     macro_pattern = re.compile(
-        r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)[ \t]+(.+?)[ \t]*$"
+        r"^[ \t]*#[ \t]*define[ \t]+"
+        r"(?P<name>[A-Za-z_]\w*)"
+        r"(?P<params>\((?:[^()]|\([^)]*\))*\))?"
+        r"(?:[ \t]+(?P<expression>.*?))?[ \t]*$"
     )
     for record in records:
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES + (".inc",)):
             continue
-        cleaned = _strip_comments(record.content)
+        cleaned = _mask_inactive_preprocessor(record.content, keep_definitions=True)
         priority = _macro_priority(record.path)
         for line_number, line in _logical_lines(cleaned):
             match = macro_pattern.match(line)
             if not match:
                 continue
-            name, expression = match.group(1), match.group(2).strip()
-            candidate = _Macro(name, expression, record.path, line_number, priority)
+            name = match.group("name")
+            raw_parameters = match.group("params")
+            parameters: tuple[str, ...] | None
+            if raw_parameters is None:
+                parameters = None
+            else:
+                parameter_text = raw_parameters[1:-1].strip()
+                if not parameter_text or parameter_text == "void":
+                    parameters = ()
+                else:
+                    parsed_parameters: list[str] = []
+                    for parameter in parameter_text.split(","):
+                        # Variadic macros are uncommon in firmware logic, but
+                        # retaining ``__VA_ARGS__`` as a normal token lets the
+                        # expansion path fail explicitly instead of silently
+                        # changing the replacement text.
+                        parameter = parameter.strip()
+                        match_parameter = re.fullmatch(r"([A-Za-z_]\w*)", parameter)
+                        if not match_parameter:
+                            parsed_parameters = []
+                            break
+                        parsed_parameters.append(match_parameter.group(1))
+                    parameters = tuple(parsed_parameters)
+            expression = (match.group("expression") or "").strip()
+            candidate = _Macro(name, expression, record.path, line_number, priority, parameters)
             existing = macros.get(name)
             if existing is None or candidate.priority > existing.priority:
                 macros[name] = candidate
@@ -215,6 +250,74 @@ def _collect_macros(
                     )
                 )
     return macros
+
+
+def _collect_enum_constants(
+    records: Sequence[_ProjectFile], macros: Mapping[str, _Macro]
+) -> dict[str, _Macro]:
+    """Add ordinary C enum members to the shared integer constant table.
+
+    CubeMX headers use enums for GPIO modes, DMA settings, and status values;
+    application code also commonly switches on an enum declared in a header.
+    Treating members as object-like integer macros keeps the existing resolver
+    and expression IR small while preserving explicit initializers and the C
+    auto-increment rule.
+    """
+
+    result: dict[str, _Macro] = dict(macros)
+    enum_pattern = re.compile(
+        r"\benum(?:\s+(?:class|struct))?(?:\s+[A-Za-z_]\w*)?\s*\{(?P<body>.*?)\}",
+        re.DOTALL,
+    )
+    for record in records:
+        if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES):
+            continue
+        cleaned = _mask_inactive_preprocessor(record.content)
+        for enum_match in enum_pattern.finditer(cleaned):
+            body_tokens = _lex_c(enum_match.group("body"), result)
+            current: int | None = -1
+            for item in _split_arguments(body_tokens):
+                if not item:
+                    continue
+                identifier = next(
+                    (
+                        token.value
+                        for token in item
+                        if token.kind == "identifier"
+                        and token.value not in {"enum", "class", "struct"}
+                    ),
+                    None,
+                )
+                if not identifier:
+                    continue
+                equal = next((index for index, token in enumerate(item) if token.value == "="), None)
+                if equal is not None:
+                    expression = _tokens_text(item[equal + 1 :]).strip()
+                    resolver, _ = _make_integer_resolver(result)
+                    value = resolver(expression)
+                    if value is None:
+                        # Keep the member out of the table rather than
+                        # fabricating a number; subsequent members also cannot
+                        # be auto-incremented reliably from an unknown base.
+                        current = None
+                        continue
+                    current = int(value)
+                elif current is not None:
+                    current += 1
+                else:
+                    continue
+                line = _source_line(cleaned, enum_match.start())[0]
+                existing = result.get(identifier)
+                if existing is None or existing.priority <= _macro_priority(record.path):
+                    result[identifier] = _Macro(
+                        identifier,
+                        str(current),
+                        record.path,
+                        line,
+                        _macro_priority(record.path),
+                        None,
+                    )
+    return result
 
 
 _INTEGER_TOKEN = re.compile(
@@ -374,7 +477,7 @@ def _make_integer_resolver(macros: Mapping[str, _Macro]):
         if name in cache:
             return cache[name]
         macro = macros.get(name)
-        if macro is None or name in resolving:
+        if macro is None or macro.parameters is not None or name in resolving:
             return None
         resolving.add(name)
         value = resolve_expression(macro.expression)
@@ -383,7 +486,16 @@ def _make_integer_resolver(macros: Mapping[str, _Macro]):
         return value
 
     def resolve_expression(expression: str) -> int | None:
-        tokens = _tokenise_integer(expression)
+        # Expand small function-like macros (for example ``BIT(3)``) before
+        # feeding the text to the integer evaluator.  The lexer/helper is
+        # defined later in this module but is available when this closure is
+        # invoked during model construction.
+        try:
+            expanded_tokens = _expand_function_macros(_lex_c(expression), macros)
+            expanded_text = _tokens_text(expanded_tokens)
+        except (NameError, TypeError):
+            expanded_text = expression
+        tokens = _tokenise_integer(expanded_text)
         if not tokens:
             return None
         try:
@@ -391,7 +503,203 @@ def _make_integer_resolver(macros: Mapping[str, _Macro]):
         except (ValueError, OverflowError):
             return None
 
+    # Expression lowering uses this back-reference to apply the same macro
+    # expansion when it builds a runtime tree.
+    resolve_expression.macros = macros  # type: ignore[attr-defined]
     return resolve_expression, resolve_identifier
+
+
+def _mask_inactive_preprocessor(
+    source: str,
+    macros: Mapping[str, _Macro] | None = None,
+    *,
+    keep_definitions: bool = False,
+) -> str:
+    """Mask inactive C preprocessor branches while preserving source offsets.
+
+    The semantic parser is intentionally not a full C preprocessor, but it
+    still needs the basic conditional-compilation rules used by CubeMX and
+    CMSIS headers.  Replacing skipped text with spaces (and retaining every
+    newline) means token locations and diagnostics continue to point at the
+    original file.  Definitions encountered in active lines are made visible
+    to later ``#if`` expressions in the same file.
+    """
+
+    cleaned = _strip_comments(source)
+    characters = list(cleaned)
+    inherited: dict[str, _Macro] = dict(macros or {})
+    local = dict(inherited)
+    stack: list[dict[str, bool]] = []
+
+    def is_active() -> bool:
+        return all(item["active"] for item in stack)
+
+    def mask(start: int, end: int) -> None:
+        for position in range(start, end):
+            if characters[position] not in "\r\n":
+                characters[position] = " "
+
+    def local_integer(name: str, resolving: set[str] | None = None) -> int | None:
+        resolving = set() if resolving is None else resolving
+        macro = local.get(name)
+        if macro is None or macro.parameters is not None or name in resolving:
+            return None
+        expression = macro.expression.strip()
+        tokens = _tokenise_integer(expression)
+        if not tokens:
+            return None
+        try:
+            return _IntegerParser(
+                tokens,
+                lambda identifier: local_integer(identifier, resolving | {name}),
+            ).parse()
+        except (ValueError, OverflowError):
+            return None
+
+    def condition_value(expression: str) -> bool:
+        text = expression.strip()
+        # ``defined NAME`` and ``defined(NAME)`` are the forms emitted by
+        # compiler headers.  Replace them before evaluating the integer part.
+        text = re.sub(
+            r"\bdefined\s*\(\s*([A-Za-z_]\w*)\s*\)",
+            lambda match: "1" if match.group(1) in local else "0",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\bdefined\s+([A-Za-z_]\w*)",
+            lambda match: "1" if match.group(1) in local else "0",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        # Handle the small boolean layer around integer expressions.  Splitting
+        # only at top level keeps parenthesized arithmetic intact.
+        def split_top_level(value: str, operator: str) -> list[str]:
+            parts: list[str] = []
+            depth = 0
+            start = 0
+            index = 0
+            while index <= len(value) - len(operator):
+                char = value[index]
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth = max(0, depth - 1)
+                if depth == 0 and value.startswith(operator, index):
+                    parts.append(value[start:index])
+                    index += len(operator)
+                    start = index
+                    continue
+                index += 1
+            if parts:
+                parts.append(value[start:])
+            return parts
+
+        disjunction = split_top_level(text, "||")
+        if disjunction:
+            return any(condition_value(part) for part in disjunction)
+        conjunction = split_top_level(text, "&&")
+        if conjunction:
+            return all(condition_value(part) for part in conjunction)
+        text = text.strip()
+        if text.startswith("!"):
+            return not condition_value(text[1:])
+        while len(text) >= 2 and text[0] == "(" and text[-1] == ")":
+            token_list = _lex_c(text)
+            if _matching(token_list, 0, "(", ")") != len(token_list) - 1:
+                break
+            text = text[1:-1].strip()
+        tokens = _tokenise_integer(text)
+        if not tokens:
+            return False
+        try:
+            return bool(
+                _IntegerParser(tokens, lambda identifier: local_integer(identifier)).parse()
+            )
+        except (ValueError, OverflowError):
+            return False
+
+    offset = 0
+    # Work with physical lines so masking never changes line/column accounting.
+    for line in cleaned.splitlines(keepends=True):
+        line_start = offset
+        line_end = offset + len(line)
+        offset = line_end
+        directive = re.match(
+            r"^[ \t]*#[ \t]*(if|ifdef|ifndef|elif|else|endif|define|undef)\b(?P<rest>.*)$",
+            line.rstrip("\r\n"),
+            flags=re.IGNORECASE,
+        )
+        if directive is None:
+            if not is_active():
+                mask(line_start, line_end)
+            continue
+
+        keyword = directive.group(1).casefold()
+        rest = directive.group("rest").strip()
+        parent_active = is_active()
+        if keyword == "if":
+            active = parent_active and condition_value(rest)
+            stack.append({"parent": parent_active, "taken": active, "active": active})
+        elif keyword in {"ifdef", "ifndef"}:
+            identifier = re.match(r"([A-Za-z_]\w*)", rest)
+            present = bool(identifier and identifier.group(1) in local)
+            if keyword == "ifndef":
+                present = not present
+            active = parent_active and present
+            stack.append({"parent": parent_active, "taken": active, "active": active})
+        elif keyword == "elif":
+            if stack:
+                branch = stack[-1]
+                active = branch["parent"] and not branch["taken"] and condition_value(rest)
+                branch["active"] = active
+                branch["taken"] = branch["taken"] or active
+        elif keyword == "else":
+            if stack:
+                branch = stack[-1]
+                active = branch["parent"] and not branch["taken"]
+                branch["active"] = active
+                branch["taken"] = True
+        elif keyword == "endif":
+            if stack:
+                stack.pop()
+        elif keyword == "define":
+            if parent_active:
+                definition = re.match(
+                    r"([A-Za-z_]\w*)(?:\(([^()]*)\))?(?:[ \t]+(.*))?$", rest
+                )
+                if definition:
+                    name, parameters, replacement = definition.groups()
+                    parameter_tuple: tuple[str, ...] | None = None
+                    if parameters is not None:
+                        parsed = [item.strip() for item in parameters.split(",") if item.strip()]
+                        parameter_tuple = tuple(parsed)
+                    local[name] = _Macro(
+                        name,
+                        (replacement or "").strip(),
+                        "<preprocessor>",
+                        0,
+                        0,
+                        parameter_tuple,
+                    )
+        elif keyword == "undef" and parent_active:
+            identifier = re.match(r"([A-Za-z_]\w*)", rest)
+            if identifier:
+                local.pop(identifier.group(1), None)
+        # Preprocessor directives are consumed by the lexer.  Macro collection
+        # asks to retain active ``#define`` lines so it can build the shared
+        # macro table; all other directives remain masked.
+        if not (
+            keep_definitions
+            and keyword in {"define", "undef"}
+            and parent_active
+        ):
+            mask(line_start, line_end)
+
+    if offset < len(characters) and not is_active():
+        mask(offset, len(characters))
+    return "".join(characters)
 
 
 def _resolve_port(expression: str, macros: Mapping[str, _Macro]) -> str | None:
@@ -866,7 +1174,7 @@ def _parse_gpio_interrupt_configuration(
     for record in records:
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES):
             continue
-        cleaned = _strip_comments(record.content)
+        cleaned = _mask_inactive_preprocessor(record.content, macros)
         for call in init_call.finditer(cleaned):
             struct_name = call.group("struct")
             prefix_source = cleaned[: call.start()]
@@ -904,13 +1212,15 @@ def _source_line(source: str, position: int) -> tuple[int, int]:
     return line, position - last_break
 
 
-def _lex_c(source: str) -> list[_Token]:
-    cleaned = _strip_comments(source)
+def _lex_c(
+    source: str, macros: Mapping[str, _Macro] | None = None
+) -> list[_Token]:
+    cleaned = _mask_inactive_preprocessor(source, macros)
     tokens: list[_Token] = []
     index = 0
     line = 1
     column = 1
-    multi_operators = ("<<=", ">>=", "...", "==", "!=", "<=", ">=", "&&", "||", "->", "++", "--", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=")
+    multi_operators = ("<<=", ">>=", "...", "##", "==", "!=", "<=", ">=", "&&", "||", "->", "++", "--", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=")
 
     def advance(text: str) -> None:
         nonlocal line, column
@@ -981,6 +1291,124 @@ def _lex_c(source: str) -> list[_Token]:
     return tokens
 
 
+def _expand_function_macros(
+    tokens: Sequence[_Token],
+    macros: Mapping[str, _Macro],
+    *,
+    depth: int = 0,
+    expanding: frozenset[str] = frozenset(),
+) -> list[_Token]:
+    """Expand function-like preprocessor macros in an expression token list.
+
+    The semantic model does not run a C preprocessor, but common embedded
+    headers use small, side-effect-free helpers such as ``BIT(n)``, ``MIN``
+    and ``ARRAY_SIZE`` pervasively.  Expanding only function-like macros here
+    preserves the existing object-macro names (which are useful for GPIO and
+    HAL diagnostics) while making those helpers ordinary expression trees.
+    Expansion is bounded and recursive so malformed/self-referential macros
+    remain an explicit unsupported expression instead of hanging the build.
+    """
+
+    if depth >= 24 or not tokens:
+        return list(tokens)
+    source_tokens = list(tokens)
+    output: list[_Token] = []
+    index = 0
+    while index < len(source_tokens):
+        token = source_tokens[index]
+        macro = macros.get(token.value) if token.kind == "identifier" else None
+        if (
+            macro is None
+            or macro.parameters is None
+            or macro.name in expanding
+            or index + 1 >= len(source_tokens)
+            or source_tokens[index + 1].value != "("
+        ):
+            output.append(token)
+            index += 1
+            continue
+
+        close = _matching(source_tokens, index + 1, "(", ")")
+        if close is None:
+            output.append(token)
+            index += 1
+            continue
+        arguments = _split_arguments(source_tokens[index + 2 : close])
+        parameters = macro.parameters
+        # ``NAME()`` has one empty argument in the token splitter; normalize it
+        # to zero arguments when the macro declaration has no parameters.
+        if len(parameters) == 0 and len(arguments) == 1 and not arguments[0]:
+            arguments = []
+        if len(arguments) != len(parameters):
+            # Leave the call intact.  The expression validator will report the
+            # original source text, which is much more useful than silently
+            # dropping a malformed macro invocation.
+            output.extend(source_tokens[index : close + 1])
+            index = close + 1
+            continue
+
+        substitutions = dict(zip(parameters, arguments))
+        body_tokens = _lex_c(macro.expression)
+        replaced: list[_Token] = []
+        body_index = 0
+        while body_index < len(body_tokens):
+            body_token = body_tokens[body_index]
+            # C stringification is occasionally used for debug text.  Preserve
+            # it as a normal string literal so printf/formatting can consume it.
+            if (
+                body_token.value == "#"
+                and body_index + 1 < len(body_tokens)
+                and body_tokens[body_index + 1].kind == "identifier"
+                and body_tokens[body_index + 1].value in substitutions
+            ):
+                argument_text = _tokens_text(substitutions[body_tokens[body_index + 1].value]).strip()
+                escaped = argument_text.replace("\\", "\\\\").replace('"', '\\"')
+                replaced.append(_Token(f'"{escaped}"', "string", token.start, token.line, token.column))
+                body_index += 2
+                continue
+            # Token pasting is needed by integer constructor macros such as
+            # UINT8_C(value).  Paste the immediate neighboring token values and
+            # lex the result so numeric suffixes are recognized normally.
+            if body_token.value == "##" and replaced and body_index + 1 < len(body_tokens):
+                right = body_tokens[body_index + 1]
+                right_tokens = substitutions.get(right.value, [right]) if right.kind == "identifier" else [right]
+                if right_tokens:
+                    pasted = replaced.pop().value + _tokens_text(right_tokens).strip()
+                    pasted_tokens = _lex_c(pasted)
+                    replaced.extend(pasted_tokens or [_Token(pasted, "identifier", token.start, token.line, token.column)])
+                body_index += 2
+                continue
+            if body_token.kind == "identifier" and body_token.value in substitutions:
+                adjacent_paste = (
+                    (body_index > 0 and body_tokens[body_index - 1].value == "##")
+                    or (body_index + 1 < len(body_tokens) and body_tokens[body_index + 1].value == "##")
+                )
+                if adjacent_paste:
+                    # Token-paste operands are substituted without protective
+                    # parentheses; the neighboring ``##`` handler combines
+                    # their spelling into one lexical token.
+                    replaced.extend(substitutions[body_token.value])
+                    body_index += 1
+                    continue
+                marker = substitutions[body_token.value][0] if substitutions[body_token.value] else token
+                replaced.append(_Token("(", "operator", marker.start, marker.line, marker.column))
+                replaced.extend(substitutions[body_token.value])
+                replaced.append(_Token(")", "operator", marker.start, marker.line, marker.column))
+            else:
+                replaced.append(body_token)
+            body_index += 1
+        output.extend(
+            _expand_function_macros(
+                replaced,
+                macros,
+                depth=depth + 1,
+                expanding=expanding | {macro.name},
+            )
+        )
+        index = close + 1
+    return output
+
+
 def _matching(tokens: Sequence[_Token], start: int, opening: str, closing: str) -> int | None:
     if start >= len(tokens) or tokens[start].value != opening:
         return None
@@ -1029,6 +1457,113 @@ def _strip_leading_c_casts(tokens: Sequence[_Token]) -> list[_Token]:
             break
         output = _strip_wrapping_parentheses(output[close + 1 :])
     return output
+
+
+_SIZEOF_BUILTIN_TYPES = {
+    "bool", "_bool", "char", "signed", "unsigned", "short", "int", "long",
+    "float", "double", "void", "size_t", "ptrdiff_t", "intptr_t", "uintptr_t",
+    "int8_t", "uint8_t", "int16_t", "uint16_t", "int32_t", "uint32_t",
+    "int64_t", "uint64_t", "ssize_t",
+}
+
+
+def _sizeof_type_name(tokens: Sequence[_Token]) -> str | None:
+    """Return a canonical type spelling for ``sizeof(type)`` operands.
+
+    A typedef name is lexically indistinguishable from a variable name, so we
+    only classify names that are conventional C type spellings (built-ins,
+    fixed-width ``*_t`` aliases, or an explicit struct/union/enum tag). This
+    keeps ``sizeof(buffer)`` an object expression while making
+    ``sizeof(uint16_t)`` deterministic in the browser runtime.
+    """
+
+    cleaned = _strip_wrapping_parentheses(tokens)
+    if not cleaned:
+        return None
+    if any(token.kind not in {"identifier", "operator"} for token in cleaned):
+        return None
+    text = _tokens_text(cleaned).replace(" *", "*").strip()
+    identifiers = [token.value for token in cleaned if token.kind == "identifier"]
+    if not identifiers:
+        return None
+    lowered = [value.casefold() for value in identifiers]
+    if lowered[0] in {"struct", "union", "enum"}:
+        # ``struct Foo`` and friends may carry pointer qualifiers.
+        if len(identifiers) >= 2 and all(token.value in {"*"} or token.kind == "identifier" for token in cleaned):
+            return text
+        return None
+    if all(value in _SIZEOF_BUILTIN_TYPES or value.endswith("_t") or value.endswith("typedef") for value in lowered):
+        # A bare identifier such as ``foo_t`` is accepted as a typedef-sized
+        # object; unknown typedefs use the runtime's deterministic word size.
+        if all(token.kind == "identifier" or token.value == "*" for token in cleaned):
+            return text
+    return None
+
+
+def _postfix_array_model(tokens: Sequence[_Token], resolve_integer, call_resolver=None) -> dict | None:
+    """Model ``base[index]`` after arbitrary parenthesized bases.
+
+    The old fast path only accepted ``name[index]``. Macro idioms such as
+    ``ARRAY_SIZE(a)`` expand to ``(a)[0]`` and therefore need a general base
+    expression while retaining the compact ``name`` field for existing IR.
+    """
+
+    cleaned = list(tokens)
+    if len(cleaned) < 4 or cleaned[-1].value != "]":
+        return None
+    # Find the matching opening bracket for the final subscript, respecting
+    # nested subscripts in the index itself.
+    depth = 0
+    opening = None
+    for index in range(len(cleaned) - 1, -1, -1):
+        value = cleaned[index].value
+        if value == "]":
+            depth += 1
+        elif value == "[":
+            depth -= 1
+            if depth == 0:
+                opening = index
+                break
+    if opening is None or opening == 0:
+        return None
+    base_tokens = _strip_wrapping_parentheses(cleaned[:opening])
+    if not base_tokens:
+        return None
+    base = _expression_model(base_tokens, resolve_integer, call_resolver)
+    index_model = _expression_model(cleaned[opening + 1 : -1], resolve_integer, call_resolver)
+    index_value = index_model.get("value") if index_model.get("kind") == "literal" else index_model
+    # Preserve the historical named representation where possible. Runtime
+    # uses ``array`` for a general base such as ``(a)`` or ``p + 1``.
+    if base.get("kind") == "variable":
+        return {
+            "kind": "arrayIndex",
+            "name": base.get("name"),
+            "index": index_value,
+        }
+    return {
+        "kind": "arrayIndex",
+        "array": base,
+        "index": index_value,
+    }
+
+
+def _postfix_member_model(
+    tokens: Sequence[_Token], resolve_integer, call_resolver=None
+) -> dict | None:
+    """Model ``base.member`` and ``base->member`` for arbitrary bases."""
+
+    cleaned = list(tokens)
+    if len(cleaned) < 3 or cleaned[-1].kind != "identifier" or cleaned[-2].value not in {".", "->"}:
+        return None
+    base_tokens = _strip_wrapping_parentheses(cleaned[:-2])
+    if not base_tokens:
+        return None
+    return {
+        "kind": "member",
+        "object": _expression_model(base_tokens, resolve_integer, call_resolver),
+        "member": cleaned[-1].value,
+        "pointer": cleaned[-2].value == "->",
+    }
 
 
 def _decode_c_char(token: str) -> str | None:
@@ -1180,10 +1715,34 @@ def _parse_initial_variables(
             return ord(decoded) if decoded is not None else None
         return resolve_expression(text)
 
+    def normalise_value(value: int | float, type_text: str) -> int | float:
+        """Apply the declared scalar width to an initializer element."""
+
+        lowered = re.sub(r"\s+", " ", type_text.casefold()).strip()
+        if "float" in lowered or "double" in lowered:
+            return float(value)
+        fixed = re.search(r"(?:u|s)?int(8|16|32|64)_t", lowered)
+        if fixed:
+            bits = int(fixed.group(1))
+            unsigned = lowered.startswith("u")
+        elif "char" in lowered:
+            bits, unsigned = 8, not lowered.startswith("signed")
+        elif "short" in lowered:
+            bits, unsigned = 16, lowered.startswith("unsigned")
+        elif "long long" in lowered:
+            bits, unsigned = 64, lowered.startswith("unsigned")
+        else:
+            bits, unsigned = 32, lowered.startswith("unsigned")
+        modulus = 1 << bits
+        wrapped = int(value) % modulus
+        if not unsigned and wrapped >= modulus // 2:
+            wrapped -= modulus
+        return wrapped
+
     for record in records:
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES):
             continue
-        cleaned = _strip_comments(record.content)
+        cleaned = _mask_inactive_preprocessor(record.content, macros)
         for match in declaration_pattern.finditer(cleaned):
             name = match.group("name")
             floating = "float" in match.group("type") or "double" in match.group("type")
@@ -1202,7 +1761,7 @@ def _parse_initial_variables(
                         if resolved is None:
                             values = None
                             break
-                        values.append(resolved if floating else int(resolved) & 0xFF)
+                        values.append(normalise_value(resolved, match.group("type")))
                 elif initializer.startswith('"'):
                     values = _decode_c_string_literal(initializer)
                     if values is not None:
@@ -1227,7 +1786,9 @@ def _parse_initial_variables(
     return variables
 
 
-def _parse_variable_types(records: Sequence[_ProjectFile]) -> dict[str, str]:
+def _parse_variable_types(
+    records: Sequence[_ProjectFile], macros: Mapping[str, _Macro] | None = None
+) -> dict[str, str]:
     """Collect scalar/array numeric declarations for runtime C coercion.
 
     The behaviour model remains value-oriented, but preserving the declared C
@@ -1247,7 +1808,7 @@ def _parse_variable_types(records: Sequence[_ProjectFile]) -> dict[str, str]:
     for record in records:
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES):
             continue
-        cleaned = _strip_comments(record.content)
+        cleaned = _mask_inactive_preprocessor(record.content, macros)
         for match in declaration_pattern.finditer(cleaned):
             pointer = (match.group("pointer") or "").replace(" ", "")
             variable_types[match.group("name")] = re.sub(r"\s+", " ", match.group("type").strip().lower()) + pointer
@@ -1256,15 +1817,24 @@ def _parse_variable_types(records: Sequence[_ProjectFile]) -> dict[str, str]:
 
 _PURE_LIBC_FUNCTIONS = {
     "abs", "labs", "llabs", "atoi", "atol", "atoll", "atof",
-    "strtol", "strtoul", "strtoll", "strtoull", "strtod",
-    "strcmp", "strncmp", "memcmp", "strlen",
+    "strtol", "strtoul", "strtoll", "strtoull", "strtod", "strtof", "strtold",
+    "strcmp", "strncmp", "memcmp", "memchr", "strlen", "strnlen",
+    "strchr", "strrchr", "strstr", "strpbrk", "strcspn", "strspn", "strcoll",
+    "strtok", "strerror",
     "rand", "sqrt", "sqrtf", "sqrtl", "pow", "powf", "powl",
     "sin", "sinf", "sinl", "cos", "cosf", "cosl", "tan", "tanf", "tanl",
     "asin", "asinf", "asinl", "acos", "acosf", "acosl", "atan", "atanf", "atanl",
     "atan2", "atan2f", "atan2l", "floor", "floorf", "floorl", "ceil", "ceilf", "ceill",
     "round", "roundf", "roundl", "trunc", "truncf", "truncl", "fabs", "fabsf", "fabsl",
-    "fmod", "fmodf", "fmodl", "exp", "expf", "expl", "log", "logf", "logl",
-    "log10", "log10f", "log10l",
+    "cosh", "coshf", "coshl", "sinh", "sinhf", "sinhl", "tanh", "tanhf", "tanhl",
+    "exp2", "exp2f", "exp2l", "log2", "log2f", "log2l", "cbrt", "cbrtf", "cbrtl",
+    "nearbyint", "nearbyintf", "nearbyintl", "rint", "rintf", "rintl",
+    "fmod", "fmodf", "fmodl", "remainder", "remainderf", "remainderl",
+    "fmin", "fminf", "fminl", "fmax", "fmaxf", "fmaxl",
+    "copysign", "copysignf", "copysignl", "hypot", "hypotf", "hypotl",
+    "exp", "expf", "expl", "log", "logf", "logl", "log10", "log10f", "log10l",
+    "ldexp", "ldexpf", "ldexpl", "frexp", "frexpf", "frexpl",
+    "modf", "modff", "modfl", "isnan", "isfinite", "isinf", "signbit",
     "isalnum", "isalpha", "isblank", "iscntrl", "isdigit", "isgraph", "islower", "isprint",
     "ispunct", "isspace", "isupper", "isxdigit", "tolower", "toupper",
 }
@@ -1275,30 +1845,119 @@ _STATEMENT_LIBC_FUNCTIONS = {
     "malloc", "calloc", "realloc", "free", "srand", "exit", "_Exit", "abort",
 }
 
+_SIDE_EFFECT_LIBC_FUNCTIONS = {
+    "rand", "strtok",
+    "strtol", "strtoul", "strtoll", "strtoull", "strtod", "strtof", "strtold",
+    "frexp", "frexpf", "frexpl", "modf", "modff", "modfl",
+}
 
-def _expression_model(tokens: Sequence[_Token], resolve_integer) -> dict:
+_STANDARD_STRING_MACROS = {
+    "PRId8": "d", "PRId16": "d", "PRId32": "d", "PRId64": "lld",
+    "PRIi8": "i", "PRIi16": "i", "PRIi32": "i", "PRIi64": "lli",
+    "PRIu8": "u", "PRIu16": "u", "PRIu32": "u", "PRIu64": "llu",
+    "PRIx8": "x", "PRIx16": "x", "PRIx32": "x", "PRIx64": "llx",
+    "PRIX8": "X", "PRIX16": "X", "PRIX32": "X", "PRIX64": "llX",
+    "SCNd8": "hhd", "SCNd16": "hd", "SCNd32": "d", "SCNd64": "lld",
+    "SCNu8": "hhu", "SCNu16": "hu", "SCNu32": "u", "SCNu64": "llu",
+}
+
+
+def _lvalue_expression_model(
+    tokens: Sequence[_Token],
+    resolve_integer,
+    call_resolver=None,
+    *,
+    postfix: bool = False,
+) -> dict | None:
+    """Return the small set of writable expressions supported by the runtime.
+
+    This deliberately accepts only a named variable, a single array subscript,
+    or a dereference. In particular, the postfix form ``*pointer++`` is not
+    treated as ``(*pointer)++``: C binds postfix increment to ``pointer``
+    first, so accepting it as a writable dereference here would silently model
+    a different program.
+    """
+
+    original = list(tokens)
+    cleaned = _strip_wrapping_parentheses(original)
+    if not cleaned:
+        return None
+    if postfix and cleaned[0].value == "*" and not (
+        original and original[0].value == "(" and _matching(original, 0, "(", ")") is not None
+    ):
+        return None
+    model = _expression_model(cleaned, resolve_integer, call_resolver)
+    if model.get("kind") in {"variable", "arrayIndex", "dereference", "member"}:
+        return model
+    return None
+
+
+def _expression_model(tokens: Sequence[_Token], resolve_integer, call_resolver=None) -> dict:
+    """Lower a C value expression into runtime IR.
+
+    ``call_resolver`` is supplied by the statement parser so a modeled HAL
+    call has exactly the same lowering whether it appears as a statement,
+    assignment RHS, or part of a condition.  The generic expression layer
+    deliberately remains independent of peripheral metadata.
+    """
     cleaned = _strip_wrapping_parentheses(tokens)
+    # Expand only function-like macros. Object-like macros remain visible as
+    # named constants and are resolved by ``resolve_integer`` below.
+    if cleaned:
+        expanded = _expand_function_macros(cleaned, getattr(resolve_integer, "macros", {}))
+        if expanded != cleaned:
+            cleaned = _strip_wrapping_parentheses(expanded)
     while len(cleaned) >= 4 and cleaned[0].kind == "identifier" and cleaned[1].value == ":" and cleaned[2].value == ":":
         cleaned = cleaned[3:]
     if not cleaned:
         return {"kind": "unknown", "text": ""}
+
+    # C concatenates adjacent string literals after macro expansion. Format
+    # macros from <inttypes.h> are provided by the Clang compatibility headers
+    # rather than uploaded project files, so resolve those names here too.
+    string_bytes: list[int] = []
+    string_expression = True
+    expression_macros = getattr(resolve_integer, "macros", {})
+    for token in cleaned:
+        literal_text: str | None = None
+        if token.kind == "string":
+            literal_text = token.value
+        elif token.kind == "identifier" and token.value in _STANDARD_STRING_MACROS:
+            string_bytes.extend(_STANDARD_STRING_MACROS[token.value].encode("ascii"))
+            continue
+        elif token.kind == "identifier" and isinstance(expression_macros, Mapping):
+            macro = expression_macros.get(token.value)
+            if macro is not None and macro.parameters is None:
+                replacement = _strip_wrapping_parentheses(_lex_c(macro.expression))
+                if len(replacement) == 1 and replacement[0].kind == "string":
+                    literal_text = replacement[0].value
+        if literal_text is None:
+            string_expression = False
+            break
+        decoded = _decode_c_string_literal(literal_text)
+        if decoded is None:
+            string_expression = False
+            break
+        string_bytes.extend(decoded)
+    if string_expression and cleaned:
+        try:
+            string_value = bytes(string_bytes).decode("utf-8")
+        except UnicodeDecodeError:
+            string_value = bytes(string_bytes).decode("latin-1")
+        return {"kind": "string", "value": string_value, "bytes": string_bytes}
 
     if len(cleaned) >= 3 and cleaned[0].kind == "identifier" and cleaned[1].value == "(":
         close_call = _matching(cleaned, 1, "(", ")")
         if close_call == len(cleaned) - 1:
             if cleaned[0].value == "HAL_GetTick":
                 return {"kind": "tick"}
-            if cleaned[0].value in {"HAL_Init", "HAL_ADCEx_Calibration_Start"}:
-                return {"kind": "constant", "name": "HAL_OK", "value": 0}
-            if cleaned[0].value == "HAL_ADC_PollForConversion":
-                arguments = _split_arguments(cleaned[2:close_call])
-                return {
-                    "kind": "adcPoll",
-                    "adc": _first_identifier(arguments[0]) if arguments else None,
-                    "timeout": _expression_model(arguments[1], resolve_integer) if len(arguments) > 1 else {"kind": "literal", "value": 0},
-                }
             if cleaned[0].value in {"strlen", "sizeof"}:
-                argument = _expression_model(cleaned[2:close_call], resolve_integer)
+                raw_argument = cleaned[2:close_call]
+                if cleaned[0].value == "sizeof":
+                    type_name = _sizeof_type_name(raw_argument)
+                    if type_name is not None:
+                        return {"kind": "sizeOf", "cType": type_name}
+                argument = _expression_model(raw_argument, resolve_integer, call_resolver)
                 return {
                     "kind": "stringLength" if cleaned[0].value == "strlen" else "sizeOf",
                     "value": argument,
@@ -1308,10 +1967,190 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer) -> dict:
                     "kind": "libcCall",
                     "function": cleaned[0].value,
                     "arguments": [
-                        _expression_model(argument, resolve_integer)
+                        _expression_model(argument, resolve_integer, call_resolver)
                         for argument in _split_arguments(cleaned[2:close_call])
                     ],
                 }
+            if call_resolver is not None:
+                resolved_call = call_resolver(cleaned[0], _split_arguments(cleaned[2:close_call]))
+                if resolved_call is not None:
+                    return resolved_call
+            # Keep the generic expression parser usable by callers that do
+            # not have peripheral metadata (for example legacy standalone
+            # parser tests). StatementParser always resolves these through the
+            # common HAL call path above.
+            if cleaned[0].value in {"HAL_Init", "HAL_ADCEx_Calibration_Start"}:
+                return {"kind": "constant", "name": "HAL_OK", "value": 0}
+            if cleaned[0].value == "HAL_ADC_PollForConversion":
+                arguments = _split_arguments(cleaned[2:close_call])
+                return {
+                    "kind": "adcPoll",
+                    "adc": _first_identifier(arguments[0]) if arguments else None,
+                    "timeout": _expression_model(arguments[1], resolve_integer, call_resolver) if len(arguments) > 1 else {"kind": "literal", "value": 0},
+                }
+
+    # The conditional operator has lower precedence than every binary
+    # arithmetic operator below.  Find its matching colon explicitly because
+    # both branches may themselves contain a nested conditional expression.
+    question_index: int | None = None
+    conditional_colon: int | None = None
+    depth = 0
+    nested_conditionals = 0
+    for index, token in enumerate(cleaned):
+        if token.value in {"(", "[", "{"}:
+            depth += 1
+            continue
+        if token.value in {")", "]", "}"}:
+            depth = max(0, depth - 1)
+            continue
+        if depth != 0:
+            continue
+        if token.value == "?":
+            if question_index is None:
+                question_index = index
+            nested_conditionals += 1
+            continue
+        if token.value == ":" and question_index is not None:
+            nested_conditionals -= 1
+            if nested_conditionals == 0:
+                conditional_colon = index
+                break
+    if question_index is not None and conditional_colon is not None:
+        return {
+            "kind": "conditional",
+            "condition": _condition_model(
+                cleaned[:question_index],
+                resolve_integer,
+                lambda value: _expression_model(value, resolve_integer, call_resolver),
+            ),
+            "consequent": _expression_model(
+                cleaned[question_index + 1 : conditional_colon], resolve_integer, call_resolver
+            ),
+            "alternate": _expression_model(cleaned[conditional_colon + 1 :], resolve_integer, call_resolver),
+        }
+
+    # A cast followed by a unary operator is still one cast expression in C,
+    # for example ``(uint8_t *)&sample``. Recognize this before binary
+    # precedence scanning so the ``&`` is not mistaken for a top-level
+    # bitwise-and operator.
+    if len(cleaned) >= 4 and cleaned[0].value == "(":
+        cast_close = _matching(cleaned, 0, "(", ")")
+        if cast_close is not None and cast_close < len(cleaned) - 1:
+            cast_tokens = cleaned[1:cast_close]
+            cast_identifiers = [token.value for token in cast_tokens if token.kind == "identifier"]
+            cast_type_names = {
+                "bool", "char", "const", "double", "enum", "float", "int", "long", "short", "signed",
+                "size_t", "struct", "union", "unsigned", "void", "volatile", "_Bool",
+            }
+            is_type_cast = bool(cast_identifiers) and all(
+                name in cast_type_names or name.endswith("_t") or name.endswith("TypeDef")
+                for name in cast_identifiers
+            ) and all(token.kind == "identifier" or token.value == "*" for token in cast_tokens)
+            remainder = cleaned[cast_close + 1 :]
+            if is_type_cast and remainder and remainder[0].value in {"&", "*", "+", "-", "!", "~"}:
+                cast_type = _tokens_text(cast_tokens).replace(" *", "*")
+                if "float" in cast_type or "double" in cast_type:
+                    return {
+                        "kind": "cast",
+                        "cType": cast_type,
+                        "value": _expression_model(remainder, resolve_integer, call_resolver),
+                    }
+                return _expression_model(remainder, resolve_integer, call_resolver)
+
+    # The comma operator sequences expressions and yields the value of the
+    # final operand.  It is common in compact register/loop code and also
+    # appears inside logical operands, so retain it as an explicit node rather
+    # than reporting the whole expression as opaque text.
+    comma_parts = _split_arguments(cleaned)
+    if len(comma_parts) > 1:
+        return {
+            "kind": "sequence",
+            "expressions": [
+                _expression_model(part, resolve_integer, call_resolver)
+                for part in comma_parts
+                if part
+            ],
+        }
+
+    # Assignment is an expression in C (including inside an ``if`` condition,
+    # a function argument, or a return statement).  Keep the writable target
+    # separate so the browser runtime can apply the side effect exactly once
+    # and still return the assigned value to its parent expression.
+    assignment_operators = {
+        "=": "assign",
+        "+=": "add",
+        "-=": "sub",
+        "*=": "mul",
+        "/=": "div",
+        "%=": "mod",
+        "&=": "bitAnd",
+        "|=": "bitOr",
+        "^=": "bitXor",
+        "<<=": "shiftLeft",
+        ">>=": "shiftRight",
+    }
+    depth = 0
+    assignment_index: int | None = None
+    for index, token in enumerate(cleaned):
+        if token.value in {"(", "[", "{"}:
+            depth += 1
+        elif token.value in {")", "]", "}"
+        }:
+            depth = max(0, depth - 1)
+        elif depth == 0 and token.value in assignment_operators:
+            assignment_index = index
+            break
+    if assignment_index is not None and assignment_index > 0:
+        target = _lvalue_expression_model(
+            cleaned[:assignment_index], resolve_integer, call_resolver
+        )
+        if target is not None:
+            return {
+                "kind": "assignment",
+                "operator": assignment_operators[cleaned[assignment_index].value],
+                "target": target,
+                "value": _expression_model(
+                    cleaned[assignment_index + 1 :], resolve_integer, call_resolver
+                ),
+            }
+
+    if len(cleaned) >= 2 and cleaned[-1].value in {"++", "--"}:
+        target = _lvalue_expression_model(
+            cleaned[:-1], resolve_integer, call_resolver, postfix=True
+        )
+        if target is not None:
+            return {
+                "kind": "postIncrement" if cleaned[-1].value == "++" else "postDecrement",
+                "target": target,
+            }
+    if len(cleaned) >= 2 and cleaned[0].value in {"++", "--"}:
+        target = _lvalue_expression_model(cleaned[1:], resolve_integer, call_resolver)
+        if target is not None:
+            return {
+                "kind": "preIncrement" if cleaned[0].value == "++" else "preDecrement",
+                "target": target,
+            }
+
+    # Comparisons and logical operators produce ordinary C values as well as
+    # controlling if/while/for. Route them through the condition lowerer so
+    # status-returning HAL calls work in assignments and return statements.
+    condition_operators = {"==", "!=", "&&", "||", "<", ">", "<=", ">="}
+    depth = 0
+    has_top_level_condition_operator = False
+    for token in cleaned:
+        if token.value in {"(", "[", "{"}:
+            depth += 1
+        elif token.value in {")", "]", "}"}:
+            depth = max(0, depth - 1)
+        elif depth == 0 and token.value in condition_operators:
+            has_top_level_condition_operator = True
+            break
+    if has_top_level_condition_operator:
+        return _condition_model(
+            cleaned,
+            resolve_integer,
+            lambda value: _expression_model(value, resolve_integer, call_resolver),
+        )
 
     binary_names = {
         "|": "bitOr",
@@ -1352,9 +2191,59 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer) -> dict:
         operator = cleaned[operator_index].value
         return {
             "kind": binary_names[operator],
-            "left": _expression_model(cleaned[:operator_index], resolve_integer),
-            "right": _expression_model(cleaned[operator_index + 1 :], resolve_integer),
+            "left": _expression_model(cleaned[:operator_index], resolve_integer, call_resolver),
+            "right": _expression_model(cleaned[operator_index + 1 :], resolve_integer, call_resolver),
         }
+
+    # ``sizeof`` is also a unary operator, so C permits the parenthesis-free
+    # form ``sizeof buffer``.  The function-like form is handled above; this
+    # branch covers the unary operand after binary precedence has been split,
+    # preserving expressions such as ``sizeof buffer + 1U``.
+    if len(cleaned) >= 2 and cleaned[0].value == "sizeof":
+        operand = cleaned[1:]
+        if operand and operand[0].value not in {"(", "*", "&", "+", "-", "!", "~", "++", "--"}:
+            # A plain identifier/literal is the complete unary operand.  The
+            # array/member postfix forms stay attached so ``sizeof samples[0]``
+            # remains one operand as required by C grammar.
+            end = 1
+            while end < len(operand):
+                if operand[end].value == "[":
+                    close = _matching(operand, end, "[", "]")
+                    if close is None:
+                        break
+                    end = close + 1
+                    continue
+                if operand[end].value in {".", "->"} and end + 1 < len(operand):
+                    end += 2
+                    continue
+                if operand[end].value in {"++", "--"}:
+                    end += 1
+                break
+            operand = operand[:end]
+        elif operand and operand[0].value == "(":
+            close = _matching(operand, 0, "(", ")")
+            if close is not None:
+                # The parenthesized base may be followed by a postfix
+                # subscript/member (``sizeof (buffer)[0]``). Keep those
+                # tokens attached to the unary operand instead of silently
+                # measuring the unindexed array.
+                end = close + 1
+                while end < len(operand):
+                    if operand[end].value == "[":
+                        bracket_close = _matching(operand, end, "[", "]")
+                        if bracket_close is None:
+                            break
+                        end = bracket_close + 1
+                        continue
+                    if operand[end].value in {".", "->"} and end + 1 < len(operand):
+                        end += 2
+                        continue
+                    break
+                operand = operand[:end]
+        type_name = _sizeof_type_name(operand)
+        if type_name is not None:
+            return {"kind": "sizeOf", "cType": type_name}
+        return {"kind": "sizeOf", "value": _expression_model(operand, resolve_integer, call_resolver)}
 
     if cleaned[0].value in {"&", "*", "+", "-", "!", "~"}:
         unary_kinds = {
@@ -1366,15 +2255,22 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer) -> dict:
             "~": "bitNot",
         }
         field = "pointer" if cleaned[0].value == "*" else "value"
-        return {"kind": unary_kinds[cleaned[0].value], field: _expression_model(cleaned[1:], resolve_integer)}
+        return {"kind": unary_kinds[cleaned[0].value], field: _expression_model(cleaned[1:], resolve_integer, call_resolver)}
 
     without_cast = _strip_leading_c_casts(cleaned)
     if without_cast != cleaned:
         close = _matching(cleaned, 0, "(", ")")
         cast_type = _tokens_text(cleaned[1:close]).replace(" *", "*") if close is not None else ""
         if "float" in cast_type or "double" in cast_type:
-            return {"kind": "cast", "cType": cast_type, "value": _expression_model(cleaned[close + 1 :], resolve_integer)}
-        return _expression_model(without_cast, resolve_integer)
+            return {"kind": "cast", "cType": cast_type, "value": _expression_model(cleaned[close + 1 :], resolve_integer, call_resolver)}
+        return _expression_model(without_cast, resolve_integer, call_resolver)
+
+    postfix_array = _postfix_array_model(cleaned, resolve_integer, call_resolver)
+    if postfix_array is not None:
+        return postfix_array
+    postfix_member = _postfix_member_model(cleaned, resolve_integer, call_resolver)
+    if postfix_member is not None:
+        return postfix_member
 
     if len(cleaned) == 1:
         token = cleaned[0]
@@ -1408,31 +2304,82 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer) -> dict:
                 "NULL": 0,
                 "RESET": 0,
                 "SET": 1,
+                "false": False,
+                "true": True,
+                "EOF": -1,
+                "EXIT_SUCCESS": 0,
+                "EXIT_FAILURE": 1,
+                "RAND_MAX": 2147483647,
+                "CHAR_BIT": 8,
+                "SCHAR_MAX": 127,
+                "SHRT_MAX": 32767,
+                "INT_MAX": 2147483647,
+                "LONG_MAX": 2147483647,
+                "UCHAR_MAX": 255,
+                "USHRT_MAX": 65535,
+                "UINT_MAX": 4294967295,
+                "M_E": math.e,
+                "M_LOG2E": math.log2(math.e),
+                "M_LOG10E": math.log10(math.e),
+                "M_LN2": math.log(2.0),
+                "M_LN10": math.log(10.0),
+                "M_PI": math.pi,
+                "M_PI_2": math.pi / 2.0,
+                "M_PI_4": math.pi / 4.0,
+                "M_1_PI": 1.0 / math.pi,
+                "M_2_PI": 2.0 / math.pi,
+                "M_2_SQRTPI": 2.0 / math.sqrt(math.pi),
+                "M_SQRT2": math.sqrt(2.0),
+                "M_SQRT1_2": 1.0 / math.sqrt(2.0),
+                "FLT_RADIX": 2,
+                "FLT_EPSILON": 1.19209290e-7,
+                "DBL_EPSILON": 2.2204460492503131e-16,
+                "LDBL_EPSILON": 2.2204460492503131e-16,
             }
+            if token.value in {"HUGE_VAL", "HUGE_VALF", "HUGE_VALL", "INFINITY", "NAN"}:
+                # Keep non-finite values out of the JSON model; the browser
+                # runtime resolves these named constants without serialization.
+                return {"kind": "constant", "name": token.value}
             if token.value in constants:
                 return {"kind": "constant", "name": token.value, "value": constants[token.value]}
             resolved = resolve_integer(token.value)
             if resolved is not None:
                 return {"kind": "constant", "name": token.value, "value": resolved}
+            # Integer-like macros are handled by ``resolve_integer`` above,
+            # but headers also commonly expose literal strings/floats through
+            # object-like macros (for example ``VREF_MV 3300.0f`` or
+            # ``DEVICE_NAME "ADC1"``).  Expand a bounded chain of literal
+            # replacements so those values remain ordinary C expressions.
+            macros = getattr(resolve_integer, "macros", {})
+            macro = macros.get(token.value) if isinstance(macros, Mapping) else None
+            if macro is not None and macro.parameters is None:
+                current_name = token.value
+                visited = {current_name}
+                replacement: list[_Token] = []
+                while macro is not None and macro.parameters is None:
+                    replacement = _strip_wrapping_parentheses(_lex_c(macro.expression))
+                    if len(replacement) == 1 and replacement[0].kind == "identifier":
+                        next_name = replacement[0].value
+                        if next_name in visited:
+                            replacement = []
+                            break
+                        visited.add(next_name)
+                        macro = macros.get(next_name) if isinstance(macros, Mapping) else None
+                        continue
+                    break
+                if replacement:
+                    if all(item.kind == "string" for item in replacement):
+                        decoded_parts = [_decode_c_string_literal(item.value) for item in replacement]
+                        if all(part is not None for part in decoded_parts):
+                            combined = b"".join(bytes(part or []) for part in decoded_parts)
+                            try:
+                                text_value = combined.decode("utf-8")
+                            except UnicodeDecodeError:
+                                text_value = combined.decode("latin-1")
+                            return {"kind": "string", "value": text_value, "bytes": list(combined)}
+                    if len(replacement) == 1 and replacement[0].kind in {"number", "char", "string"}:
+                        return _expression_model(replacement, resolve_integer, call_resolver)
             return {"kind": "variable", "name": token.value}
-    if len(cleaned) >= 4 and cleaned[0].kind == "identifier" and cleaned[1].value == "[":
-        close_bracket = _matching(cleaned, 1, "[", "]")
-        if close_bracket == len(cleaned) - 1:
-            index_model = _expression_model(cleaned[2:close_bracket], resolve_integer)
-            index_value = index_model.get("value") if index_model.get("kind") == "literal" else index_model
-            return {"kind": "arrayIndex", "name": cleaned[0].value, "index": index_value}
-    if (
-        len(cleaned) == 3
-        and cleaned[0].kind == "identifier"
-        and cleaned[1].value in {".", "->"}
-        and cleaned[2].kind == "identifier"
-    ):
-        return {
-            "kind": "member",
-            "object": {"kind": "variable", "name": cleaned[0].value},
-            "member": cleaned[2].value,
-            "pointer": cleaned[1].value == "->",
-        }
     text = _tokens_text(cleaned)
     resolved = resolve_integer(text)
     if resolved is not None:
@@ -1451,33 +2398,84 @@ def _runtime_expression_supported(expression: Mapping[str, object]) -> bool:
     is only known while the simulated program is running.
     """
 
-    kind = str(expression.get("kind") or "")
-    if kind in {"literal", "constant", "variable", "char", "string", "tick"}:
+    # Conditions use the compact ``op`` spelling while ordinary expressions
+    # use ``kind``.  They are the same runtime value domain; accepting both is
+    # essential when a conditional/logical expression is passed to HAL_Delay,
+    # a transfer length, or a malloc size.
+    kind = str(expression.get("kind") or expression.get("op") or expression.get("type") or "")
+    kind = re.sub(r"[^A-Za-z0-9]", "", kind).casefold()
+    if kind in {"literal", "constant", "variable", "char", "string", "tick", "halcall"}:
         return True
-    if kind in {"stringLength", "sizeOf", "positive", "negate", "logicalNot", "bitNot", "cast"}:
+    if kind == "inlinecall":
+        # Value-returning project helpers are compiled into a local runtime
+        # instruction region before their containing HAL call.  The parser
+        # has already validated that the helper has a deterministic final
+        # return, so it is just as safe here as a direct HAL return value.
+        return isinstance(expression.get("operations"), (list, tuple))
+    if kind in {"postincrement", "postdecrement", "preincrement", "predecrement"}:
+        target = expression.get("target")
+        return isinstance(target, Mapping) and _runtime_expression_supported(target)
+    if kind == "conditional":
+        return all(
+            not isinstance(value, Mapping) or _runtime_expression_supported(value)
+            for value in (
+                expression.get("condition"),
+                expression.get("consequent"),
+                expression.get("alternate"),
+            )
+        )
+    if kind == "sequence":
+        expressions = expression.get("expressions", expression.get("operands", []))
+        return isinstance(expressions, (list, tuple)) and all(
+            isinstance(value, Mapping) and _runtime_expression_supported(value)
+            for value in expressions
+        )
+    if kind == "assignment":
+        target = expression.get("target", expression.get("lvalue"))
+        value = expression.get("value", expression.get("expression", expression.get("right")))
+        operator = re.sub(
+            r"[^A-Za-z0-9]", "", str(expression.get("operator") or "assign")
+        ).casefold()
+        return (
+            isinstance(target, Mapping)
+            and _runtime_expression_supported(target)
+            and isinstance(value, Mapping)
+            and _runtime_expression_supported(value)
+            and operator in {"", "assign", "add", "sub", "mul", "div", "mod", "bitand", "bitor", "bitxor", "shiftleft", "shiftright"}
+        )
+    if kind in {"stringlength", "sizeof", "positive", "negate", "logicalnot", "bitnot", "cast"}:
         value = expression.get("value")
         return not isinstance(value, Mapping) or _runtime_expression_supported(value)
-    if kind == "adcPoll":
+    if kind == "adcpoll":
         timeout = expression.get("timeout")
         return not isinstance(timeout, Mapping) or _runtime_expression_supported(timeout)
-    if kind == "addressOf":
+    if kind == "addressof":
         value = expression.get("value")
         return not isinstance(value, Mapping) or _runtime_expression_supported(value)
     if kind == "dereference":
         pointer = expression.get("pointer")
         return not isinstance(pointer, Mapping) or _runtime_expression_supported(pointer)
-    if kind == "libcCall":
+    if kind == "libccall":
         return all(
             not isinstance(argument, Mapping) or _runtime_expression_supported(argument)
             for argument in expression.get("arguments", [])
         )
-    if kind == "arrayIndex":
+    if kind == "arrayindex":
         index = expression.get("index")
         return not isinstance(index, Mapping) or _runtime_expression_supported(index)
     if kind == "member":
         object_model = expression.get("object")
         return not isinstance(object_model, Mapping) or _runtime_expression_supported(object_model)
-    if kind in {"add", "sub", "mul", "div", "mod", "bitOr", "bitXor", "bitAnd", "shiftLeft", "shiftRight"}:
+    if kind in {"add", "sub", "mul", "div", "mod", "bitor", "bitxor", "bitand", "shiftleft", "shiftright"}:
+        left = expression.get("left")
+        right = expression.get("right")
+        return (
+            isinstance(left, Mapping)
+            and isinstance(right, Mapping)
+            and _runtime_expression_supported(left)
+            and _runtime_expression_supported(right)
+        )
+    if kind in {"eq", "ne", "and", "or", "lt", "le", "gt", "ge"}:
         left = expression.get("left")
         right = expression.get("right")
         return (
@@ -1489,13 +2487,21 @@ def _runtime_expression_supported(expression: Mapping[str, object]) -> bool:
     return False
 
 
-def _condition_model(tokens: Sequence[_Token], resolve_integer) -> dict:
+def _condition_model(tokens: Sequence[_Token], resolve_integer, expression_model=None) -> dict:
+    expression_model = expression_model or (lambda value: _expression_model(value, resolve_integer))
     cleaned = _strip_wrapping_parentheses(tokens)
+    if cleaned:
+        expanded = _expand_function_macros(cleaned, getattr(resolve_integer, "macros", {}))
+        if expanded != cleaned:
+            cleaned = _strip_wrapping_parentheses(expanded)
     operator_names = {
         "==": "eq",
         "!=": "ne",
         "&&": "and",
         "||": "or",
+        "|": "bitOr",
+        "^": "bitXor",
+        "&": "bitAnd",
         "<": "lt",
         ">": "gt",
         "<=": "le",
@@ -1504,18 +2510,33 @@ def _condition_model(tokens: Sequence[_Token], resolve_integer) -> dict:
 
     def top_level_operator(operators: set[str]) -> int | None:
         depth = 0
+        selected: int | None = None
         for index, token in enumerate(cleaned):
             if token.value in {"(", "["}:
                 depth += 1
             elif token.value in {")", "]"}:
                 depth -= 1
             elif depth == 0 and token.value in operators:
-                return index
-        return None
+                # Binary operators in this subset are left-associative. Split
+                # at the rightmost operator of each precedence level so
+                # ``a < b < c`` becomes ``(a < b) < c`` rather than the
+                # observably different ``a < (b < c)``.
+                selected = index
+        return selected
 
-    # Split in C precedence order so compound conditions become a nested tree
-    # the browser runtime can short-circuit correctly.
-    for operators, logical in (({"||"}, True), ({"&&"}, True), ({"==", "!=", "<", ">", "<=", ">="}, False)):
+    # Split from lowest to highest C precedence. Bitwise operators sit between
+    # logical-and and equality; including them here matters for unparenthesized
+    # embedded idioms such as ``flags & READY_MASK == 0``. The expression is
+    # unusual but valid C and must retain the compiler's exact meaning.
+    for operators in (
+        {"||"},
+        {"&&"},
+        {"|"},
+        {"^"},
+        {"&"},
+        {"==", "!="},
+        {"<", ">", "<=", ">="},
+    ):
         index = top_level_operator(operators)
         if index is None:
             continue
@@ -1524,10 +2545,19 @@ def _condition_model(tokens: Sequence[_Token], resolve_integer) -> dict:
         right_tokens = cleaned[index + 1 :]
         return {
             "op": operator_names[token.value],
-            "left": _condition_model(left_tokens, resolve_integer) if logical else _expression_model(left_tokens, resolve_integer),
-            "right": _condition_model(right_tokens, resolve_integer) if logical else _expression_model(right_tokens, resolve_integer),
+            "left": _condition_model(left_tokens, resolve_integer, expression_model),
+            "right": _condition_model(right_tokens, resolve_integer, expression_model),
         }
-    expression = _expression_model(cleaned, resolve_integer)
+    # Prefix ! binds more tightly than comparison operators, but a parenthesized
+    # compound condition still reaches this branch after its wrapping pair has
+    # been stripped. This makes both ``!value == 1`` and ``!(a && b)`` follow
+    # C precedence and preserves short-circuit compilation for the latter.
+    if len(cleaned) > 1 and cleaned[0].value == "!":
+        return {
+            "kind": "logicalNot",
+            "value": _condition_model(cleaned[1:], resolve_integer, expression_model),
+        }
+    expression = expression_model(cleaned)
     return expression
 
 
@@ -1559,8 +2589,81 @@ def _first_identifier(tokens: Sequence[_Token], *, ignore: set[str] | None = Non
     return None
 
 
+def _operations_return_value(operations: Sequence[Mapping[str, object]]) -> bool:
+    """Determine whether every reachable path returns a value.
+
+    A helper used as an expression need not have a physically final ``return``
+    operation: the usual ``if (...) return a; else return b;`` form ends at an
+    ``if`` node.  This conservative structural analysis accepts such complete
+    branches while still rejecting a possible fall-through path.
+    """
+
+    if not operations:
+        return False
+
+    for operation in operations:
+        if not isinstance(operation, Mapping):
+            continue
+        kind = str(operation.get("op") or operation.get("kind") or "").casefold()
+        if kind == "return":
+            return "value" in operation
+        if kind == "if":
+            then_ops = operation.get("then", operation.get("body", []))
+            else_ops = operation.get("else", operation.get("alternate", []))
+            if (
+                isinstance(then_ops, Sequence)
+                and not isinstance(then_ops, (str, bytes))
+                and isinstance(else_ops, Sequence)
+                and not isinstance(else_ops, (str, bytes))
+                and _operations_return_value(then_ops)
+                and _operations_return_value(else_ops)
+            ):
+                return True
+            continue
+        if kind == "switch":
+            entries = operation.get("entries")
+            if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
+                cases = operation.get("cases", [])
+                default = operation.get("default", [])
+                entries = list(cases) if isinstance(cases, Sequence) else []
+                if default is not None:
+                    entries.append({"default": True, "body": default})
+            has_default = False
+            complete = True
+            for entry in entries:
+                if not isinstance(entry, Mapping):
+                    complete = False
+                    break
+                if entry.get("default") or entry.get("value") is None:
+                    has_default = True
+                body = entry.get("body", entry.get("operations", []))
+                if not isinstance(body, Sequence) or isinstance(body, (str, bytes)) or not _operations_return_value(body):
+                    complete = False
+                    break
+            if has_default and complete and entries:
+                return True
+            continue
+        # A statically infinite loop whose body returns on every path is also
+        # a complete function path.  Dynamic loops remain conservative.
+        if kind in {"while", "dowhile", "dowhileloop"}:
+            condition = operation.get("condition", operation.get("test"))
+            if kind.startswith("do") or (
+                isinstance(condition, Mapping)
+                and condition.get("kind") == "literal"
+                and bool(condition.get("value"))
+            ):
+                body = operation.get("body", operation.get("operations", []))
+                if isinstance(body, Sequence) and not isinstance(body, (str, bytes)) and _operations_return_value(body):
+                    return True
+            continue
+    return False
+
+
 class _StatementParser:
-    _UNSUPPORTED_CONTROL = {"do", "goto"}
+    # ``goto`` remains an explicit semantic boundary because arbitrary labels
+    # can cross scopes.  ``do`` has structured control-flow semantics and is
+    # lowered below like the other loop forms.
+    _UNSUPPORTED_CONTROL = {"goto"}
     _DECLARATION_PREFIXES = {
         "auto", "bool", "char", "const", "double", "enum", "extern", "float", "inline", "int", "long",
         "register", "short", "signed", "size_t", "static", "struct", "typedef", "union", "unsigned",
@@ -1605,6 +2708,120 @@ class _StatementParser:
     def _source(self, token: _Token) -> dict:
         return {"file": self.file, "line": token.line, "column": token.column}
 
+    _STATUS_RETURNING_OPERATIONS = {
+        "uartReceive", "uartTransmit", "uartReceiveIt", "uartTransmitIt", "uartAbortIt",
+        "uartReceiveDma", "uartTransmitDma", "uartDmaStop", "i2cMasterTransmit",
+        "i2cMasterReceive", "i2cMemWrite", "i2cMemRead", "i2cMasterTransmitIt",
+        "i2cMasterReceiveIt", "i2cMemWriteIt", "i2cMemReadIt", "i2cMasterTransmitDma",
+        "i2cMasterReceiveDma", "i2cMemWriteDma", "i2cMemReadDma", "i2cAbortIt",
+        "spiTransmit", "spiReceive", "spiTransmitReceive", "spiTransmitIt", "spiReceiveIt",
+        "spiTransmitReceiveIt", "spiTransmitDma", "spiReceiveDma", "spiTransmitReceiveDma",
+        "spiAbortIt", "adcStart", "adcStop", "adcStartIt",
+        "adcStopIt", "adcStartDma", "adcStopDma", "adcPollForConversion", "timerStartIt", "timerStopIt",
+        "pwmStart", "pwmStop",
+    }
+    _VALUE_RETURNING_OPERATIONS = {"adcGetValue", "gpioRead"}
+    _SUCCESSFUL_NOOP_HAL_CALLS = {
+        "HAL_ADC_Init", "HAL_ADC_DeInit", "HAL_ADC_ConfigChannel", "HAL_ADCEx_Calibration_Start",
+        "HAL_DMA_DeInit", "HAL_DMA_Init", "HAL_I2C_Init", "HAL_I2C_DeInit", "HAL_Init",
+        "HAL_SPI_Init", "HAL_SPI_DeInit", "HAL_TIM_Base_Init", "HAL_TIM_Base_DeInit",
+        "HAL_TIM_PWM_ConfigChannel", "HAL_TIM_PWM_Init", "HAL_TIM_PWM_DeInit",
+        "HAL_UART_Init", "HAL_UART_DeInit",
+        "HAL_RCC_OscConfig", "HAL_RCC_ClockConfig", "HAL_RCCEx_PeriphCLKConfig",
+    }
+
+    def _inline_call_expression(self, call: _Token, arguments: Sequence[Sequence[_Token]]) -> dict | None:
+        """Lower a project helper call into a value-producing expression.
+
+        The browser compiler expands this into a local instruction region with
+        its own return target. Keeping it as an expression here means calls in
+        conditions, arithmetic, and switch selectors have the same semantics
+        as a call used as an assignment RHS.
+        """
+
+        call_name = call.value
+        body = _find_function(self.function_tokens, call_name)
+        if body is None or call_name in self.inline_stack:
+            return None
+        parameters = _function_parameter_names(self.function_tokens, call_name)
+        if len(arguments) != len(parameters):
+            source = self._source(call)
+            self.diagnostics.append(
+                _diagnostic(
+                    "error",
+                    "C_UNSUPPORTED_FUNCTION_ARGUMENTS",
+                    f"Function call '{call_name}' expects {len(parameters)} arguments but received {len(arguments)}",
+                    **source,
+                )
+            )
+            return {"kind": "unsupportedCall", "text": call_name}
+        inline_tokens = _substitute_function_parameters(
+            self.function_tokens[body[0] : body[1]],
+            dict(zip(parameters, arguments)),
+        )
+        parser = _StatementParser(
+            inline_tokens,
+            self.file,
+            self.macros,
+            self.aliases,
+            self.uart_instances,
+            self.i2c_instances,
+            self.spi_instances,
+            self.adc_instances,
+            self.diagnostics,
+            self.inline_stack + (call_name,),
+            self.function_tokens,
+        )
+        operations = parser.parse()
+        # A complete branch return makes every reachable path deterministic;
+        # the return does not have to be the physically last operation (for
+        # example ``if (x) return 1; else return 2;``).
+        if not _operations_return_value(operations):
+            source = self._source(call)
+            self.diagnostics.append(
+                _diagnostic(
+                    "error",
+                    "C_UNSUPPORTED_FUNCTION_RETURN",
+                    f"Function call '{call_name}' does not have a supported final return value",
+                    **source,
+                )
+            )
+            return {"kind": "unsupportedCall", "text": call_name}
+        return {
+            "kind": "inlineCall",
+            "function": call_name,
+            "operations": operations,
+            "source": self._source(call),
+        }
+
+    def _call_expression_model(self, call: _Token, arguments: Sequence[Sequence[_Token]]) -> dict | None:
+        """Model a value-returning call through the same HAL lowerer as statements."""
+
+        name = call.value
+        if not name.startswith(("HAL_", "__HAL_")):
+            return self._inline_call_expression(call, arguments)
+        operation = self._parse_hal_call(call, arguments)
+        if operation is None:
+            if name in self._SUCCESSFUL_NOOP_HAL_CALLS:
+                return {"kind": "constant", "name": "HAL_OK", "value": 0}
+            return None
+        operation_name = operation.get("op")
+        if operation_name == "unsupported":
+            # _parse_hal_call already emitted the precise API diagnostic. Keep
+            # it out of the generic unsupported-expression pass.
+            return {"kind": "unsupportedCall", "text": name}
+        if operation_name in self._STATUS_RETURNING_OPERATIONS:
+            return {"kind": "halCall", "operation": operation, "returnKind": "status"}
+        if operation_name in self._VALUE_RETURNING_OPERATIONS:
+            return {"kind": "halCall", "operation": operation, "returnKind": "value"}
+        return None
+
+    def _model_expression(self, tokens: Sequence[_Token]) -> dict:
+        return _expression_model(tokens, self.resolve_expression, self._call_expression_model)
+
+    def _model_condition(self, tokens: Sequence[_Token]) -> dict:
+        return _condition_model(tokens, self.resolve_expression, self._model_expression)
+
     def _unsupported(self, tokens: Sequence[_Token], code: str, message: str | None = None) -> dict:
         token = tokens[0] if tokens else _Token("", "operator", 0, 1, 1)
         source = self._source(token)
@@ -1636,6 +2853,11 @@ class _StatementParser:
                 continue
             if value == "while":
                 operation, index = self._parse_while(index, end)
+                if operation:
+                    operations.append(operation)
+                continue
+            if value == "do":
+                operation, index = self._parse_do_while(index, end)
                 if operation:
                     operations.append(operation)
                 continue
@@ -1733,6 +2955,9 @@ class _StatementParser:
         if self.tokens[start].value == "while":
             operation, next_index = self._parse_while(start, end)
             return ([operation] if operation else []), next_index
+        if self.tokens[start].value == "do":
+            operation, next_index = self._parse_do_while(start, end)
+            return ([operation] if operation else []), next_index
         if self.tokens[start].value == "for":
             operation, next_index = self._parse_for(start, end)
             return ([operation] if operation else []), next_index
@@ -1774,9 +2999,7 @@ class _StatementParser:
                 else_ops, next_index = self._body(next_index + 1, end)
         return {
             "op": "if",
-            "condition": _condition_model(
-                self.tokens[start + 2 : condition_end], self.resolve_expression
-            ),
+            "condition": self._model_condition(self.tokens[start + 2 : condition_end]),
             "then": then_ops,
             "else": else_ops,
             "source": self._source(self.tokens[start]),
@@ -1791,12 +3014,31 @@ class _StatementParser:
         body, next_index = self._body(condition_end + 1, end)
         return {
             "op": "while",
-            "condition": _condition_model(
-                self.tokens[start + 2 : condition_end], self.resolve_expression
-            ),
+            "condition": self._model_condition(self.tokens[start + 2 : condition_end]),
             "body": body,
             "source": self._source(self.tokens[start]),
         }, next_index
+
+    def _parse_do_while(self, start: int, end: int) -> tuple[dict | None, int]:
+        """Parse ``do statement while (condition);`` with one guaranteed body run."""
+
+        body_ops, next_index = self._body(start + 1, end)
+        if next_index >= end or self.tokens[next_index].value != "while":
+            return None, next_index
+        if next_index + 1 >= end or self.tokens[next_index + 1].value != "(":
+            return None, next_index + 1
+        condition_end = _matching(self.tokens, next_index + 1, "(", ")")
+        if condition_end is None or condition_end >= end:
+            return None, end
+        statement_end = condition_end + 1
+        if statement_end < end and self.tokens[statement_end].value == ";":
+            statement_end += 1
+        return {
+            "op": "doWhile",
+            "condition": self._model_condition(self.tokens[next_index + 2 : condition_end]),
+            "body": body_ops,
+            "source": self._source(self.tokens[start]),
+        }, statement_end
 
     def _split_for_header(self, tokens: Sequence[_Token]) -> list[list[_Token]]:
         parts: list[list[_Token]] = []
@@ -1836,7 +3078,7 @@ class _StatementParser:
             header.append([])
         init_ops = self._parse_for_clause(header[0])
         increment_ops = self._parse_for_clause(header[2])
-        condition = _condition_model(header[1], self.resolve_expression) if header[1] else {"kind": "literal", "value": True}
+        condition = self._model_condition(header[1]) if header[1] else {"kind": "literal", "value": True}
         body, next_index = self._body(header_end + 1, end)
         return {
             "op": "for",
@@ -1852,7 +3094,7 @@ class _StatementParser:
         value_tokens = self.tokens[start + 1 : statement_end]
         operation: dict = {"op": "return", "source": self._source(self.tokens[start])}
         if value_tokens:
-            operation["value"] = _expression_model(value_tokens, self.resolve_expression)
+            operation["value"] = self._model_expression(value_tokens)
         next_index = statement_end + (
             1 if statement_end < end and self.tokens[statement_end].value == ";" else 0
         )
@@ -1897,7 +3139,7 @@ class _StatementParser:
                         colon += 1
                     if colon >= body_end:
                         return None, end
-                    label_value = _expression_model(self.tokens[label_start:colon], self.resolve_expression)
+                    label_value = self._model_expression(self.tokens[label_start:colon])
                 else:
                     while colon < body_end and self.tokens[colon].value != ":":
                         colon += 1
@@ -1925,7 +3167,7 @@ class _StatementParser:
             entries.append({"value": None, "default": True, "body": default_body})
         return {
             "op": "switch",
-            "expression": _expression_model(self.tokens[start + 2 : expression_end], self.resolve_expression),
+            "expression": self._model_expression(self.tokens[start + 2 : expression_end]),
             "cases": cases,
             "default": default_body,
             "entries": entries,
@@ -1948,7 +3190,9 @@ class _StatementParser:
             token = tokens[cursor]
             lowered = token.value.casefold()
             if token.kind == "identifier" and (
-                lowered in self._DECLARATION_PREFIXES or lowered.endswith("_t")
+                lowered in self._DECLARATION_PREFIXES
+                or lowered.endswith("_t")
+                or token.value.endswith("TypeDef")
             ):
                 saw_type = True
                 cursor += 1
@@ -1987,13 +3231,40 @@ class _StatementParser:
 
             if assignment is not None:
                 initializer = declarator[assignment + 1 :]
-                if len(initializer) >= 3 and initializer[0].kind == "identifier" and initializer[1].value == "(":
-                    close = _matching(initializer, 1, "(", ")")
-                    if close == len(initializer) - 1 and initializer[0].value.startswith(("HAL_", "__HAL_")):
-                        operation = self._parse_hal_call(
-                            initializer[0],
-                            _split_arguments(initializer[2:close]),
-                        )
+                # Declarations are parsed before ordinary assignments.  Keep
+                # call initializers on the same lowering path as an existing
+                # variable assignment, including a leading pointer cast such
+                # as ``uint32_t *samples = (uint32_t *)malloc(...)``.
+                call_initializer = _strip_leading_c_casts(_strip_wrapping_parentheses(initializer))
+                if (
+                    len(call_initializer) >= 3
+                    and call_initializer[0].kind == "identifier"
+                    and call_initializer[1].value == "("
+                ):
+                    close = _matching(call_initializer, 1, "(", ")")
+                    if close == len(call_initializer) - 1:
+                        call = call_initializer[0]
+                        arguments = _split_arguments(call_initializer[2:close])
+                        operation = None
+                        # HAL_GetTick is a value-producing HAL helper rather
+                        # than a peripheral operation.  Declaration
+                        # initializers take this call-specific fast path
+                        # before ordinary RHS expression modeling, so retain
+                        # its live tick expression explicitly here.
+                        if call.value == "HAL_GetTick" and not arguments:
+                            operations.append({
+                                "op": "assign",
+                                "target": name.value,
+                                "value": {"kind": "tick"},
+                                "source": source,
+                            })
+                            continue
+                        if call.value.startswith(("HAL_", "__HAL_")):
+                            operation = self._parse_hal_call(call, arguments)
+                        elif call.value in {"snprintf", "sprintf"}:
+                            operation = self._parse_format_call(call, arguments)
+                        elif call.value in _STATEMENT_LIBC_FUNCTIONS:
+                            operation = self._parse_libc_call(call, arguments)
                         if operation is not None:
                             if operation.get("op") == "adcGetValue":
                                 operation["target"] = name.value
@@ -2003,7 +3274,7 @@ class _StatementParser:
                             continue
                 if len(initializer) >= 2 and initializer[0].value == "{" and initializer[-1].value == "}":
                     values = [
-                        _expression_model(value, self.resolve_expression)
+                        self._model_expression(value)
                         for value in _split_arguments(initializer[1:-1])
                         if value
                     ]
@@ -2012,7 +3283,7 @@ class _StatementParser:
                     operations.append({
                         "op": "assign",
                         "target": name.value,
-                        "value": _expression_model(initializer, self.resolve_expression),
+                        "value": self._model_expression(initializer),
                         "source": source,
                     })
                 continue
@@ -2039,62 +3310,33 @@ class _StatementParser:
         arguments: Sequence[Sequence[_Token]],
         target: str | dict,
         statement: Sequence[_Token],
-    ) -> list[dict] | None:
-        """Inline a simple project helper used as the complete RHS of an assignment."""
+    ) -> dict | None:
+        """Represent a complete helper-call RHS using the common expression IR."""
 
-        call_name = call.value
-        body = _find_function(self.function_tokens, call_name)
-        if body is None or call_name in self.inline_stack:
+        expression = self._inline_call_expression(call, arguments)
+        if expression is None:
             return None
-        parameters = _function_parameter_names(self.function_tokens, call_name)
-        if len(arguments) != len(parameters):
-            unsupported = self._unsupported(
-                statement,
-                "C_UNSUPPORTED_FUNCTION_ARGUMENTS",
-                f"Function call '{call_name}' expects {len(parameters)} arguments but received {len(arguments)}",
-            )
-            return [unsupported]
-        inline_tokens = _substitute_function_parameters(
-            self.function_tokens[body[0] : body[1]],
-            dict(zip(parameters, arguments)),
-        )
-        parser = _StatementParser(
-            inline_tokens,
-            self.file,
-            self.macros,
-            self.aliases,
-            self.uart_instances,
-            self.i2c_instances,
-            self.spi_instances,
-            self.adc_instances,
-            self.diagnostics,
-            self.inline_stack + (call_name,),
-            self.function_tokens,
-        )
-        operations = parser.parse()
-        if not operations or operations[-1].get("op") != "return" or "value" not in operations[-1]:
-            source = self._source(call)
-            self.diagnostics.append(
-                _diagnostic(
-                    "error",
-                    "C_UNSUPPORTED_FUNCTION_RETURN",
-                    f"Function call '{call_name}' does not have a supported final return value",
-                    **source,
-                )
-            )
-            return [{"op": "unsupported", "call": call_name, "source": source}]
-        returned = operations.pop()
-        operations.append({
+        return {
             "op": "assign",
             "target": target,
-            "value": returned["value"],
+            "value": expression,
             "source": self._source(call),
-        })
-        return operations
+        }
+
+    def _compound_assignment_target(self, tokens: Sequence[_Token]) -> dict | None:
+        """Model an lvalue once so compound operations do not re-evaluate it."""
+
+        return _lvalue_expression_model(tokens, self.resolve_expression, self._call_expression_model)
 
     def _parse_simple(self, tokens: Sequence[_Token]) -> dict | list[dict] | None:
         if not tokens:
             return None
+        # Function-like macros are preprocessor substitutions, so they can
+        # form a complete statement (``UNUSED(x);``, ``LOG(...)``) as well as
+        # an expression. Expand them before looking for calls/assignments.
+        expanded_tokens = _expand_function_macros(tokens, self.macros)
+        if [item.value for item in expanded_tokens] != [item.value for item in tokens]:
+            return self._parse_simple(expanded_tokens)
         declaration = self._parse_declaration(tokens)
         if declaration is not None:
             return declaration
@@ -2114,21 +3356,44 @@ class _StatementParser:
                 break
         if compound_assignment_index is not None:
             left = list(tokens[:compound_assignment_index])
-            target = next((token.value for token in reversed(left) if token.kind == "identifier"), None)
-            if not target or any(token.value in {".", "->", "[", "]"} for token in left):
+            target = self._compound_assignment_target(left)
+            if target is None:
                 return self._unsupported(tokens, "C_UNSUPPORTED_COMPOUND_ASSIGNMENT", "Compound assignment target is not supported by the semantic model")
             operator = tokens[compound_assignment_index].value[:-1]
             binary_names = {"+": "add", "-": "sub", "*": "mul", "/": "div", "%": "mod", "&": "bitAnd", "|": "bitOr", "^": "bitXor", "<<": "shiftLeft", ">>": "shiftRight"}
+            if target.get("kind") == "variable":
+                name = target["name"]
+                return {
+                    "op": "assign",
+                    "target": name,
+                    "value": {"kind": binary_names[operator], "left": {"kind": "variable", "name": name}, "right": self._model_expression(tokens[compound_assignment_index + 1 :])},
+                    "source": self._source(tokens[0]),
+                }
             return {
-                "op": "assign",
+                "op": "compoundAssign",
                 "target": target,
-                "value": {"kind": binary_names[operator], "left": {"kind": "variable", "name": target}, "right": _expression_model(tokens[compound_assignment_index + 1 :], self.resolve_expression)},
+                "operator": binary_names[operator],
+                "value": self._model_expression(tokens[compound_assignment_index + 1 :]),
                 "source": self._source(tokens[0]),
             }
         if len(tokens) == 2 and tokens[0].kind == "identifier" and tokens[1].value in {"++", "--"}:
             return {"op": "assign", "target": tokens[0].value, "value": {"kind": "add" if tokens[1].value == "++" else "sub", "left": {"kind": "variable", "name": tokens[0].value}, "right": {"kind": "literal", "value": 1}}, "source": self._source(tokens[0])}
         if len(tokens) == 2 and tokens[1].kind == "identifier" and tokens[0].value in {"++", "--"}:
             return {"op": "assign", "target": tokens[1].value, "value": {"kind": "add" if tokens[0].value == "++" else "sub", "left": {"kind": "variable", "name": tokens[1].value}, "right": {"kind": "literal", "value": 1}}, "source": self._source(tokens[0])}
+        # Only parse a whole statement as an expression when it actually has
+        # increment/decrement syntax.  Doing this eagerly turns ordinary
+        # void helpers such as MX_GPIO_Init() into value expressions before
+        # the dedicated CubeMX no-op path below can handle them.
+        if any(token.value in {"++", "--"} for token in tokens):
+            update = self._model_expression(tokens)
+            if update.get("kind") in {"postIncrement", "postDecrement", "preIncrement", "preDecrement"}:
+                return {
+                    "op": "compoundAssign",
+                    "target": update["target"],
+                    "operator": "add" if update["kind"] in {"postIncrement", "preIncrement"} else "sub",
+                    "value": {"kind": "literal", "value": 1},
+                    "source": self._source(tokens[0]),
+                }
         for index, token in enumerate(tokens[:-1]):
             is_hal_call = token.kind == "identifier" and (token.value.startswith("HAL_") or token.value.startswith("__HAL_"))
             is_alice_call = token.kind == "identifier" and token.value.startswith("AliceSIM_")
@@ -2139,7 +3404,10 @@ class _StatementParser:
             expression_only_hal = token.value in {"HAL_GetTick", "HAL_ADCEx_Calibration_Start"}
             if (is_hal_call or is_alice_call or is_middleware_call) and tokens[index + 1].value == "(" and not expression_only_hal:
                 close = _matching(tokens, index + 1, "(", ")")
-                if close is not None:
+                # The statement lowerer only owns a complete call. A call
+                # nested inside arithmetic or another expression must remain
+                # an expression node so the runtime can preserve C ordering.
+                if close == len(tokens) - 1:
                     arguments = _split_arguments(tokens[index + 2 : close])
                     if is_hal_call:
                         operation = self._parse_hal_call(token, arguments)
@@ -2148,6 +3416,20 @@ class _StatementParser:
                     else:
                         operation = self._parse_middleware_call(token, arguments)
                     if operation is None and is_hal_call:
+                        # Status-returning HAL setup calls such as HAL_Init()
+                        # intentionally lower to a deterministic HAL_OK value.
+                        # Preserve that value when the call is used as an RHS;
+                        # a standalone setup call still needs no instruction.
+                        if assignment_index is not None and assignment_index < index:
+                            left = list(tokens[:assignment_index])
+                            target = next((item.value for item in reversed(left) if item.kind == "identifier"), None)
+                            if target and not any(item.value in {".", "->"} for item in left):
+                                return {
+                                    "op": "assign",
+                                    "target": target,
+                                    "value": self._model_expression(tokens[assignment_index + 1 :]),
+                                    "source": self._source(tokens[0]),
+                                }
                         return None
                     if operation and operation.get("op") == "adcGetValue" and assignment_index is not None and assignment_index < index:
                         left = list(tokens[:assignment_index])
@@ -2185,6 +3467,14 @@ class _StatementParser:
                 continue
             arguments = _split_arguments(tokens[index + 2 : close])
             operation = self._parse_libc_call(token, arguments)
+            if operation is None and assignment_index is None and token.value in _SIDE_EFFECT_LIBC_FUNCTIONS:
+                expression = self._model_expression(tokens)
+                if expression.get("kind") == "libcCall":
+                    return {
+                        "op": "expression",
+                        "expression": expression,
+                        "source": self._source(tokens[0]),
+                    }
             if operation and assignment_index is not None and assignment_index < index:
                 left = list(tokens[:assignment_index])
                 target = next((item.value for item in reversed(left) if item.kind == "identifier"), None)
@@ -2243,6 +3533,18 @@ class _StatementParser:
                 if call_name in {"HAL_GetTick", "HAL_ADCEx_Calibration_Start"}:
                     return None
                 return self._unsupported(tokens, "C_UNSUPPORTED_FUNCTION_CALL", f"Function call '{call_name}' is outside the supported HAL/driver subset")
+            # A side-effect-free or explicitly modeled expression can appear
+            # as a standalone statement, most notably after macro expansion
+            # (``UNUSED(value)`` -> ``((void)(value))``). Keep it as a runtime
+            # expression instruction so supported assignment/increment/HAL
+            # expressions are evaluated in C order and then discarded.
+            expression = self._model_expression(tokens)
+            if expression.get("kind") not in {"expression", "unknown", "unsupportedCall"} and _runtime_expression_supported(expression):
+                return {
+                    "op": "expression",
+                    "expression": expression,
+                    "source": self._source(tokens[0]),
+                }
             first = next((token.value.lower() for token in tokens if token.kind == "identifier"), "")
             if first in self._DECLARATION_PREFIXES or first.startswith(("uint", "int")) and first.endswith("_t"):
                 return None
@@ -2256,22 +3558,22 @@ class _StatementParser:
                 return None
             return self._unsupported(tokens, "C_UNSUPPORTED_STATEMENT")
         left = list(tokens[:assignment_index])
-        if any(token.value in {".", "->"} for token in left):
-            # Peripheral handle/configuration writes are compile-valid C but
-            # are not needed by the value-oriented HAL behavior model.
-            return None
         target: str | dict | None = None
         stripped_left = _strip_wrapping_parentheses(left)
         if stripped_left and stripped_left[0].value == "*":
             target = {
                 "kind": "dereference",
-                "pointer": _expression_model(stripped_left[1:], self.resolve_expression),
+                "pointer": self._model_expression(stripped_left[1:]),
             }
         bracket_index = next((index for index, token in enumerate(left) if token.value == "["), None)
         if bracket_index is not None and bracket_index > 0 and left[bracket_index - 1].kind == "identifier":
-            target_model = _expression_model(left[bracket_index - 1 :], self.resolve_expression)
+            target_model = self._model_expression(left[bracket_index - 1 :])
             if target_model.get("kind") == "arrayIndex":
                 target = target_model
+        if target is None:
+            member_target = self._compound_assignment_target(left)
+            if member_target is not None and member_target.get("kind") == "member":
+                target = member_target
         if target is None:
             target = next((token.value for token in reversed(left) if token.kind == "identifier"), None)
         if not target:
@@ -2291,7 +3593,7 @@ class _StatementParser:
         return {
             "op": "assign",
             "target": target,
-            "value": _expression_model(tokens[assignment_index + 1 :], self.resolve_expression),
+            "value": self._model_expression(tokens[assignment_index + 1 :]),
             "source": self._source(tokens[0]),
         }
 
@@ -2304,8 +3606,8 @@ class _StatementParser:
                 _diagnostic("error", "C_FORMAT_ARGUMENTS", f"{name} has too few arguments", **source)
             )
             return {"op": "unsupported", "call": name, "source": source}
-        buffer = _first_identifier(arguments[0], ignore=self._DECLARATION_PREFIXES)
-        if not buffer:
+        buffer = self._buffer_reference(arguments[0])
+        if isinstance(buffer, Mapping) and not _runtime_expression_supported(buffer):
             self.diagnostics.append(
                 _diagnostic("error", "C_FORMAT_BUFFER", f"Could not resolve the destination buffer for {name}", **source)
             )
@@ -2315,15 +3617,15 @@ class _StatementParser:
             "op": "formatString",
             "function": name,
             "buffer": buffer,
-            "format": _expression_model(arguments[format_index], self.resolve_expression),
+            "format": self._model_expression(arguments[format_index]),
             "arguments": [
-                _expression_model(argument, self.resolve_expression)
+                self._model_expression(argument)
                 for argument in arguments[format_index + 1 :]
             ],
             "source": source,
         }
         if name == "snprintf":
-            operation["capacity"] = _expression_model(arguments[1], self.resolve_expression)
+            operation["capacity"] = self._model_expression(arguments[1])
         return operation
 
     def _parse_libc_call(self, call: _Token, arguments: Sequence[Sequence[_Token]]) -> dict | None:
@@ -2339,7 +3641,7 @@ class _StatementParser:
             return False
 
         def expression(index: int) -> dict:
-            return _expression_model(arguments[index], self.resolve_expression)
+            return self._model_expression(arguments[index])
 
         if name in _PURE_LIBC_FUNCTIONS:
             return None
@@ -2417,9 +3719,9 @@ class _StatementParser:
             if len(cleaned) >= 4 and cleaned[0].value == "pdMS_TO_TICKS" and cleaned[1].value == "(":
                 close = _matching(cleaned, 1, "(", ")")
                 if close == len(cleaned) - 1:
-                    milliseconds = _expression_model(cleaned[2:close], self.resolve_expression)
+                    milliseconds = self._model_expression(cleaned[2:close])
                     return milliseconds, milliseconds
-            return _expression_model(tokens, self.resolve_expression), None
+            return self._model_expression(tokens), None
 
         if name in {"vTaskDelay", "osDelay"}:
             ticks = arguments[0] if arguments else []
@@ -2454,7 +3756,7 @@ class _StatementParser:
                 "op": "rtosWait",
                 "api": name,
                 "waitObject": wait_object,
-                "ticks": _expression_model(timeout_tokens, self.resolve_expression),
+                "ticks": self._model_expression(timeout_tokens),
                 "source": source,
             }
         return None
@@ -2499,7 +3801,7 @@ class _StatementParser:
         }
 
     def _alicesim_expression(self, tokens: Sequence[_Token]) -> dict:
-        model = _expression_model(tokens, self.resolve_expression)
+        model = self._model_expression(tokens)
         identifier = _first_identifier(tokens)
         enum_values = {
             "ALICESIM_SSD1306_COLOR_BLACK": 0,
@@ -2894,10 +4196,20 @@ class _StatementParser:
         resolved = self.resolve_expression(expression_text)
         if resolved is not None:
             return resolved, expression_text
-        expression = _expression_model(tokens, self.resolve_expression)
+        expression = self._model_expression(tokens)
         if _runtime_expression_supported(expression):
             return expression, expression_text
         return None, expression_text
+
+    def _buffer_reference(self, tokens: Sequence[_Token]) -> str | dict:
+        """Preserve complex pointer expressions used as HAL buffers."""
+
+        cleaned = _strip_leading_c_casts(_strip_wrapping_parentheses(tokens))
+        if len(cleaned) == 1 and cleaned[0].kind == "identifier":
+            return cleaned[0].value
+        if len(cleaned) == 2 and cleaned[0].value == "&" and cleaned[1].kind == "identifier":
+            return cleaned[1].value
+        return self._model_expression(tokens)
 
     def _parse_hal_call(self, call: _Token, arguments: Sequence[Sequence[_Token]]) -> dict | None:
         source = self._source(call)
@@ -2921,7 +4233,7 @@ class _StatementParser:
                     "instance": instance,
                     "channel": channel_number,
                     "channelExpression": channel_expression,
-                    "compare": _expression_model(arguments[2], self.resolve_expression),
+                    "compare": self._model_expression(arguments[2]),
                     "compareExpression": _tokens_text(arguments[2]),
                     "source": source,
                 }
@@ -2953,9 +4265,11 @@ class _StatementParser:
                 )
                 return {"op": "unsupported", "call": name, "source": source}
             handle = _first_identifier(arguments[0])
-            buffer = _first_identifier(arguments[1], ignore=self._DECLARATION_PREFIXES)
+            buffer = self._buffer_reference(arguments[1])
             length, length_expression = self._transfer_length(arguments[2])
             timeout = None if is_dma or is_interrupt else _tokens_text(arguments[3])
+            timeout_expression = None if is_dma or is_interrupt else self._model_expression(arguments[3])
+            timeout_value = None if timeout is None else self.resolve_expression(timeout)
             instance = None
             if handle and handle in self.uart_instances:
                 instance = self.uart_instances[handle].get("instance")
@@ -2966,7 +4280,7 @@ class _StatementParser:
                 operation_name = "uartReceiveIt" if receiving else "uartTransmitIt"
             else:
                 operation_name = "uartReceive" if receiving else "uartTransmit"
-            blocking = not is_dma and not is_interrupt and timeout != "0"
+            blocking = not is_dma and not is_interrupt and (timeout_value is None or timeout_value != 0)
             operation = {
                 "op": operation_name,
                 "uart": handle,
@@ -2975,12 +4289,20 @@ class _StatementParser:
                 "length": length,
                 "lengthExpression": length_expression,
                 "timeout": timeout,
+                "timeoutExpression": timeout_expression,
                 "blocking": blocking,
                 "dma": is_dma,
                 "interrupt": is_interrupt,
                 "source": source,
             }
-            if length is None:
+            # Transfer sizes are often calculated at runtime: ``strlen``, a
+            # helper return value, or even ``index++`` are all valid C/HAL
+            # idioms.  A static value is convenient metadata, not a
+            # requirement for semantic execution, so reject only expressions
+            # the runtime cannot evaluate at all.
+            if length is None and not _runtime_expression_supported(
+                self._model_expression(arguments[2])
+            ):
                 self.diagnostics.append(
                     _diagnostic(
                         "error",
@@ -3017,8 +4339,19 @@ class _StatementParser:
                 "source": source,
             }
 
-        if name in {"HAL_I2C_Master_Transmit", "HAL_I2C_Mem_Write"}:
-            required = 5 if name == "HAL_I2C_Master_Transmit" else 7
+        i2c_match = re.fullmatch(
+            r"HAL_I2C_(Master_(?:Transmit|Receive)|Mem_(?:Write|Read))(?:_(IT|DMA))?",
+            name,
+        )
+        if i2c_match:
+            base_name = i2c_match.group(1)
+            transfer_mode = i2c_match.group(2)
+            memory_access = base_name.startswith("Mem_")
+            receiving = base_name.endswith("Receive") or base_name.endswith("Read")
+            # Memory transfers carry handle, device address, memory address,
+            # memory-address width, buffer and length.  The blocking variant
+            # adds a timeout; IT/DMA variants do not.
+            required = (6 if memory_access else 4) if transfer_mode else (7 if memory_access else 5)
             if len(arguments) < required:
                 self.diagnostics.append(
                     _diagnostic(
@@ -3032,21 +4365,30 @@ class _StatementParser:
             handle = _first_identifier(arguments[0])
             instance = self.i2c_instances.get(handle, {}).get("instance") if handle else None
             device_address_expression = _tokens_text(arguments[1])
-            device_address = _expression_model(arguments[1], self.resolve_expression)
-            if name == "HAL_I2C_Master_Transmit":
+            device_address = self._model_expression(arguments[1])
+            if not memory_access:
                 buffer_arguments = arguments[2]
                 length_arguments = arguments[3]
-                timeout_arguments = arguments[4]
-                operation_name = "i2cMasterTransmit"
+                timeout_arguments = arguments[4] if not transfer_mode else []
+                operation_name = "i2cMasterReceive" if receiving else "i2cMasterTransmit"
             else:
                 buffer_arguments = arguments[4]
                 length_arguments = arguments[5]
-                timeout_arguments = arguments[6]
-                operation_name = "i2cMemWrite"
-            buffer = _first_identifier(buffer_arguments)
-            length_expression = _tokens_text(length_arguments)
-            length = self.resolve_expression(length_expression)
-            timeout = _tokens_text(timeout_arguments)
+                if transfer_mode:
+                    # IT/DMA memory transfers have no timeout parameter.
+                    # The canonical argument order is handle, address,
+                    # memoryAddress, memoryAddressSize, data, length.
+                    timeout_arguments = []
+                else:
+                    timeout_arguments = arguments[6]
+                operation_name = "i2cMemRead" if receiving else "i2cMemWrite"
+            if transfer_mode:
+                operation_name += "It" if transfer_mode == "IT" else "Dma"
+            buffer = self._buffer_reference(buffer_arguments)
+            length, length_expression = self._transfer_length(length_arguments)
+            timeout = _tokens_text(timeout_arguments) if timeout_arguments else None
+            timeout_expression = self._model_expression(timeout_arguments) if timeout_arguments else None
+            timeout_value = self.resolve_expression(timeout) if timeout is not None else 0
             operation = {
                 "op": operation_name,
                 "i2c": handle,
@@ -3057,19 +4399,24 @@ class _StatementParser:
                 "length": length,
                 "lengthExpression": length_expression,
                 "timeout": timeout,
-                "blocking": timeout.strip() != "0",
+                "timeoutExpression": timeout_expression,
+                "blocking": timeout_value is None or timeout_value != 0,
+                "interrupt": transfer_mode == "IT",
+                "dma": transfer_mode == "DMA",
                 "source": source,
             }
-            if name == "HAL_I2C_Mem_Write":
+            if memory_access:
                 operation.update(
                     {
-                        "memoryAddress": _expression_model(arguments[2], self.resolve_expression),
+                        "memoryAddress": self._model_expression(arguments[2]),
                         "memoryAddressExpression": _tokens_text(arguments[2]),
-                        "memoryAddressSize": _expression_model(arguments[3], self.resolve_expression),
+                        "memoryAddressSize": self._model_expression(arguments[3]),
                         "memoryAddressSizeExpression": _tokens_text(arguments[3]),
                     }
                 )
-            if length is None:
+            if length is None and not _runtime_expression_supported(
+                self._model_expression(length_arguments)
+            ):
                 self.diagnostics.append(
                     _diagnostic(
                         "error",
@@ -3081,35 +4428,76 @@ class _StatementParser:
                 )
             return operation
 
-        if name == "HAL_SPI_Transmit":
-            if len(arguments) < 4:
+        if name == "HAL_I2C_Master_Abort_IT":
+            if len(arguments) < 2:
+                self.diagnostics.append(
+                    _diagnostic("error", "HAL_CALL_ARGUMENTS", f"{name} has fewer than 2 arguments", **source)
+                )
+                return {"op": "unsupported", "call": name, "source": source}
+            handle = _first_identifier(arguments[0])
+            return {
+                "op": "i2cAbortIt",
+                "i2c": handle,
+                "instance": self.i2c_instances.get(handle, {}).get("instance") if handle else None,
+                "deviceAddress": self._model_expression(arguments[1]),
+                "deviceAddressExpression": _tokens_text(arguments[1]),
+                "interrupt": True,
+                "source": source,
+            }
+
+        spi_match = re.fullmatch(
+            r"HAL_SPI_(TransmitReceive|Transmit|Receive)(?:_(IT|DMA))?",
+            name,
+        )
+        if spi_match:
+            spi_base = spi_match.group(1)
+            transfer_mode = spi_match.group(2)
+            full_duplex = spi_base == "TransmitReceive"
+            required = (4 if full_duplex else 3) if transfer_mode else (5 if full_duplex else 4)
+            if len(arguments) < required:
                 self.diagnostics.append(
                     _diagnostic(
                         "error",
                         "HAL_CALL_ARGUMENTS",
-                        f"{name} has fewer than four arguments",
+                        f"{name} has fewer than {required} arguments",
                         **source,
                     )
                 )
                 return {"op": "unsupported", "call": name, "source": source}
             handle = _first_identifier(arguments[0])
-            buffer = _first_identifier(arguments[1])
-            length_expression = _tokens_text(arguments[2])
-            length = self.resolve_expression(length_expression)
-            timeout = _tokens_text(arguments[3])
+            tx_buffer = self._buffer_reference(arguments[1])
+            rx_buffer = self._buffer_reference(arguments[2]) if full_duplex else None
+            length_index = 3 if full_duplex else 2
+            timeout_index = length_index + 1
+            length, length_expression = self._transfer_length(arguments[length_index])
+            timeout = _tokens_text(arguments[timeout_index]) if not transfer_mode else None
+            timeout_expression = self._model_expression(arguments[timeout_index]) if not transfer_mode else None
+            timeout_value = self.resolve_expression(timeout) if timeout is not None else 0
             instance = self.spi_instances.get(handle, {}).get("instance") if handle else None
+            operation_name = {
+                "Transmit": "spiTransmit", "Receive": "spiReceive", "TransmitReceive": "spiTransmitReceive",
+            }[spi_base]
+            if transfer_mode:
+                operation_name += "It" if transfer_mode == "IT" else "Dma"
             operation = {
-                "op": "spiTransmit",
+                "op": operation_name,
                 "spi": handle,
                 "instance": instance,
-                "buffer": buffer,
+                "buffer": tx_buffer if spi_base == "Receive" else tx_buffer,
+                "txBuffer": tx_buffer,
+                "rxBuffer": rx_buffer,
                 "length": length,
                 "lengthExpression": length_expression,
                 "timeout": timeout,
-                "blocking": timeout.strip() != "0",
+                "timeoutExpression": timeout_expression,
+                "blocking": timeout_value is None or timeout_value != 0,
+                "interrupt": transfer_mode == "IT",
+                "dma": transfer_mode == "DMA",
                 "source": source,
             }
-            if length is None:
+            if length is None and not _runtime_expression_supported(
+                self._model_expression(arguments[length_index])
+            ):
                 self.diagnostics.append(
                     _diagnostic(
                         "error",
@@ -3120,6 +4508,21 @@ class _StatementParser:
                     )
                 )
             return operation
+
+        if name == "HAL_SPI_Abort_IT":
+            if len(arguments) < 1:
+                self.diagnostics.append(
+                    _diagnostic("error", "HAL_CALL_ARGUMENTS", f"{name} has too few arguments", **source)
+                )
+                return {"op": "unsupported", "call": name, "source": source}
+            handle = _first_identifier(arguments[0])
+            return {
+                "op": "spiAbortIt",
+                "spi": handle,
+                "instance": self.spi_instances.get(handle, {}).get("instance") if handle else None,
+                "interrupt": True,
+                "source": source,
+            }
 
         if name in {"HAL_ADC_Start_DMA", "HAL_ADC_Stop_DMA"}:
             required = 3 if name == "HAL_ADC_Start_DMA" else 1
@@ -3136,15 +4539,16 @@ class _StatementParser:
                 "source": source,
             }
             if name == "HAL_ADC_Start_DMA":
-                buffer = _first_identifier(arguments[1])
-                length_expression = _tokens_text(arguments[2])
-                length = self.resolve_expression(length_expression)
+                buffer = self._buffer_reference(arguments[1])
+                length, length_expression = self._transfer_length(arguments[2])
                 operation.update({
                     "buffer": buffer,
                     "length": length,
                     "lengthExpression": length_expression,
                 })
-                if length is None:
+                if length is None and not _runtime_expression_supported(
+                    self._model_expression(arguments[2])
+                ):
                     self.diagnostics.append(
                         _diagnostic(
                             "error",
@@ -3209,7 +4613,9 @@ class _StatementParser:
             if name == "HAL_ADC_PollForConversion":
                 timeout = _tokens_text(arguments[1])
                 operation["timeout"] = timeout
-                operation["blocking"] = timeout.strip() != "0"
+                operation["timeoutExpression"] = self._model_expression(arguments[1])
+                timeout_value = self.resolve_expression(timeout)
+                operation["blocking"] = timeout_value is None or timeout_value != 0
             return operation
 
         if name in {"HAL_GPIO_WritePin", "HAL_GPIO_ReadPin", "HAL_GPIO_TogglePin"}:
@@ -3251,13 +4657,25 @@ class _StatementParser:
                 "source": source,
             }
             if name == "HAL_GPIO_WritePin":
-                operation["value"] = _expression_model(arguments[2], self.resolve_expression)
+                operation["value"] = self._model_expression(arguments[2])
             return operation
+
+        if name == "HAL_ADC_Stop":
+            if len(arguments) < 1:
+                self.diagnostics.append(_diagnostic("error", "HAL_CALL_ARGUMENTS", f"{name} has too few arguments", **source))
+                return {"op": "unsupported", "call": name, "source": source}
+            handle = _first_identifier(arguments[0])
+            return {
+                "op": "adcStop",
+                "adc": handle,
+                "instance": self.adc_instances.get(handle, {}).get("instance") if handle else None,
+                "source": source,
+            }
 
         if name == "HAL_Delay":
             expression = _tokens_text(arguments[0]) if arguments else ""
             milliseconds = self.resolve_expression(expression)
-            expression_model = _expression_model(arguments[0] if arguments else [], self.resolve_expression)
+            expression_model = self._model_expression(arguments[0] if arguments else [])
             if milliseconds is None and not _runtime_expression_supported(expression_model):
                 self.diagnostics.append(
                     _diagnostic(
@@ -3276,12 +4694,16 @@ class _StatementParser:
             }
 
         if name in {
-            "HAL_Init", "HAL_IncTick", "HAL_UART_Init", "HAL_I2C_Init", "HAL_ADC_Init", "HAL_ADC_Stop",
+            "HAL_Init", "HAL_IncTick", "HAL_UART_Init", "HAL_UART_DeInit", "HAL_I2C_Init", "HAL_I2C_DeInit", "HAL_ADC_Init", "HAL_ADC_DeInit", "HAL_ADC_ConfigChannel",
             "HAL_ADCEx_Calibration_Start", "HAL_DMA_Init", "HAL_DMA_DeInit", "HAL_DMA_IRQHandler",
             "HAL_GPIO_Init", "HAL_GPIO_EXTI_IRQHandler", "HAL_ADC_IRQHandler", "HAL_UART_IRQHandler",
-            "HAL_TIM_IRQHandler", "HAL_TIM_PWM_Init", "HAL_TIM_PWM_ConfigChannel", "HAL_TIM_Base_Init",
+            "HAL_TIM_IRQHandler", "HAL_TIM_PWM_Init", "HAL_TIM_PWM_DeInit", "HAL_TIM_PWM_ConfigChannel", "HAL_TIM_Base_Init", "HAL_TIM_Base_DeInit",
+            "HAL_SPI_Init", "HAL_SPI_DeInit",
             "HAL_NVIC_SetPriority", "HAL_NVIC_EnableIRQ", "HAL_NVIC_DisableIRQ", "HAL_NVIC_ClearPendingIRQ",
-            "__HAL_LINKDMA", "__HAL_GPIO_EXTI_CLEAR_IT", "__HAL_GPIO_EXTI_CLEAR_FLAG",
+            "HAL_RCC_OscConfig", "HAL_RCC_ClockConfig", "HAL_RCCEx_PeriphCLKConfig",
+            "__HAL_RCC_GPIOA_CLK_ENABLE", "__HAL_RCC_GPIOB_CLK_ENABLE", "__HAL_RCC_GPIOC_CLK_ENABLE",
+            "__HAL_RCC_GPIOD_CLK_ENABLE", "__HAL_RCC_GPIOE_CLK_ENABLE", "__HAL_RCC_GPIOF_CLK_ENABLE",
+            "__HAL_RCC_GPIOG_CLK_ENABLE", "__HAL_LINKDMA", "__HAL_GPIO_EXTI_CLEAR_IT", "__HAL_GPIO_EXTI_CLEAR_FLAG",
         }:
             return None
         self.diagnostics.append(
@@ -3372,7 +4794,7 @@ def _parse_source_uart_configuration(
     for record in records:
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES):
             continue
-        cleaned = _strip_comments(record.content)
+        cleaned = _mask_inactive_preprocessor(record.content, macros)
         for match in declaration_pattern.finditer(cleaned):
             line, column = _source_line(cleaned, match.start(1))
             handle = match.group(1)
@@ -3401,7 +4823,7 @@ def _parse_source_uart_configuration(
         if not instance:
             suffix = re.search(r"(\d+)$", handle)
             inferred = ("USART" + suffix.group(1)) if suffix else None
-            if inferred and inferred in ioc_instances:
+            if inferred:
                 instance = inferred
                 model["instance"] = instance
                 model["instanceConfidence"] = "inferred"
@@ -3464,7 +4886,7 @@ def _parse_source_i2c_configuration(
     for record in records:
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES):
             continue
-        cleaned = _strip_comments(record.content)
+        cleaned = _mask_inactive_preprocessor(record.content, macros)
         for match in declaration_pattern.finditer(cleaned):
             line, column = _source_line(cleaned, match.start(1))
             handle = match.group(1)
@@ -3543,7 +4965,10 @@ def _parse_source_i2c_configuration(
         addressing_mode = str(model.get("addressingMode") or "I2C_ADDRESSINGMODE_7BIT")
         model["addressBits"] = 10 if "10BIT" in addressing_mode.upper() else 7
         model["masterTransmitCalls"] = []
+        model["masterReceiveCalls"] = []
         model["memWriteCalls"] = []
+        model["memReadCalls"] = []
+        model["abortCalls"] = []
     return handles
 
 
@@ -3565,10 +4990,15 @@ def _parse_source_spi_configuration(
         "baudRatePrescaler": (re.compile(r"\b([A-Za-z_]\w*)\s*\.\s*Init\s*\.\s*BaudRatePrescaler\s*=\s*([^;]+);"), False),
         "firstBit": (re.compile(r"\b([A-Za-z_]\w*)\s*\.\s*Init\s*\.\s*FirstBit\s*=\s*([^;]+);"), False),
     }
+    # Collect declarations before scanning field assignments.  Generic
+    # ``.Init.Mode``/``.Init.Direction`` expressions are also used by UART,
+    # DMA and other CubeMX handles; creating an SPI descriptor for an
+    # undeclared name would pollute the model (for example ``huart2`` could be
+    # misreported as ``SPI2`` merely because it has a UART mode assignment).
     for record in records:
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES):
             continue
-        cleaned = _strip_comments(record.content)
+        cleaned = _mask_inactive_preprocessor(record.content, macros)
         for match in declaration_pattern.finditer(cleaned):
             line, column = _source_line(cleaned, match.start(1))
             handle = match.group(1)
@@ -3577,9 +5007,15 @@ def _parse_source_spi_configuration(
                 "line": line,
                 "column": column,
             }
+    for record in records:
+        if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES):
+            continue
+        cleaned = _mask_inactive_preprocessor(record.content, macros)
         for field, (pattern, numeric) in assignment_patterns.items():
             for match in pattern.finditer(cleaned):
                 handle, raw_value = match.group(1), match.group(2).strip()
+                if handle not in handles:
+                    continue
                 line, column = _source_line(cleaned, match.start(1))
                 model = handles.setdefault(handle, {"handle": handle, "sources": {}})
                 if field == "instance":
@@ -3615,11 +5051,15 @@ def _parse_source_spi_configuration(
             if model.get(model_name) is None and ioc_spi.get(ioc_name) is not None:
                 model[model_name] = ioc_spi[ioc_name]
         model["transmitCalls"] = []
+        model["receiveCalls"] = []
+        model["abortCalls"] = []
     return handles
 
 
 def _parse_source_adc_configuration(
-    records: Sequence[_ProjectFile], ioc: Mapping[str, object]
+    records: Sequence[_ProjectFile],
+    ioc: Mapping[str, object],
+    macros: Mapping[str, _Macro] | None = None,
 ) -> dict[str, dict]:
     handles: dict[str, dict] = {}
     declaration_pattern = re.compile(r"\bADC_HandleTypeDef\s+([A-Za-z_]\w*)\s*(?:=[^;]*)?;")
@@ -3627,7 +5067,7 @@ def _parse_source_adc_configuration(
     for record in records:
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES):
             continue
-        cleaned = _strip_comments(record.content)
+        cleaned = _mask_inactive_preprocessor(record.content, macros)
         for match in declaration_pattern.finditer(cleaned):
             line, column = _source_line(cleaned, match.start(1))
             handle = match.group(1)
@@ -3660,6 +5100,7 @@ def _parse_source_adc_configuration(
 
 def _parse_source_dma_configuration(
     records: Sequence[_ProjectFile],
+    macros: Mapping[str, _Macro] | None = None,
 ) -> tuple[dict[str, dict], list[dict]]:
     """Collect CubeMX DMA channel settings and __HAL_LINKDMA relationships."""
 
@@ -3680,21 +5121,32 @@ def _parse_source_dma_configuration(
         r"__HAL_LINKDMA\s*\(\s*&?\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)"
     )
 
+    # As with SPI, declaration discovery must precede generic ``.Init.*``
+    # matching.  Without this guard a UART/ADC handle's mode assignment would
+    # become a fabricated DMA channel in the returned model.
+    declared_handles: set[str] = set()
     for record in records:
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES):
             continue
-        cleaned = _strip_comments(record.content)
+        cleaned = _mask_inactive_preprocessor(record.content, macros)
         for match in declaration_pattern.finditer(cleaned):
             line, column = _source_line(cleaned, match.start(1))
             handle = match.group(1)
+            declared_handles.add(handle)
             handles.setdefault(handle, {"handle": handle, "sources": {}, "links": []})["sources"]["declaration"] = {
                 "file": record.path,
                 "line": line,
                 "column": column,
             }
+    for record in records:
+        if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES):
+            continue
+        cleaned = _mask_inactive_preprocessor(record.content, macros)
         for field, pattern in assignment_patterns.items():
             for match in pattern.finditer(cleaned):
                 handle, raw_value = match.group(1), match.group(2).strip()
+                if handle not in declared_handles:
+                    continue
                 line, column = _source_line(cleaned, match.start(1))
                 model = handles.setdefault(handle, {"handle": handle, "sources": {}, "links": []})
                 model[field] = raw_value
@@ -3741,7 +5193,7 @@ def _parse_source_timer_configuration(
     for record in records:
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES):
             continue
-        cleaned = _strip_comments(record.content)
+        cleaned = _mask_inactive_preprocessor(record.content, macros)
         for match in declaration_pattern.finditer(cleaned):
             line, column = _source_line(cleaned, match.start(1))
             handle = match.group(1)
@@ -3857,9 +5309,32 @@ def _parse_source_timer_configuration(
     return handles
 
 
+def _walk_inline_call_operations(value: object) -> Iterable[dict]:
+    """Yield statement trees embedded in value-producing helper calls."""
+
+    if isinstance(value, Mapping):
+        if value.get("kind") == "inlineCall":
+            operations = value.get("operations")
+            if isinstance(operations, (list, tuple)):
+                yield from _walk_operations(operations)
+            return
+        for key, child in value.items():
+            # Control-flow bodies are walked by _walk_operations itself. Skip
+            # them here so an inline helper nested in a branch is not emitted
+            # twice during id/metadata collection.
+            if key not in {"source", "then", "else", "body", "init", "increment", "cases", "default", "operations"}:
+                yield from _walk_inline_call_operations(child)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            yield from _walk_inline_call_operations(child)
+
+
 def _walk_operations(operations: Sequence[dict]) -> Iterable[dict]:
     for operation in operations:
         yield operation
+        for key, value in operation.items():
+            if key != "source":
+                yield from _walk_inline_call_operations(value)
         if operation.get("op") == "while":
             yield from _walk_operations(operation.get("body", []))
         elif operation.get("op") == "for":
@@ -3873,6 +5348,40 @@ def _walk_operations(operations: Sequence[dict]) -> Iterable[dict]:
             for case in operation.get("cases", []):
                 yield from _walk_operations(case.get("body", []))
             yield from _walk_operations(operation.get("default", []))
+
+
+def _walk_hal_call_operations(value: object) -> Iterable[dict]:
+    """Yield lowered operations embedded inside ``halCall`` expressions.
+
+    A call used in a condition is not part of the statement tree, but it still
+    needs an operation id, a resolved peripheral instance, DMA links, and the
+    same metadata as its statement-form equivalent.  Keeping this traversal
+    separate avoids treating arbitrary expression nodes as executable
+    statements.
+    """
+
+    if isinstance(value, Mapping):
+        if value.get("kind") == "halCall":
+            operation = value.get("operation")
+            if isinstance(operation, dict):
+                yield operation
+                for key, child in operation.items():
+                    if key != "source":
+                        yield from _walk_hal_call_operations(child)
+            return
+        for key, child in value.items():
+            if key != "source":
+                yield from _walk_hal_call_operations(child)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            yield from _walk_hal_call_operations(child)
+
+
+def _walk_model_operations(operations: Sequence[dict]) -> Iterable[dict]:
+    """Yield statement operations followed by calls embedded in expressions."""
+
+    yield from _walk_operations(operations)
+    yield from _walk_hal_call_operations(operations)
 
 
 def _find_unsupported_expressions(value: object) -> list[tuple[Mapping[str, object], Mapping[str, object] | None]]:
@@ -3900,27 +5409,9 @@ def _find_unsupported_expressions(value: object) -> list[tuple[Mapping[str, obje
 
 def _assign_operation_ids(operations: Sequence[dict], prefix: str = "op") -> None:
     counter = 0
-
-    def visit(items: Sequence[dict]) -> None:
-        nonlocal counter
-        for item in items:
-            counter += 1
-            item["id"] = f"{prefix}-{counter}"
-            if item.get("op") == "while":
-                visit(item.get("body", []))
-            elif item.get("op") == "for":
-                visit(item.get("init", []))
-                visit(item.get("body", []))
-                visit(item.get("increment", []))
-            elif item.get("op") == "if":
-                visit(item.get("then", []))
-                visit(item.get("else", []))
-            elif item.get("op") == "switch":
-                for case in item.get("cases", []):
-                    visit(case.get("body", []))
-                visit(item.get("default", []))
-
-    visit(operations)
+    for item in _walk_model_operations(operations):
+        counter += 1
+        item["id"] = f"{prefix}-{counter}"
 
 
 def _parse_named_function_program(
@@ -3938,7 +5429,7 @@ def _parse_named_function_program(
     for record in records:
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES):
             continue
-        tokens = _lex_c(record.content)
+        tokens = _lex_c(record.content, macros)
         body = _find_function(tokens, name)
         if body:
             candidates.append((record, tokens, body))
@@ -3982,6 +5473,17 @@ def _parse_hal_callbacks(
         "HAL_UART_AbortCpltCallback",
         "HAL_UART_AbortTransmitCpltCallback",
         "HAL_UART_AbortReceiveCpltCallback",
+        "HAL_I2C_MasterTxCpltCallback",
+        "HAL_I2C_MasterRxCpltCallback",
+        "HAL_I2C_MemTxCpltCallback",
+        "HAL_I2C_MemRxCpltCallback",
+        "HAL_I2C_ErrorCallback",
+        "HAL_I2C_AbortCpltCallback",
+        "HAL_SPI_TxCpltCallback",
+        "HAL_SPI_RxCpltCallback",
+        "HAL_SPI_TxRxCpltCallback",
+        "HAL_SPI_ErrorCallback",
+        "HAL_SPI_AbortCpltCallback",
         "HAL_TIM_PeriodElapsedCallback",
         "HAL_TIM_PWM_PulseFinishedCallback",
         "HAL_TIM_ErrorCallback",
@@ -3991,7 +5493,7 @@ def _parse_hal_callbacks(
         has_project_definition = any(
             record.path.casefold().endswith(C_SOURCE_SUFFIXES)
             and not re.search(r"(?:^|/)drivers?/", record.path.casefold())
-            and _find_function(_lex_c(record.content), name) is not None
+            and _find_function(_lex_c(record.content, macros), name) is not None
             for record in records
         )
         if not has_project_definition:
@@ -4005,7 +5507,7 @@ def _parse_hal_callbacks(
         callbacks[name] = {
             "entry": name,
             "source": source_path,
-            "parameters": _function_parameter_names(_lex_c(source_record.content), name) if source_record else [],
+            "parameters": _function_parameter_names(_lex_c(source_record.content, macros), name) if source_record else [],
             "operations": operations,
         }
     return callbacks
@@ -4126,7 +5628,7 @@ def _parse_middlewares(
     for record in records:
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES):
             continue
-        tokens = _lex_c(record.content)
+        tokens = _lex_c(record.content, macros)
         for index, token in enumerate(tokens[:-1]):
             if token.value not in {"xTaskCreate", "xTaskCreateStatic", "osThreadNew"} or tokens[index + 1].value != "(":
                 continue
@@ -4155,7 +5657,7 @@ def _parse_middlewares(
                 continue
             seen.add((entry, task_name))
             source_path, operations = _parse_named_function_program(records, entry, macros, aliases, uarts, i2cs, spis, adcs, diagnostics)
-            for operation in _walk_operations(operations):
+            for operation in _walk_model_operations(operations):
                 operation_name = operation.get("op")
                 if operation_name not in {"uartReceive", "uartTransmit"}:
                     continue
@@ -4225,7 +5727,7 @@ def _parse_program(
     for record in records:
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES):
             continue
-        tokens = _lex_c(record.content)
+        tokens = _lex_c(record.content, macros)
         body = _find_function(tokens, "main")
         if body:
             candidates.append((record, tokens, body))
@@ -4256,7 +5758,7 @@ def _parse_program(
     operations = parser.parse(start, end)
     _assign_operation_ids(operations)
     blocking_receives: list[dict] = []
-    for operation in _walk_operations(operations):
+    for operation in _walk_model_operations(operations):
         operation_name = operation.get("op")
         if operation_name in {
             "uartReceive", "uartTransmit", "uartReceiveIt", "uartTransmitIt",
@@ -4304,7 +5806,12 @@ def _parse_program(
                     )
             continue
 
-        if operation_name in {"i2cMasterTransmit", "i2cMemWrite"}:
+        if operation_name in {
+            "i2cMasterTransmit", "i2cMasterReceive", "i2cMemWrite", "i2cMemRead",
+            "i2cMasterTransmitIt", "i2cMasterReceiveIt", "i2cMemWriteIt", "i2cMemReadIt",
+            "i2cMasterTransmitDma", "i2cMasterReceiveDma", "i2cMemWriteDma", "i2cMemReadDma",
+            "i2cAbortIt",
+        }:
             handle = operation.get("i2c")
             if handle and handle not in i2cs:
                 suffix = re.search(r"(\d+)$", str(handle))
@@ -4316,7 +5823,10 @@ def _parse_program(
                     "clockSpeed": None,
                     "addressBits": 7,
                     "masterTransmitCalls": [],
+                    "masterReceiveCalls": [],
                     "memWriteCalls": [],
+                    "memReadCalls": [],
+                    "abortCalls": [],
                     "sources": {},
                 }
             i2c = i2cs.get(handle) if handle else None
@@ -4331,19 +5841,27 @@ def _parse_program(
                     "blocking": operation.get("blocking", False),
                     "source": operation.get("source"),
                 }
-                if operation_name == "i2cMemWrite":
+                base_operation_name = re.sub(r"(?:It|Dma)$", "", operation_name)
+                if operation_name == "i2cAbortIt":
+                    metadata["interrupt"] = True
+                    i2c.setdefault("abortCalls", []).append(metadata)
+                elif base_operation_name in {"i2cMemWrite", "i2cMemRead"}:
                     metadata.update(
                         {
                             "memoryAddress": operation.get("memoryAddress"),
                             "memoryAddressSize": operation.get("memoryAddressSize"),
                         }
                     )
-                    i2c["memWriteCalls"].append(metadata)
+                    i2c["memReadCalls" if base_operation_name == "i2cMemRead" else "memWriteCalls"].append(metadata)
                 else:
-                    i2c["masterTransmitCalls"].append(metadata)
+                    i2c["masterReceiveCalls" if base_operation_name == "i2cMasterReceive" else "masterTransmitCalls"].append(metadata)
             continue
 
-        if operation_name == "spiTransmit":
+        if operation_name in {
+            "spiTransmit", "spiReceive", "spiTransmitReceive",
+            "spiTransmitIt", "spiReceiveIt", "spiTransmitReceiveIt",
+            "spiTransmitDma", "spiReceiveDma", "spiTransmitReceiveDma", "spiAbortIt",
+        }:
             handle = operation.get("spi")
             if handle and handle not in spis:
                 suffix = re.search(r"(\d+)$", str(handle))
@@ -4354,17 +5872,24 @@ def _parse_program(
                     "mosiPin": None,
                     "misoPin": None,
                     "transmitCalls": [],
+                    "receiveCalls": [],
+                    "abortCalls": [],
                     "sources": {},
                 }
             spi = spis.get(handle) if handle else None
             if spi:
                 operation["instance"] = spi.get("instance")
-                spi["transmitCalls"].append({
+                base_operation_name = re.sub(r"(?:It|Dma)$", "", operation_name)
+                spi["receiveCalls" if base_operation_name == "spiReceive" else "transmitCalls"].append({
                     "operationId": operation["id"],
                     "buffer": operation.get("buffer"),
+                    "txBuffer": operation.get("txBuffer"),
+                    "rxBuffer": operation.get("rxBuffer"),
                     "length": operation.get("length"),
                     "timeout": operation.get("timeout"),
                     "blocking": operation.get("blocking", False),
+                    "interrupt": operation.get("interrupt", False),
+                    "dma": operation.get("dma", False),
                     "source": operation.get("source"),
                 })
             continue
@@ -4465,15 +5990,16 @@ def build_hal_model(files: Iterable[object]) -> dict:
     diagnostics: list[dict] = []
     _, ioc = _parse_ioc(records, diagnostics)
     macros = _collect_macros(records, diagnostics)
+    macros = _collect_enum_constants(records, macros)
     variables = _parse_initial_variables(records, macros)
-    variable_types = _parse_variable_types(records)
+    variable_types = _parse_variable_types(records, macros)
     aliases = _build_gpio_aliases(macros, ioc, diagnostics)
     _parse_gpio_interrupt_configuration(records, macros, ioc)
     uarts = _parse_source_uart_configuration(records, macros, ioc, diagnostics)
     i2cs = _parse_source_i2c_configuration(records, macros, ioc, diagnostics)
     spis = _parse_source_spi_configuration(records, macros, ioc)
-    adcs = _parse_source_adc_configuration(records, ioc)
-    dmas, dma_links = _parse_source_dma_configuration(records)
+    adcs = _parse_source_adc_configuration(records, ioc, macros)
+    dmas, dma_links = _parse_source_dma_configuration(records, macros)
     timers = _parse_source_timer_configuration(records, macros, ioc)
     program = _parse_program(records, macros, aliases, uarts, i2cs, spis, adcs, diagnostics)
     middlewares = _parse_middlewares(records, macros, aliases, uarts, i2cs, spis, adcs, diagnostics)
@@ -4499,6 +6025,24 @@ def build_hal_model(files: Iterable[object]) -> dict:
                 uarts[uart_handle]["txDmaHandle"] = dma_handle
             elif "rx" in field:
                 uarts[uart_handle]["rxDmaHandle"] = dma_handle
+        i2c_handle = peripheral_handle if peripheral_handle in i2cs else next(
+            (handle for handle, descriptor in i2cs.items() if str(descriptor.get("instance") or "").upper() == peripheral_instance),
+            None,
+        )
+        if i2c_handle:
+            if "tx" in field:
+                i2cs[i2c_handle]["txDmaHandle"] = dma_handle
+            elif "rx" in field:
+                i2cs[i2c_handle]["rxDmaHandle"] = dma_handle
+        spi_handle = peripheral_handle if peripheral_handle in spis else next(
+            (handle for handle, descriptor in spis.items() if str(descriptor.get("instance") or "").upper() == peripheral_instance),
+            None,
+        )
+        if spi_handle:
+            if "tx" in field:
+                spis[spi_handle]["txDmaHandle"] = dma_handle
+            elif "rx" in field:
+                spis[spi_handle]["rxDmaHandle"] = dma_handle
 
     pins: dict[str, dict] = ioc["pins"]  # type: ignore[assignment]
     output_operations = list(program["operations"])
@@ -4506,7 +6050,7 @@ def build_hal_model(files: Iterable[object]) -> dict:
         output_operations.extend(task.get("operations", []))
     for callback in callbacks.values():
         output_operations.extend(callback.get("operations", []))
-    for operation in _walk_operations(output_operations):
+    for operation in _walk_model_operations(output_operations):
         operation_name = operation.get("op")
         if operation_name in {"adcStartDma", "adcStopDma"}:
             adc = adcs.get(operation.get("adc"), {})
@@ -4523,6 +6067,22 @@ def build_hal_model(files: Iterable[object]) -> dict:
                 dma_handle = uart.get("rxDmaHandle")
             else:
                 dma_handle = None
+            dma = dmas.get(dma_handle, {}) if dma_handle else {}
+            operation["dmaHandle"] = dma_handle
+            operation["dmaInstance"] = dma.get("instance")
+            operation["circular"] = bool(dma.get("circular", False))
+        elif operation_name in {
+            "i2cMasterTransmitDma", "i2cMasterReceiveDma", "i2cMemWriteDma", "i2cMemReadDma"
+        }:
+            i2c = i2cs.get(operation.get("i2c"), {})
+            dma_handle = i2c.get("rxDmaHandle") if "Receive" in operation_name or "Read" in operation_name else i2c.get("txDmaHandle")
+            dma = dmas.get(dma_handle, {}) if dma_handle else {}
+            operation["dmaHandle"] = dma_handle
+            operation["dmaInstance"] = dma.get("instance")
+            operation["circular"] = bool(dma.get("circular", False))
+        elif operation_name in {"spiTransmitDma", "spiReceiveDma", "spiTransmitReceiveDma"}:
+            spi = spis.get(operation.get("spi"), {})
+            dma_handle = spi.get("rxDmaHandle") if operation_name == "spiReceiveDma" else spi.get("txDmaHandle")
             dma = dmas.get(dma_handle, {}) if dma_handle else {}
             operation["dmaHandle"] = dma_handle
             operation["dmaInstance"] = dma.get("instance")

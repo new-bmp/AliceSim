@@ -94,11 +94,23 @@
       dispatch("alice:firmware-i2c-tx", i2cEvent);
       return;
     }
+    if (kind === "i2c-rx") {
+      var readI2c = findI2c(currentModel, payload.instance || payload.i2c || payload.handle);
+      var i2cReadEvent = Object.assign({}, payload, readI2c ? { instance: readI2c.instance || payload.instance, handle: readI2c.handle || payload.handle, sclPin: readI2c.sclPin, sdaPin: readI2c.sdaPin, clockSpeed: readI2c.clockSpeed, addressBits: readI2c.addressBits } : {});
+      dispatch("alice:firmware-i2c-rx", i2cReadEvent);
+      return;
+    }
     if (kind === "spi-tx") {
       var spi = findSpi(currentModel, payload.instance || payload.spi || payload.handle);
       var spiEvent = Object.assign({}, payload, spi ? { instance: spi.instance || payload.instance, handle: spi.handle || payload.handle, sckPin: spi.sckPin, mosiPin: spi.mosiPin, misoPin: spi.misoPin, mode: spi.mode, dataSize: spi.dataSize, clockPolarity: spi.clockPolarity, clockPhase: spi.clockPhase } : {});
       spiEvent.result = root.AliceSchematic && typeof root.AliceSchematic.handleSpiTransmission === "function" ? root.AliceSchematic.handleSpiTransmission(spiEvent) : { accepted: false, targetCount: 0, reason: "schematic-unavailable" };
       dispatch("alice:firmware-spi-tx", spiEvent);
+      return;
+    }
+    if (kind === "spi-rx") {
+      var readSpi = findSpi(currentModel, payload.instance || payload.spi || payload.handle);
+      var spiReadEvent = Object.assign({}, payload, readSpi ? { instance: readSpi.instance || payload.instance, handle: readSpi.handle || payload.handle, sckPin: readSpi.sckPin, mosiPin: readSpi.mosiPin, misoPin: readSpi.misoPin, mode: readSpi.mode, dataSize: readSpi.dataSize, clockPolarity: readSpi.clockPolarity, clockPhase: readSpi.clockPhase } : {});
+      dispatch("alice:firmware-spi-rx", spiReadEvent);
       return;
     }
     if (kind === "peripheral") {
@@ -607,6 +619,23 @@
         dispatch("alice:firmware-i2c-tx", enriched);
         return result;
       },
+      onI2cRx: function (event) {
+        var i2c = findI2c(currentModel, event.instance || event.i2c || event.handle);
+        var enriched = Object.assign({}, event, i2c ? {
+          instance: i2c.instance || event.instance,
+          handle: i2c.handle || event.handle,
+          sclPin: i2c.sclPin,
+          sdaPin: i2c.sdaPin,
+          clockSpeed: i2c.clockSpeed,
+          addressBits: i2c.addressBits
+        } : {});
+        var result = root.AliceSchematic && typeof root.AliceSchematic.handleI2cReception === "function"
+          ? root.AliceSchematic.handleI2cReception(enriched)
+          : { accepted: false, targetCount: 0, reason: "schematic-read-unavailable" };
+        enriched.result = result;
+        dispatch("alice:firmware-i2c-rx", enriched);
+        return result;
+      },
       onSpiTx: function (event) {
         var spi = findSpi(currentModel, event.instance || event.spi || event.handle);
         var enriched = Object.assign({}, event, spi ? {
@@ -625,6 +654,26 @@
           : { accepted: false, targetCount: 0, reason: "schematic-unavailable" };
         enriched.result = result;
         dispatch("alice:firmware-spi-tx", enriched);
+        return result;
+      },
+      onSpiRx: function (event) {
+        var spi = findSpi(currentModel, event.instance || event.spi || event.handle);
+        var enriched = Object.assign({}, event, spi ? {
+          instance: spi.instance || event.instance,
+          handle: spi.handle || event.handle,
+          sckPin: spi.sckPin,
+          mosiPin: spi.mosiPin,
+          misoPin: spi.misoPin,
+          mode: spi.mode,
+          dataSize: spi.dataSize,
+          clockPolarity: spi.clockPolarity,
+          clockPhase: spi.clockPhase
+        } : {});
+        var result = root.AliceSchematic && typeof root.AliceSchematic.handleSpiReception === "function"
+          ? root.AliceSchematic.handleSpiReception(enriched)
+          : { accepted: false, targetCount: 0, reason: "schematic-read-unavailable" };
+        enriched.result = result;
+        dispatch("alice:firmware-spi-rx", enriched);
         return result;
       },
       onAdcStart: function (event) {

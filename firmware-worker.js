@@ -59,6 +59,32 @@
     return { accepted: targets.length > 0, targetCount: targets.length, targets: clone(targets), address: address };
   }
 
+  function readBytesForTarget(target) {
+    if (!target || typeof target !== "object") return undefined;
+    if (target.readBytes !== undefined) return target.readBytes;
+    if (target.rxBytes !== undefined) return target.rxBytes;
+    return undefined;
+  }
+
+  function i2cReadResponse(event) {
+    var reference = event && (event.instance || event.i2c || event.handle);
+    var address = normalizedI2cAddress(event && (event.deviceAddress != null ? event.deviceAddress : event.address));
+    var targets = (Array.isArray(inputs.i2c) ? inputs.i2c : []).filter(function (target) {
+      return target && target.ready && sameReference(target, reference)
+        && (address == null || normalizedI2cAddress(target.address) === address)
+        && readBytesForTarget(target) !== undefined;
+    });
+    var selected = targets[0];
+    return {
+      accepted: Boolean(selected),
+      targetCount: targets.length,
+      targets: clone(targets),
+      address: address,
+      bytes: selected ? clone(readBytesForTarget(selected)) : undefined,
+      reason: selected ? undefined : "no-readable-i2c-target"
+    };
+  }
+
   function outputLevel(pin, fallback) {
     var physical = String(pin || "").toUpperCase();
     if (physical && Object.prototype.hasOwnProperty.call(gpioOutputs, physical)) return gpioOutputs[physical];
@@ -77,6 +103,23 @@
       return copy;
     });
     return { accepted: targets.length > 0, targetCount: targets.length, targets: targets };
+  }
+
+  function spiReadResponse(event) {
+    var reference = event && (event.instance || event.spi || event.handle);
+    var targets = (Array.isArray(inputs.spi) ? inputs.spi : []).filter(function (target) {
+      return target && target.ready && sameReference(target, reference)
+        && outputLevel(target.csPin, target.selected ? 0 : 1) === 0
+        && readBytesForTarget(target) !== undefined;
+    });
+    var selected = targets[0];
+    return {
+      accepted: Boolean(selected),
+      targetCount: targets.length,
+      targets: clone(targets),
+      bytes: selected ? clone(readBytesForTarget(selected)) : undefined,
+      reason: selected ? undefined : "no-readable-spi-target"
+    };
   }
 
   function peripheralMatches(target, event, candidates) {
@@ -161,7 +204,9 @@
       onUartTx: function (event) { emit("uart-tx", event); },
       onStdio: function (event) { emit("stdio", event); },
       onI2cTx: function (event) { var response = i2cResponse(event); emit("i2c-tx", event); return response; },
+      onI2cRx: function (event) { var response = i2cReadResponse(event); emit("i2c-rx", event); return response; },
       onSpiTx: function (event) { var response = spiResponse(event); emit("spi-tx", event); return response; },
+      onSpiRx: function (event) { var response = spiReadResponse(event); emit("spi-rx", event); return response; },
       onAdcStart: function (event) { emit("adc-start", event); },
       onAdcPoll: function (event) { emit("adc-poll", event); },
       onAdcRead: function (event) {
