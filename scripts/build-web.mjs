@@ -21,6 +21,7 @@ const sourceFiles = [
   "libdriver-registry.js",
   "peripheral-catalog.js",
   "peripheral-devices.js",
+  "peripheral-visuals.js",
   "simulation-accel.js",
   "schematic.js",
   "alice-drivers.js",

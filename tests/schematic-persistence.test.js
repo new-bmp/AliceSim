@@ -135,6 +135,75 @@ function sampleCircuit() {
   };
 }
 
+function effectCircuit(type, pins, model = {}) {
+  const api = loadSchematicApi();
+  api.applyProjectModel({ mcu: "STM32F103C8T6", pins: Object.fromEntries(pins.map(([mcu]) => [mcu, { physicalPin: mcu, mode: "output", configured: true }])), outputs: {}, ...model });
+  const wire = (id, fromId, fromPin, toPin) => ({ id, from: { componentId: fromId, pin: fromPin }, to: { componentId: "dut", pin: toPin }, route: [{ x: 0, y: 0 }, { x: 100, y: 0 }] });
+  const loaded = api.importCircuit({ schemaVersion: 1, kind: "AliceSIMCircuit", mcu: "STM32F103C8T6", components: [
+    { id: "mcu", type: "mcu", x: 0, y: 0 }, { id: "vcc", type: "vcc", value: "+5V", x: 200, y: 0 }, { id: "gnd", type: "ground", x: 200, y: 200 }, { id: "dut", type, x: 400, y: 100 }
+  ].map(c => ({ ref: c.id, value: c.type, rotation: 0, ...c })), wires: [wire("vcc", "vcc", "VCC", "VCC"), wire("gnd", "gnd", "GND", "GND")].concat(pins.map(([mcu, pin], i) => wire("signal" + i, "mcu", mcu, pin))) });
+  assert.equal(loaded.ok, true, loaded.error);
+  return api;
+}
+
+test("MAX7219 SPI rows survive batched Worker GPIO edges without rendering", () => {
+  const api = effectCircuit("max7219", [["PA5", "CLK"], ["PA7", "DIN"], ["PB0", "CS"]], { spis: { hspi1: { handle: "hspi1", instance: "SPI1", sckPin: "PA5", mosiPin: "PA7" } } });
+  assert.equal(api.getFirmwareInputSnapshot().spi[0].ready, true);
+  function reg(address, value) {
+    api.driveMcuPin("PB0", 0, { render: false });
+    assert.equal(api.handleSpiTransmission({ instance: "SPI1", bytes: [address, value] }).accepted, true);
+    api.driveMcuPin("PB0", 1, { render: false });
+  }
+  reg(12, 1); reg(11, 7); reg(1, 0x81); reg(2, 0x42); reg(8, 0xff);
+  const display = api.getState().components.find(c => c.id === "dut").deviceState;
+  assert.equal(display.visible, true);
+  assert.deepEqual(Array.from(display.rows), [0x81, 0x42, 0, 0, 0, 0, 0, 0xff]);
+  assert.equal(api.handleSpiTransmission({ instance: "SPI1", bytes: [1, 0] }).accepted, false, "CS high rejects data");
+  assert.equal(api.handleSpiTransmission({ instance: "SPI2", bytes: [1, 0] }).accepted, false, "wrong bus rejects data");
+});
+
+test("WS2812 real SPI transfer is bound by MOSI pin and bit rate, no CS required", () => {
+  const api = effectCircuit("ws2812", [["PA7", "DIN"]], { spis: { hspi1: { handle: "hspi1", instance: "SPI1", sckPin: "PA5", mosiPin: "PA7", baudRate: 2400000 } } });
+  const snapshot = api.getFirmwareInputSnapshot().spi[0];
+  assert.equal(snapshot.ready, true);
+  assert.equal(snapshot.noChipSelect, true);
+  let encoded = "";
+  for (const byte of [0, 255, 0]) for (let i = 7; i >= 0; i--) encoded += byte & (1 << i) ? "110" : "100";
+  const bytes = encoded.match(/.{8}/g).map(b => parseInt(b, 2)).concat(Array(18).fill(0));
+  assert.equal(api.handleSpiTransmission({ instance: "SPI1", bytes }).accepted, true);
+  assert.equal(api.getState().components.find(c => c.id === "dut").deviceState.colors[0], 0xff0000);
+});
+
+test("servo reacts to PWM in the model and keeps its last position on stop or invalid frequency", () => {
+  const api = effectCircuit("sg90", [["PA0", "PWM"]]);
+  function pwm(dutyCycle, active = true, frequencyHz = 50) {
+    api.driveMcuPwm({ pin: "PA0", active, dutyCycle, frequencyHz, render: false });
+    api.compileNetlist();
+    return api.getState().components.find(c => c.id === "dut").deviceState.angle;
+  }
+  assert.equal(pwm(.025), 0);
+  assert.equal(pwm(.075), 90);
+  assert.equal(pwm(.125), 180);
+  assert.equal(pwm(0, false), 180);
+  assert.equal(pwm(.5, true, 20000), 180);
+});
+
+test("relay contacts actually join COM to NO/NC and release without coil power", () => {
+  const api = effectCircuit("relay", [["PA0", "IN"]]);
+  const circuit = JSON.parse(api.serializeCircuit());
+  circuit.wires.push({ id: "contact-supply", from: { componentId: "vcc", pin: "VCC" }, to: { componentId: "dut", pin: "COM" }, route: [{ x: 0, y: 0 }, { x: 100, y: 0 }] });
+  assert.equal(api.importCircuit(circuit).ok, true);
+  function contact(pin) { const n = api.compileNetlist(); return n.netById.get(n.endpointToNet["dut:" + pin]); }
+  api.driveMcuPin("PA0", 0);
+  assert.equal(contact("NO").voltage, 5);
+  assert.equal(contact("NC").voltage, null);
+  api.driveMcuPin("PA0", 1);
+  assert.equal(contact("NO").voltage, null);
+  assert.equal(contact("NC").voltage, 5);
+  api.driveMcuPin("PA0", null);
+  assert.equal(contact("NC").voltage, 5);
+});
+
 test("circuit import/export restores device properties, rotation, view and full routes", () => {
   const api = loadSchematicApi();
   const result = api.importCircuit(sampleCircuit());

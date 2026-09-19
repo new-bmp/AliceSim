@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "alicesim-shell-20260827-5";
+const CACHE_NAME = "alicesim-shell-20260919-1";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -20,6 +20,7 @@ const APP_SHELL = [
   "./libdriver-registry.js",
   "./peripheral-catalog.js",
   "./peripheral-devices.js",
+  "./peripheral-visuals.js",
   "./simulation-accel.js",
   "./schematic.js",
   "./alice-drivers.js",

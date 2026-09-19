@@ -1574,6 +1574,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px
   stroke-width: .7;
   vector-effect: non-scaling-stroke;
 }
+.visio-theme .mcu-symbol .mcu-simple-notch {
+  fill: none;
+  stroke: #2f4b59;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
 .visio-theme .mcu-symbol .mcu-simple-divider {
   fill: none;
   stroke: #aab8bf;
@@ -1604,6 +1611,116 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px
 }
 .visio-theme .schematic-component.signal-high .mcu-symbol .mcu-simple-core,
 .visio-theme .schematic-component.high .mcu-symbol .mcu-simple-core { fill: #4a626d; }
+
+/* Through-hole and panel parts use a restrained physical illustration.  The
+   live electrical terminals remain separate DOM buttons, so these details are
+   purely visual and never move a wire endpoint. */
+.visio-theme .resistor-physical-symbol,
+.visio-theme .led-physical-symbol,
+.visio-theme .switch-physical-symbol,
+.visio-theme .capacitor-physical-symbol {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.visio-theme .resistor-physical-symbol .resistor-lead,
+.visio-theme .resistor-physical-symbol .resistor-highlight,
+.visio-theme .capacitor-physical-symbol .capacitor-lead {
+  fill: none;
+  stroke: #737f83;
+  stroke-width: 1.6;
+}
+.visio-theme .resistor-physical-symbol .resistor-body {
+  fill: #ead8ae;
+  stroke: #7b5a32;
+  stroke-width: 1.2;
+}
+.visio-theme .resistor-physical-symbol .resistor-highlight {
+  stroke: rgba(255, 255, 255, .7);
+  stroke-width: 1.1;
+}
+.visio-theme .resistor-physical-symbol .resistor-band { stroke: none; }
+.visio-theme .resistor-physical-symbol .resistor-band-brown { fill: #8a4b2c; }
+.visio-theme .resistor-physical-symbol .resistor-band-black { fill: #252a2b; }
+.visio-theme .resistor-physical-symbol .resistor-band-red { fill: #c94b3c; }
+.visio-theme .resistor-physical-symbol .resistor-band-gold { fill: #c49a3a; }
+
+.visio-theme .led-physical-symbol .led-lead,
+.visio-theme .led-physical-symbol .led-foot,
+.visio-theme .led-physical-symbol .led-cathode,
+.visio-theme .led-physical-symbol .led-ray {
+  fill: none;
+  stroke: #69777a;
+  stroke-width: 1.5;
+}
+.visio-theme .led-physical-symbol .led-cathode { stroke: #7a3030; stroke-width: 2; }
+.visio-theme .led-physical-symbol .led-lens {
+  fill: #f4b9b2;
+  stroke: #a4262c;
+  stroke-width: 1.3;
+  filter: drop-shadow(0 0 1px rgba(196, 62, 28, .3));
+}
+.visio-theme .led-physical-symbol .led-highlight {
+  fill: none;
+  stroke: rgba(255, 255, 255, .82);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.visio-theme .schematic-component.type-led.is-on .led-physical-symbol .led-lens,
+.visio-theme .schematic-component[data-type="led"].is-on .led-physical-symbol .led-lens {
+  fill: #f04c42;
+  filter: drop-shadow(0 0 5px rgba(240, 76, 66, .85));
+}
+
+.visio-theme .switch-physical-symbol .switch-rail {
+  fill: none;
+  stroke: #69777a;
+  stroke-width: 1.6;
+}
+.visio-theme .switch-physical-symbol .switch-housing {
+  fill: #4f5e63;
+  stroke: #26383d;
+  stroke-width: 1.2;
+}
+.visio-theme .switch-physical-symbol .switch-slot {
+  fill: none;
+  stroke: #25363b;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.visio-theme .switch-physical-symbol .switch-lever {
+  fill: none;
+  stroke: #d7e0e3;
+  stroke-width: 5;
+  stroke-linecap: round;
+  transition: d .12s ease;
+}
+.visio-theme .switch-physical-symbol .switch-contact {
+  fill: #d7a44e;
+  stroke: #78551f;
+  stroke-width: .8;
+}
+.visio-theme .schematic-component.type-button.is-closed .switch-physical-symbol .switch-lever,
+.visio-theme .schematic-component[data-type="button"].is-closed .switch-physical-symbol .switch-lever {
+  stroke: #86d6ac;
+}
+
+.visio-theme .capacitor-physical-symbol .capacitor-body {
+  fill: #3f6d93;
+  stroke: #294a59;
+  stroke-width: 1.2;
+}
+.visio-theme .capacitor-physical-symbol .capacitor-stripe {
+  fill: none;
+  stroke: #a9d1e6;
+  stroke-width: 2;
+  stroke-dasharray: 2 2;
+}
+.visio-theme .capacitor-physical-symbol .capacitor-plus {
+  fill: none;
+  stroke: #f4f7f8;
+  stroke-width: 1.2;
+}
 
 .visio-theme .schematic-component.type-resistor,
 .visio-theme .schematic-component[data-type="resistor"] { color: #4f3825; }
@@ -1755,6 +1872,16 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px
 .visio-theme .schematic-component[data-type="led"] .led-lens { fill: #fffef9; stroke: #a4262c; }
 .visio-theme .schematic-component.type-led.is-on .led-lens,
 .visio-theme .schematic-component[data-type="led"].is-on .led-lens { fill: #d7493f; stroke: #a4262c; }
+.visio-theme .schematic-component.type-led .led-physical-symbol .led-lens,
+.visio-theme .schematic-component[data-type="led"] .led-physical-symbol .led-lens {
+  fill: #f4b9b2;
+  stroke: #a4262c;
+}
+.visio-theme .schematic-component.type-led.is-on .led-physical-symbol .led-lens,
+.visio-theme .schematic-component[data-type="led"].is-on .led-physical-symbol .led-lens {
+  fill: #f04c42;
+  filter: drop-shadow(0 0 5px rgba(240, 76, 66, .85));
+}
 
 /* Live peripherals use flat EDA module faces with crisp, legible readouts. */
 .visio-theme .schematic-component.type-oled .component-body,
@@ -2145,6 +2272,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px
 .visio-theme .library-symbol.led-symbol { color: #a4262c; }
 .visio-theme .library-symbol.resistor-symbol { color: #77502c; font-size: 12px; }
 .visio-theme .library-symbol.capacitor-symbol { color: #58477a; }
+.visio-theme .library-symbol.resistor-symbol rect { fill: #ead8ae; stroke: #7b5a32; stroke-width: 1; }
+.visio-theme .library-symbol.resistor-symbol .library-band { fill: none; stroke: #8a4b2c; stroke-width: 2; }
+.visio-theme .library-symbol.led-symbol circle { fill: #f4b9b2; stroke: #a4262c; stroke-width: 1; }
+.visio-theme .library-symbol.button-symbol rect { fill: #4f5e63; stroke: #26383d; stroke-width: 1; }
+.visio-theme .library-symbol.button-symbol path { stroke: #d7e0e3; stroke-width: 1.5; stroke-linecap: round; }
+.visio-theme .library-symbol.capacitor-symbol rect { fill: #3f6d93; stroke: #294a59; stroke-width: 1; }
+.visio-theme .library-symbol.capacitor-symbol path:last-child { stroke: #d8eef8; stroke-width: 1; }
 .visio-theme .library-symbol.oled-symbol {
   width: 28px;
   height: 20px;
@@ -4755,3 +4889,96 @@ body.visio-theme.ribbon-collapsed .topbar > .ribbon { display: none; }
     transition-delay: 0s;
   }
 }
+
+/* Device faces render physical state. Readouts have their own bottom band;
+   connection labels sit outside the face and obey the global label switch. */
+.visio-theme .has-catalog-effect > .catalog-module-symbol { visibility: hidden; }
+.visio-theme .catalog-peripheral .has-catalog-effect .catalog-live {
+  inset: 0;
+  padding: 0;
+  border: 0;
+  overflow: visible;
+  background: none;
+  text-shadow: none;
+  color: #243c49;
+  opacity: 1;
+  filter: none;
+}
+.visio-theme .has-catalog-effect .catalog-effect {
+  position: absolute;
+  left: 8px;
+  top: 0;
+  width: calc(100% - 16px);
+  height: calc(100% - 19px);
+  overflow: visible;
+  pointer-events: none;
+}
+.visio-theme .catalog-peripheral .has-catalog-effect .catalog-primary {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-width: none;
+  font: 700 10px/16px Consolas, monospace;
+  text-align: center;
+  white-space: nowrap;
+}
+.visio-theme .catalog-peripheral .has-catalog-effect .catalog-secondary { display: none; }
+.visio-theme .catalog-peripheral .has-catalog-effect .catalog-status {
+  top: calc(100% + 3px);
+  bottom: auto;
+  left: -10px;
+  right: -10px;
+  padding: 2px 3px;
+  border: 0;
+  text-align: center;
+  color: #47606c;
+  background: rgba(250, 253, 254, .9);
+  font-size: 7px;
+}
+.visio-theme .catalog-peripheral.is-unpowered .has-catalog-effect .catalog-status { color: #a43a32; }
+.visio-theme .schematic-world.hide-component-labels .catalog-status { display: none; }
+.visio-theme .has-catalog-effect :is(.catalog-live-tm1637, .catalog-live-max7219, .catalog-live-ws2812) .catalog-effect { height: 100%; }
+.visio-theme .catalog-peripheral .has-catalog-effect .catalog-live-tm1637 .catalog-primary { display: none; }
+.visio-theme .catalog-effect .effect-board { fill: #155a50; stroke: #0b3a37; stroke-width: 1.2; }
+.visio-theme .catalog-effect .effect-hole { fill: #17232c; stroke: #809298; stroke-width: 1; }
+.visio-theme .catalog-effect .effect-metal { fill: #bcc9cc; stroke: #6d818a; stroke-width: 1.3; }
+.visio-theme .catalog-effect .effect-display-case { fill: #151c25; stroke: #455365; stroke-width: 2; }
+.visio-theme .catalog-effect :is(.effect-segment, .effect-pixel) { fill: #341b20; stroke: none; }
+.visio-theme .catalog-effect .effect-strip { fill: #18232a; stroke: #788992; stroke-width: 1; }
+.visio-theme .catalog-effect .effect-servo-tab { fill: #8bb8d8; stroke: #336680; stroke-width: 1; }
+.visio-theme .catalog-effect .effect-servo-body { fill: #247cb2; stroke: #0c496f; stroke-width: 1.5; }
+.visio-theme .catalog-effect .effect-horn { fill: #e9edf1; stroke: #637986; stroke-width: 1.3; }
+.visio-theme .catalog-effect .effect-screw { fill: #647683; stroke: #d0dce0; stroke-width: 1; }
+.visio-theme .catalog-effect .effect-scale { fill: none; stroke: #9eafb3; stroke-width: 2; stroke-dasharray: 1 6; }
+.visio-theme .catalog-effect .effect-knob { fill: #293943; stroke: #91a5ae; stroke-width: 2; }
+.visio-theme .catalog-effect .effect-pointer { fill: none; stroke: #f9ce74; stroke-width: 3; stroke-linecap: round; }
+.visio-theme .catalog-effect :is(.effect-axis, .effect-clock-tick) { fill: none; stroke: #a3b5bd; stroke-width: .8; }
+.visio-theme .catalog-effect .effect-joystick-base { fill: #748b83; stroke: #142d2b; stroke-width: 1.5; }
+.visio-theme .catalog-effect .effect-sound { fill: none; stroke: #db9734; stroke-width: 2; stroke-linecap: round; }
+.visio-theme .catalog-effect .effect-contact { fill: #ddb856; stroke: #364c45; stroke-width: 1; }
+.visio-theme .catalog-effect .effect-contact-arm { fill: none; stroke: #f3d78b; stroke-width: 2.7; stroke-linecap: round; }
+.visio-theme .catalog-effect .effect-coil { fill: none; stroke: #d4e8ec; stroke-width: 1.3; }
+.visio-theme .catalog-effect .effect-distance-axis { stroke: #687f8b; stroke-width: 1; stroke-dasharray: 2 2; }
+.visio-theme .catalog-effect .effect-target { fill: #d9a766; stroke: #956f39; stroke-width: 1; }
+.visio-theme .catalog-effect .effect-pir-lens { fill: #e4edef; stroke: #9cbbc2; stroke-width: 1; }
+.visio-theme .catalog-effect .effect-person { fill: #ffbc6c; }
+.visio-theme .catalog-effect .effect-person-limbs { fill: none; stroke: #ffbc6c; stroke-width: 3.5; stroke-linecap: round; }
+.visio-theme .catalog-effect .effect-chip { fill: #26333e; stroke: #8b9da7; stroke-width: 1; }
+.visio-theme .catalog-effect .effect-vector { fill: none; stroke: #8dcfff; stroke-width: 3; }
+.visio-theme .catalog-effect .effect-pwm { fill: none; stroke: #73efc6; stroke-width: 2; }
+.visio-theme .catalog-effect .effect-clock { fill: #eef5f4; stroke: #a1bab7; stroke-width: 2; }
+.visio-theme .catalog-effect :is(.effect-hour, .effect-minute) { stroke: #344a59; stroke-width: 2; stroke-linecap: round; }
+.visio-theme .catalog-effect .effect-second { stroke: #e06953; stroke-width: 1; }
+.visio-theme .catalog-effect .effect-leads { fill: none; stroke: #a2a6a1; stroke-width: 5; }
+.visio-theme .catalog-effect .effect-channel { fill: none; stroke-width: 3; }
+.visio-theme .catalog-effect .effect-coil-body { fill: #bd9257; stroke: #694b2d; stroke-width: 4; stroke-dasharray: 2 3; }
+.visio-theme .catalog-effect .effect-gauge-track { fill: #263b3e; stroke: #a1bab7; stroke-width: 1; }
+.visio-theme .catalog-effect .effect-gauge-fill { fill: #65e3b1; }
+.visio-theme .catalog-effect .effect-temperature { fill: #f38c74; }
+.visio-theme .catalog-effect .effect-droplet { fill: #233f59; stroke: #9bc7ef; stroke-width: 1; }
+.visio-theme .catalog-effect .effect-humidity { fill: #8ed4fb; }
+.visio-theme .catalog-effect .effect-sun { fill: #ffdb83; }
+.visio-theme .catalog-effect .effect-sun-rays { fill: none; stroke: #ffdb83; stroke-width: 3; }
+.visio-theme .effect-alarm .effect-pointer,
+.visio-theme .effect-alarm .effect-gauge-fill { stroke: #f66b52; fill: #f66b52; }

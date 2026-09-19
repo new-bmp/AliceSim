@@ -44,16 +44,26 @@
     var coreHeight = Math.min(92, bodyHeight - 54);
     var coreX = Math.round((width - coreWidth) / 2);
     var coreY = Math.round((height - coreHeight) / 2) + 8;
-    var padMarkup = (pins || []).filter(function (pin) {
-      return pin.side === "left" || pin.side === "right";
-    }).map(function (pin) {
-      var padX = pin.side === "left" ? bodyX - 4 : bodyX + bodyWidth - 2;
-      var padY = clampNumber(Math.round(pin.y - 2), bodyY + 8, height - bodyY - 12);
-      return '<rect class="mcu-simple-pad" x="' + padX + '" y="' + padY + '" width="6" height="4"/>';
+    var packagePins = (pins || []).map(function (pin) {
+      var padX = bodyX;
+      var padY = bodyY;
+      var padWidth = 6;
+      var padHeight = 4;
+      if (pin.side === "left" || pin.side === "right") {
+        padX = pin.side === "left" ? bodyX - 4 : bodyX + bodyWidth - 2;
+        padY = clampNumber(Math.round(pin.y - 2), bodyY + 8, height - bodyY - 12);
+      } else {
+        padWidth = 4;
+        padHeight = 6;
+        padX = clampNumber(Math.round(pin.x - 2), bodyX + 8, width - bodyX - 12);
+        padY = pin.side === "top" ? bodyY - 4 : bodyY + bodyHeight - 2;
+      }
+      return '<rect class="mcu-simple-pad" x="' + padX + '" y="' + padY + '" width="' + padWidth + '" height="' + padHeight + '"/>';
     }).join("");
     return '<svg class="component-symbol mcu-symbol component-flat-symbol" viewBox="0 0 ' + width + " " + height + '" aria-hidden="true">' +
-      '<rect class="mcu-simple-outline" x="' + bodyX + '" y="' + bodyY + '" width="' + bodyWidth + '" height="' + bodyHeight + '" rx="3"/>' +
-      padMarkup +
+      '<rect class="mcu-simple-outline" x="' + bodyX + '" y="' + bodyY + '" width="' + bodyWidth + '" height="' + bodyHeight + '" rx="4"/>' +
+      '<path class="mcu-simple-notch" d="M' + (width / 2 - 10) + ' ' + bodyY + 'a10 10 0 0 0 20 0"/>' +
+      packagePins +
       '<path class="mcu-simple-divider" d="M' + (bodyX + 12) + " 48H" + (bodyX + bodyWidth - 12) + '"/>' +
       '<rect class="mcu-simple-core" x="' + coreX + '" y="' + coreY + '" width="' + coreWidth + '" height="' + coreHeight + '" rx="2"/>' +
       '<circle class="mcu-simple-pin-one" cx="' + (coreX + 9) + '" cy="' + (coreY + 10) + '" r="2.5"/>' +
@@ -155,7 +165,7 @@
         { name: "1", x: 0, y: 26, side: "left" },
         { name: "2", x: 96, y: 26, side: "right" }
       ],
-      symbol: '<svg class="component-symbol" viewBox="0 0 96 52" aria-hidden="true"><path d="M0 26h18l6-12 10 24 10-24 10 24 10-24 8 12h24"/></svg>'
+      symbol: '<svg class="component-symbol resistor-physical-symbol" viewBox="0 0 96 52" aria-hidden="true"><path class="resistor-lead" d="M0 26H22M74 26H96"/><rect class="resistor-body" x="22" y="13" width="52" height="26" rx="5"/><rect class="resistor-band resistor-band-brown" x="32" y="13" width="6" height="26"/><rect class="resistor-band resistor-band-black" x="44" y="13" width="6" height="26"/><rect class="resistor-band resistor-band-red" x="56" y="13" width="6" height="26"/><rect class="resistor-band resistor-band-gold" x="67" y="13" width="4" height="26"/><path class="resistor-highlight" d="M27 17H69"/></svg>'
     },
     led: {
       width: 72,
@@ -167,7 +177,7 @@
         { name: "A", x: 0, y: 32, side: "left" },
         { name: "K", x: 72, y: 32, side: "right" }
       ],
-      symbol: '<svg class="component-symbol" viewBox="0 0 72 64" aria-hidden="true"><path d="M0 32h18M54 32h18M18 15v34l32-17-32-17ZM51 14v36M42 14l9-9M46 6h5v5M49 23l10-9M54 14h5v5"/><circle class="led-lens" cx="34" cy="32" r="25"/></svg>'
+      symbol: '<svg class="component-symbol led-physical-symbol" viewBox="0 0 72 64" aria-hidden="true"><path class="led-lead" d="M0 32H22M50 32H72"/><path class="led-foot" d="M22 32v9h-7M50 32v9h7"/><circle class="led-lens" cx="36" cy="28" r="14"/><path class="led-cathode" d="M50 15V41"/><path class="led-highlight" d="M30 18a8 8 0 0 1 8-4"/><path class="led-ray" d="M21 11l-6-6M28 7l-2-7M55 11l6-6M48 7l2-7"/></svg>'
     },
     button: {
       width: 78,
@@ -179,7 +189,7 @@
         { name: "1", x: 0, y: 30, side: "left" },
         { name: "2", x: 78, y: 30, side: "right" }
       ],
-      symbol: '<svg class="component-symbol" viewBox="0 0 78 60" aria-hidden="true"><path d="M0 30h25M53 30h25M25 24v12M53 24v12"/><path class="switch-lever" d="M25 30l26-15"/><circle cx="25" cy="30" r="3"/><circle cx="53" cy="30" r="3"/></svg>'
+      symbol: '<svg class="component-symbol switch-physical-symbol" viewBox="0 0 78 60" aria-hidden="true"><path class="switch-rail" d="M0 30H18M60 30H78"/><rect class="switch-housing" x="17" y="11" width="44" height="38" rx="8"/><path class="switch-slot" d="M25 30H53"/><path class="switch-lever" d="M25 30l26-15"/><circle class="switch-contact" cx="25" cy="30" r="3"/><circle class="switch-contact" cx="53" cy="30" r="3"/></svg>'
     },
     oled: {
       width: 132,
@@ -236,7 +246,7 @@
         { name: "1", x: 0, y: 30, side: "left" },
         { name: "2", x: 76, y: 30, side: "right" }
       ],
-      symbol: '<svg class="component-symbol" viewBox="0 0 76 60" aria-hidden="true"><path d="M0 30h29M47 30h29M29 10v40M47 10v40"/></svg>'
+      symbol: '<svg class="component-symbol capacitor-physical-symbol" viewBox="0 0 76 60" aria-hidden="true"><path class="capacitor-lead" d="M0 30H27M49 30H76"/><rect class="capacitor-body" x="27" y="12" width="22" height="36" rx="7"/><path class="capacitor-stripe" d="M43 14V46"/><path class="capacitor-plus" d="M31 19v8M27 23h8"/></svg>'
     }
   };
 
@@ -1168,7 +1178,9 @@
         hcsr04: "createHCSR04",
         sg90: "createSG90",
         buzzer: "createBuzzer",
-        tm1637: "createTM1637"
+        tm1637: "createTM1637",
+        max7219: "createMAX7219",
+        ws2812: "createWS2812"
       };
       var factoryName = factories[component.type];
       if (factoryName && typeof window.AlicePeripheralDevices[factoryName] === "function") device = window.AlicePeripheralDevices[factoryName](peripheralOptions);
@@ -1448,9 +1460,10 @@
   function createCatalogLiveMarkup(component, body) {
     var live = document.createElement("div");
     live.className = "catalog-live catalog-live-" + component.type;
-    live.innerHTML = component.type === "tm1637"
-      ? '<strong class="catalog-primary tm1637-digits">----</strong><span class="catalog-secondary"></span><span class="catalog-status"></span>'
-      : '<strong class="catalog-primary"></strong><span class="catalog-secondary"></span><span class="catalog-status"></span>';
+    var visuals = window.AlicePeripheralVisuals;
+    var effect = visuals && visuals.markup(component.type) || "";
+    if (effect) body.classList.add("has-catalog-effect");
+    live.innerHTML = effect + '<strong class="catalog-primary"></strong><span class="catalog-secondary"></span><span class="catalog-status"></span>';
     body.appendChild(live);
   }
 
@@ -1465,8 +1478,8 @@
     var secondary = target.querySelector(".catalog-secondary");
     var status = target.querySelector(".catalog-status");
     if (component.type === "dht11") {
-      if (primary) primary.textContent = Number(state.temperatureC || 0).toFixed(1) + " °C";
-      if (secondary) secondary.textContent = Number(state.humidityPercent || 0).toFixed(1) + " %RH";
+      if (primary) primary.textContent = Number(state.temperatureC || 0).toFixed(1) + "°C · " + Math.round(Number(state.humidityPercent) || 0) + "%";
+      if (secondary) secondary.textContent = "";
     } else if (component.type === "hcsr04") {
       if (primary) primary.textContent = Number(state.distanceCm || 0).toFixed(1) + " cm";
       if (secondary) secondary.textContent = "";
@@ -1477,9 +1490,18 @@
       if (primary) primary.textContent = state.active ? Math.round(state.frequencyHz) + " Hz" : "STOP";
       if (secondary) secondary.textContent = "";
     } else if (component.type === "tm1637") {
-      var digits = target.querySelector(".tm1637-digits");
-      if (digits) digits.textContent = state.visible ? String(state.text || "    ").replace(/ /g, " ") : "----";
-      if (secondary) secondary.textContent = "BRI " + Number(state.brightness || 0) + "/7";
+      if (primary) primary.textContent = state.visible ? String(state.text || "    ") : "";
+      if (secondary) secondary.textContent = "";
+    } else if (component.type === "max7219" || component.type === "ws2812") {
+      if (primary) primary.textContent = "";
+      if (secondary) secondary.textContent = "";
+    } else if (component.type === "relay") {
+      if (primary) primary.textContent = state.energized ? "COM → NO" : "COM → NC";
+      if (secondary) secondary.textContent = "";
+    } else if (component.type === "ds3231") {
+      if (primary) primary.textContent = new Date(Number(properties.unixTime || 0) * 1000).toISOString().slice(11, 19) + " UTC";
+    } else if (component.type === "sht30") {
+      if (primary) primary.textContent = Number(properties.temperatureC || 0).toFixed(1) + "°C · " + Math.round(Number(properties.humidityPercent) || 0) + "%";
     } else if (component.type === "dcDcConverter") {
       var converterPower = component.powerState;
       if (primary) primary.textContent = Number(properties.outputVoltageV || 0).toFixed(2) + " V OUT";
@@ -1499,6 +1521,7 @@
       else if (component.type === "mosfet") status.textContent = component.mosfetOn ? "CHANNEL ON" : "CHANNEL OFF";
       else if (!state.ready) status.textContent = "WAIT WIRING";
       else if (state.active || state.visible) status.textContent = "ACTIVE";
+      else if (["bmp280", "mpu6050", "bh1750", "sht30", "ds3231", "pcf8574", "pca9685", "ina219", "ds18b20"].indexOf(component.type) >= 0) status.textContent = "参数预览";
       else status.textContent = bus + " READY";
     }
     target.classList.toggle("is-powered", Boolean(state.power && state.power.powered));
@@ -1506,6 +1529,9 @@
     target.classList.toggle("is-device-ready", Boolean(state.ready));
     target.classList.toggle("is-device-active", Boolean(state.active || state.visible || (component.type === "mosfet" && component.mosfetOn)));
     target.classList.toggle("power-overload", Boolean(component.powerState && component.powerState.overload));
+    if (window.AlicePeripheralVisuals) window.AlicePeripheralVisuals.update(target.querySelector(".catalog-live"), component.type, state, component);
+    var live = target.querySelector(".catalog-live");
+    if (live) live.title = [primary && primary.textContent, secondary && secondary.textContent, status && status.textContent].filter(Boolean).join(" · ");
   }
 
   function renderComponent(model) {
@@ -1983,6 +2009,28 @@
     });
     solveNets();
     updatePeripheralConnections(compiled);
+    // Ideal relay contacts join the switched circuit independently of the
+    // isolated coil supply. Evaluate all coil states before joining contacts.
+    var relayContacts = [];
+    schematicState.components.forEach(function (component) {
+      if (component.type !== "relay") return;
+      var state = componentDevice(component).getState();
+      relayContacts.push([component.id, state.energized ? "NO" : "NC"]);
+    });
+    relayContacts.forEach(function (contact) {
+      var com = netForEndpoint(compiled, { componentId: contact[0], pin: "COM" });
+      var switched = netForEndpoint(compiled, { componentId: contact[0], pin: contact[1] });
+      if (!com || !switched || com === switched) return;
+      switched.endpoints.forEach(function (endpoint) { endpointToNet[endpointKey(endpoint)] = com.id; });
+      com.endpoints = com.endpoints.concat(switched.endpoints);
+      com.labels = Array.from(new Set(com.labels.concat(switched.labels)));
+      com.drivers = com.drivers.concat(switched.drivers);
+      com.analogDrivers = com.analogDrivers.concat(switched.analogDrivers);
+      com.pwmDrivers = com.pwmDrivers.concat(switched.pwmDrivers);
+      netById.delete(switched.id);
+      nets.splice(nets.indexOf(switched), 1);
+    });
+    if (relayContacts.length) solveNets();
     compiled.powerReport = solvePowerSystem(compiled);
     updatePeripheralConnections(compiled);
 
@@ -2059,7 +2107,7 @@
   }
 
   function sameConnection(left, right) {
-    var keys = ["powered", "busConnected", "bindingValid", "vccLevel", "gndLevel", "sclPin", "sdaPin", "sckPin", "mosiPin", "misoPin", "selected", "dataMode", "reason", "vccConnected", "gndConnected", "aoConnected", "doConnected", "aoPin", "doPin", "vccNet", "gndNet", "dataConnected", "triggerConnected", "echoConnected", "pwmConnected", "signalConnected", "clkConnected", "dioConnected", "dataPin", "triggerPin", "echoPin", "pwmPin", "signalPin", "clkPin", "dioPin", "timer", "channel"];
+    var keys = ["powered", "busConnected", "bindingValid", "vccLevel", "gndLevel", "sclPin", "sdaPin", "sckPin", "mosiPin", "misoPin", "selected", "signalLevel", "dataMode", "reason", "vccConnected", "gndConnected", "aoConnected", "doConnected", "aoPin", "doPin", "vccNet", "gndNet", "dataConnected", "triggerConnected", "echoConnected", "pwmConnected", "signalConnected", "clkConnected", "dioConnected", "dataPin", "triggerPin", "echoPin", "pwmPin", "signalPin", "clkPin", "dioPin", "timer", "channel"];
     return keys.every(function (key) { return (left && left[key]) === (right && right[key]); });
   }
 
@@ -2105,7 +2153,15 @@
       var connected = netHasExternalEndpoint(net, component.id);
       connection[fields[0]] = Boolean(connection[fields[0]] || connected);
       if (!connection[fields[1]]) connection[fields[1]] = externalMcuPinOnNet(net, component.id);
+      if (pin.role === "signal") connection.signalLevel = net && !net.conflict && !net.analogConflict ? net.level : null;
     });
+    if (component.type === "max7219" || component.type === "ws2812") {
+      var spi = modelSpis().find(function (candidate) { return connection.dataPin && (component.type === "ws2812" || normalizeMcuPinName(candidate.sckPin) === connection.clkPin) && normalizeMcuPinName(candidate.mosiPin) === connection.dataPin; });
+      component.spiBinding = spi ? { instance: spi.instance || "", handle: spi.handle || "" } : null;
+      connection.bindingValid = Boolean(spi);
+      connection.selected = component.type === "ws2812" || connection.signalLevel === 0;
+      if (component.type === "ws2812") connection.bindingValid = Boolean(spi && spi.baudRate >= 2200000 && spi.baudRate <= 2700000 && !/LSB/.test(spi.firstBit || "") && !/16BIT/.test(spi.dataSize || ""));
+    }
     connection.busConnected = Boolean((connection.clkConnected && connection.dioConnected) || connection.dataConnected || connection.signalConnected || connection.pwmConnected || (connection.triggerConnected && connection.echoConnected));
     if (!connection.powered) connection.reason = "power-disconnected";
     else if (!connection.busConnected && component.type !== "rotaryEncoder") connection.reason = "signal-disconnected";
@@ -2228,6 +2284,27 @@
         var catalogPeripheral = componentDevice(component);
         if (!catalogPeripheral) return;
         var catalogChanged = setDeviceConnectionIfChanged(catalogPeripheral, catalogPeripheralConnection(component, compiled));
+        // The device state must advance even when rendering is deferred by the
+        // Worker. Drawing a frame must not be what makes PWM affect hardware.
+        if (component.type === "sg90" || component.type === "buzzer") {
+          var pwm = componentPwm(component, compiled);
+          var peripheralState = catalogPeripheral.getState();
+          if (pwm && component.type === "sg90" && pwm.active && pwm.frequencyHz >= 40 && pwm.frequencyHz <= 400 && peripheralState.ready) {
+            var pulseUs = pwm.dutyCycle / pwm.frequencyHz * 1000000;
+            if (pulseUs >= catalogPeripheral.minimumPulseUs && pulseUs <= catalogPeripheral.maximumPulseUs && Math.abs(pulseUs - peripheralState.pulseUs) > .01) {
+              catalogPeripheral.setPulseUs(pulseUs);
+              catalogChanged = true;
+            }
+          } else if (pwm && component.type === "buzzer") {
+            var duty = Math.round(pwm.dutyCycle * 1000);
+            var active = Boolean(pwm.active && duty > 0 && duty < 1000 && pwm.frequencyHz > 0);
+            if (active !== peripheralState.requestedActive || (active && (pwm.frequencyHz !== peripheralState.frequencyHz || duty !== peripheralState.dutyPermille))) {
+              if (active) catalogPeripheral.setTone(pwm.frequencyHz, duty);
+              else catalogPeripheral.stop();
+              catalogChanged = true;
+            }
+          }
+        }
         if (catalogChanged) updateCatalogVisual(component);
       }
     });
@@ -2280,6 +2357,9 @@
     }
     schematicState.mcuPwm.delete(physical);
     schematicState.compiledNetlist = null;
+    // A Worker's batch can contain several CS pulses before the next paint.
+    // Latch each rising edge now so all rows, not just the last one, survive.
+    if (normalizedLevel === 1 && Array.from(schematicState.devices.values()).some(function (device) { return device.kind === "max7219" && device.connection.selected && device.connection.signalPin === physical; })) compileNetlist();
     if (schematicState.initialized) {
       if (options.render !== false) renderWires();
       document.dispatchEvent(new CustomEvent("alice:schematic-signal", { detail: { name: physical, value: normalizedLevel, highImpedance: normalizedLevel == null } }));
@@ -2458,13 +2538,15 @@
     var bytes = i2cBytes(event.bytes != null ? event.bytes : (event.buffer != null ? event.buffer : event.data));
     compileNetlist();
     schematicState.components.forEach(function (component) {
-      if (component.type !== "spiDisplay") return;
+      if (["spiDisplay", "max7219", "ws2812"].indexOf(component.type) < 0) return;
       var device = componentDevice(component);
       var state = device && device.getState();
       var bindingMatches = descriptor && component.spiBinding && peripheralMatches(descriptor, component.spiBinding.instance || component.spiBinding.handle);
-      if (!device || !state || !state.connection.powered || !state.connection.busConnected || !state.connection.bindingValid || !state.connection.selected || !bindingMatches) return;
-      var byteCount = device.transmit(bytes, Boolean(state.connection.dataMode));
-      updateSpiDisplayVisual(component);
+      var ready = component.type !== "spiDisplay" ? state && state.ready : state && state.connection.powered && state.connection.busConnected && state.connection.bindingValid;
+      if (!device || !ready || !state.connection.selected || !bindingMatches) return;
+      var byteCount = component.type === "ws2812" ? device.transmitSpi(bytes, Number(descriptor.baudRate)) : device.transmit(bytes, Boolean(state.connection.dataMode));
+      if (component.type === "spiDisplay") updateSpiDisplayVisual(component);
+      else updateCatalogVisual(component);
       accepted.push({ componentId: component.id, ref: component.ref, byteCount: byteCount, dataMode: Boolean(state.connection.dataMode) });
     });
     return {
@@ -2586,6 +2668,7 @@
       if (type === "dht11" && action.indexOf("read") >= 0 && typeof device.read === "function") targetResult = device.read();
       else if (type === "hcsr04" && action.indexOf("measure") >= 0 && typeof device.measure === "function") targetResult = device.measure();
       else if (type === "sg90" && action.indexOf("angle") >= 0 && typeof device.setAngle === "function") targetResult = { angle: device.setAngle(event.angle) };
+      else if (type === "sg90" && action === "stop") targetResult = { angle: state.angle, active: false };
       else if (type === "buzzer" && action.indexOf("stop") >= 0 && typeof device.stop === "function") targetResult = { active: !device.stop() };
       else if (type === "buzzer" && typeof device.setTone === "function") targetResult = { active: device.setTone(event.frequencyHz, event.dutyPermille == null ? 500 : event.dutyPermille) };
       else if (type === "tm1637" && action.indexOf("brightness") >= 0 && typeof device.setBrightness === "function") targetResult = { brightness: device.setBrightness(event.brightness, event.enabled) };
@@ -2621,7 +2704,7 @@
         });
         return;
       }
-      if (component.type === "spiDisplay") {
+      if (component.type === "spiDisplay" || component.type === "max7219" || component.type === "ws2812") {
         var csNet = netForEndpoint(compiled, { componentId: component.id, pin: "CS" });
         var dcNet = netForEndpoint(compiled, { componentId: component.id, pin: "DC" });
         snapshot.spi.push({
@@ -2629,10 +2712,11 @@
           instance: component.spiBinding && component.spiBinding.instance || "",
           handle: component.spiBinding && component.spiBinding.handle || "",
           csPin: externalMcuPinOnNet(csNet, component.id),
+          noChipSelect: component.type === "ws2812",
           dcPin: externalMcuPinOnNet(dcNet, component.id),
           selected: Boolean(connection.selected),
           dataMode: Boolean(connection.dataMode),
-          ready: Boolean(connection.powered && connection.busConnected && connection.bindingValid)
+          ready: component.type !== "spiDisplay" ? Boolean(state.ready) : Boolean(connection.powered && connection.busConnected && connection.bindingValid)
         });
         return;
       }
@@ -3225,17 +3309,6 @@
       var element = schematicState.componentElements.get(component.id);
       var pwm = componentPwm(component, compiled);
       ensurePwmBadge(element, pwm);
-      if (!pwm || !catalogDefinition(component.type)) return;
-      var device = componentDevice(component);
-      if (component.type === "sg90" && device && typeof device.setAngle === "function" && pwm.frequencyHz > 0) {
-        var pulseMs = pwm.dutyCycle / pwm.frequencyHz * 1000;
-        device.setAngle(clampNumber((pulseMs - 1) * 180, 0, 180));
-        updateCatalogVisual(component, element);
-      } else if (component.type === "buzzer" && device) {
-        if (pwm.active && pwm.dutyCycle > 0 && typeof device.setTone === "function") device.setTone(pwm.frequencyHz, Math.round(pwm.dutyCycle * 1000));
-        else if (typeof device.stop === "function") device.stop();
-        updateCatalogVisual(component, element);
-      }
     });
   }
 

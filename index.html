@@ -13,7 +13,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="./styles.css?v=20260826.3" />
+    <link rel="stylesheet" href="./styles.css?v=20260919.1" />
   </head>
   <body class="visio-theme app-page-code">
     <div class="boot-screen" id="bootScreen">
@@ -349,10 +349,10 @@
             <button data-component-type="adcSource" title="放置可调 ADC 采集源，可手动设置电压或加入包络线"><svg class="library-symbol adc-source-library-symbol" viewBox="0 0 36 30" aria-hidden="true"><rect x="3" y="5" width="30" height="20" rx="2"/><path d="M7 18l5-6 5 5 5-9 7 6M9 22h18"/></svg><b>ADC 采集源</b></button>
             <button data-component-type="currentProbe" title="串联放置电流探针；当前版本会明确标出尚不可计算的支路"><svg class="library-symbol current-probe-library-symbol" viewBox="0 0 36 30" aria-hidden="true"><path d="M2 15h7M27 15h7"/><circle cx="18" cy="15" r="9"/><path d="M14 21l4-12 4 12M16 16h4"/></svg><b>电流探针</b></button>
             <button data-component-type="uartSender" title="按启动、触发或周期条件向 MCU 串口发送自定义内容"><svg class="library-symbol uart-sender-library-symbol" viewBox="0 0 36 30" aria-hidden="true"><rect x="3" y="6" width="30" height="18" rx="2"/><path d="M7 11h9M7 15h14M7 19h8M24 10l6 5-6 5"/></svg><b>条件串口发送器</b></button>
-            <button data-component-type="resistor"><svg class="library-symbol resistor-symbol" viewBox="0 0 36 30" aria-hidden="true"><path d="M2 15h6l3-6 5 12 5-12 5 12 3-6h5"/></svg><b>电阻</b></button>
-            <button data-component-type="led"><svg class="library-symbol led-symbol" viewBox="0 0 36 30" aria-hidden="true"><path d="M3 15h8M25 15h8M11 7v16l14-8-14-8ZM25 7v16"/><path d="m23 6 5-4m-1 8 6-4"/></svg><b>LED</b></button>
-            <button data-component-type="button"><svg class="library-symbol button-symbol" viewBox="0 0 36 30" aria-hidden="true"><circle cx="8" cy="20" r="2"/><circle cx="28" cy="20" r="2"/><path d="M10 20h5m6 0h5M15 20l9-9M18 5h9M22 5v5"/></svg><b>按键</b></button>
-            <button data-component-type="capacitor"><svg class="library-symbol capacitor-symbol" viewBox="0 0 36 30" aria-hidden="true"><path d="M3 15h12M21 15h12M15 5v20M21 5v20"/></svg><b>电容</b></button>
+            <button data-component-type="resistor"><svg class="library-symbol resistor-symbol" viewBox="0 0 36 30" aria-hidden="true"><path d="M2 15H9M27 15h7"/><rect x="9" y="9" width="18" height="12" rx="3"/><path class="library-band" d="M14 9v12m5-12v12m5-12v12"/></svg><b>电阻</b></button>
+            <button data-component-type="led"><svg class="library-symbol led-symbol" viewBox="0 0 36 30" aria-hidden="true"><path d="M2 15h8m16 0h8M25 8v14"/><circle cx="18" cy="14" r="7"/><path d="m11 6-4-4m11 2V0m9 6 4-4"/></svg><b>LED</b></button>
+            <button data-component-type="button"><svg class="library-symbol button-symbol" viewBox="0 0 36 30" aria-hidden="true"><path d="M2 15h6m20 0h6"/><rect x="8" y="5" width="20" height="20" rx="5"/><path d="M12 15h12M12 15l9-6"/></svg><b>按键</b></button>
+            <button data-component-type="capacitor"><svg class="library-symbol capacitor-symbol" viewBox="0 0 36 30" aria-hidden="true"><path d="M2 15h11m9 0h12"/><rect x="13" y="5" width="9" height="20" rx="3"/><path d="M19 7v16M15 9v4m-2-2h4"/></svg><b>电容</b></button>
             <button data-component-type="oled" title="放置 SSD1306 I²C OLED"><svg class="library-symbol oled-symbol" viewBox="0 0 36 30" aria-hidden="true"><rect x="4" y="4" width="28" height="22" rx="1"/><rect x="8" y="8" width="20" height="13"/><path d="M10 24h3m2 0h3m2 0h3m2 0h2"/></svg><b>OLED</b></button>
             <button data-component-type="spiDisplay" title="放置 ST7735 SPI 彩色屏幕，接收 HAL_SPI_Transmit 数据"><svg class="library-symbol spi-display-library-symbol" viewBox="0 0 36 30" aria-hidden="true"><rect x="4" y="3" width="28" height="24" rx="2"/><rect x="8" y="7" width="20" height="15"/><path d="M8 25h3m2 0h3m2 0h3m2 0h3M10 10l5 5 4-4 7 7"/></svg><b>SPI 屏幕</b></button>
             <button data-component-type="lightSensor" title="放置可调照度光敏传感器"><svg class="library-symbol light-sensor-symbol" viewBox="0 0 36 30" aria-hidden="true"><circle cx="17" cy="16" r="7"/><path d="M17 2v5M17 25v3M3 16h6M25 16h7M7 6l4 4M23 22l5 5M28 6l-5 5M7 26l4-4"/></svg><b>光敏</b></button>
@@ -480,9 +480,10 @@
     <script src="./light-sensor-device.js?v=20260731.6"></script>
     <script src="./libdriver-registry.js?v=20260731.1"></script>
     <script src="./peripheral-catalog.js?v=20260801.3"></script>
-    <script src="./peripheral-devices.js?v=20260731.8"></script>
+    <script src="./peripheral-devices.js?v=20260919.1"></script>
+    <script src="./peripheral-visuals.js?v=20260919.1"></script>
     <script src="./simulation-accel.js?v=20260819.2"></script>
-    <script src="./schematic.js?v=20260826.3"></script>
+    <script src="./schematic.js?v=20260919.1"></script>
     <script src="./alice-drivers.js?v=20260731.9"></script>
     <script src="./ui-actions.js?v=20260826.1"></script>
     <script src="./panel-resize.js?v=20260825.4"></script>

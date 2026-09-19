@@ -41,6 +41,8 @@
       echoConnected: connectionFlag(source, "echoConnected", false),
       pwmConnected: connectionFlag(source, "pwmConnected", source.signalConnected),
       signalConnected: connectionFlag(source, "signalConnected", false),
+      signalLevel: optionalNumber(source.signalLevel),
+      selected: connectionFlag(source, "selected", false),
       clkConnected: connectionFlag(source, "clkConnected", false),
       dioConnected: connectionFlag(source, "dioConnected", false),
       vccLevel: vccLevel,
@@ -328,6 +330,135 @@
     };
   };
 
+  // MAX7219 shifts while CS/LOAD is low and latches the last 16 bits on its
+  // rising edge. Keeping the shift register across transfers permits split HAL
+  // writes; incomplete writes and unpowered traffic never change the display.
+  function MAX7219Device(options) {
+    var config = options || {};
+    BaseDevice.call(this, "max7219", config, { nominal: 5, minimum: 4, maximum: 5.5 });
+    this.properties = Object.assign({}, config.properties || {});
+    this.reset();
+  }
+  MAX7219Device.prototype = Object.create(BaseDevice.prototype);
+  MAX7219Device.prototype.constructor = MAX7219Device;
+  MAX7219Device.prototype.reset = function () {
+    this.rows = Array(8).fill(0);
+    this.intensity = 0;
+    this.scanLimit = 0;
+    this.enabled = false;
+    this.test = false;
+    this.decodeMode = 0;
+    this.shift = [];
+    this.revision += 1;
+  };
+  MAX7219Device.prototype.setConnection = function (connection) {
+    var wasPowered = this.getPowerStatus().powered;
+    var wasSelected = this.connection.selected;
+    this.connection = copyConnection(connection);
+    var powered = this.getPowerStatus().powered;
+    if (!powered) this.reset();
+    else if (wasPowered && wasSelected && !this.connection.selected) {
+      if (this.isReady(["dataConnected", "clkConnected", "signalConnected"]) && this.shift.length === 2) this.writeRegister(this.shift[0], this.shift[1]);
+      this.shift = [];
+    } else if (!wasSelected && this.connection.selected) this.shift = [];
+    this.revision += 1;
+    return this.getState();
+  };
+  MAX7219Device.prototype.transmit = function (bytes) {
+    if (!this.connection.selected || !this.isReady(["dataConnected", "clkConnected", "signalConnected"])) return 0;
+    for (var i = 0; i < bytes.length; i += 1) { this.shift.push(Number(bytes[i]) & 255); if (this.shift.length > 2) this.shift.shift(); }
+    return bytes.length;
+  };
+  MAX7219Device.prototype.writeRegister = function (register, value) {
+    var reg = register & 15, data = value & 255;
+    if (reg >= 1 && reg <= 8) this.rows[reg - 1] = data;
+    else if (reg === 9) this.decodeMode = data;
+    else if (reg === 10) this.intensity = data & 15;
+    else if (reg === 11) this.scanLimit = data & 7;
+    else if (reg === 12) this.enabled = Boolean(data & 1);
+    else if (reg === 15) this.test = Boolean(data & 1);
+    this.revision += 1;
+  };
+  MAX7219Device.prototype.setProperties = function (properties) {
+    this.properties = Object.assign({}, this.properties, properties);
+    if (properties.intensity != null) this.intensity = clamp(Math.round(finite(properties.intensity, 0)), 0, 15);
+    this.revision += 1;
+  };
+  MAX7219Device.prototype.getState = function () {
+    var ready = this.isReady(["dataConnected", "clkConnected", "signalConnected"]);
+    // Code-B decoding is useful even on an 8x8 board: it determines the actual
+    // segment output bits, without pretending the board is a decimal display.
+    var codeB = [0x7e, 0x30, 0x6d, 0x79, 0x33, 0x5b, 0x5f, 0x70, 0x7f, 0x7b, 0x01, 0x4f, 0x37, 0x0e, 0x67, 0];
+    var rows = this.rows.map(function (value, index) { return this.decodeMode & (1 << index) ? codeB[value & 15] | (value & 128) : value; }, this);
+    return { type: this.kind, rows: rows, intensity: this.intensity, scanLimit: this.test ? 7 : this.scanLimit, enabled: this.enabled, test: this.test,
+      visible: Boolean(this.getPowerStatus().powered && (this.enabled || this.test)), ready: ready, power: this.getPowerStatus(), connection: Object.assign({}, this.connection), revision: this.revision };
+  };
+
+  // A commonly used WS2812 transport uses SPI at 2.4 MHz: 100 encodes zero,
+  // 110 encodes one, GRB/MSB first. A >=50 us low reset latches the frame.
+  // Reject other encodings/frequencies instead of displaying guessed colors.
+  function WS2812Device(options) {
+    var config = options || {};
+    BaseDevice.call(this, "ws2812", config, { nominal: 5, minimum: 3.5, maximum: 5.5 });
+    this.properties = Object.assign({ count: 8 }, config.properties || {});
+    this.colors = Array(clamp(Math.round(finite(this.properties.count, 8)), 1, 256)).fill(0);
+    this.resetDecoder();
+  }
+  WS2812Device.prototype = Object.create(BaseDevice.prototype);
+  WS2812Device.prototype.constructor = WS2812Device;
+  WS2812Device.prototype.resetDecoder = function () { this.bits = []; this.highSamples = 0; this.lowSamples = 0; this.invalidFrame = false; };
+  WS2812Device.prototype.setConnection = function (connection) {
+    this.connection = copyConnection(connection);
+    if (!this.getPowerStatus().powered) { this.colors.fill(0); this.resetDecoder(); }
+    this.revision += 1;
+    return this.getState();
+  };
+  WS2812Device.prototype.setProperties = function (properties) {
+    this.properties = Object.assign({}, this.properties, properties);
+    var count = clamp(Math.round(finite(this.properties.count, 8)), 1, 256);
+    this.colors = Array.from({ length: count }, function (_, i) { return this.colors[i] || 0; }, this);
+    this.resetDecoder();
+    this.revision += 1;
+  };
+  WS2812Device.prototype.transmitSpi = function (bytes, frequencyHz) {
+    if (!this.isReady(["dataConnected"]) || !Number.isFinite(frequencyHz) || frequencyHz < 2200000 || frequencyHz > 2700000) { this.resetDecoder(); return 0; }
+    var resetSamples = Math.ceil(frequencyHz * .00005);
+    for (var i = 0; i < bytes.length; i += 1) for (var bit = 7; bit >= 0; bit -= 1) {
+      if ((bytes[i] >> bit) & 1) {
+        if (this.lowSamples > 0) {
+          if (this.highSamples > 0) {
+            if (this.highSamples + this.lowSamples !== 3 || this.highSamples > 2) this.invalidFrame = true;
+            if (this.bits.length < 6144) this.bits.push(this.highSamples === 2 ? 1 : 0);
+            else this.invalidFrame = true;
+          }
+          this.highSamples = 0;
+          this.lowSamples = 0;
+        }
+        this.highSamples = Math.min(4, this.highSamples + 1);
+      } else {
+        this.lowSamples = Math.min(resetSamples, this.lowSamples + 1);
+        if (this.lowSamples >= resetSamples && this.highSamples) {
+          if (this.highSamples > 2) this.invalidFrame = true;
+          this.bits.push(this.highSamples === 2 ? 1 : 0);
+          if (!this.invalidFrame && this.bits.length % 24 === 0) {
+            for (var led = 0; led < Math.min(this.colors.length, this.bits.length / 24); led += 1) {
+              var grb = 0;
+              for (var k = 0; k < 24; k += 1) grb = (grb << 1) | this.bits[led * 24 + k];
+              this.colors[led] = ((grb >> 8) & 255) << 16 | ((grb >> 16) & 255) << 8 | (grb & 255);
+            }
+            this.revision += 1;
+          }
+          this.resetDecoder();
+        }
+      }
+    }
+    return bytes.length;
+  };
+  WS2812Device.prototype.getState = function () {
+    return { type: this.kind, properties: Object.assign({}, this.properties), colors: this.colors.slice(), ready: this.isReady(["dataConnected"]),
+      visible: this.getPowerStatus().powered, power: this.getPowerStatus(), connection: Object.assign({}, this.connection), revision: this.revision };
+  };
+
   function GenericPeripheralDevice(type, options) {
     var config = options && typeof options === "object" ? options : {};
     BaseDevice.call(this, String(type || "peripheral"), config, {
@@ -363,6 +494,7 @@
       power: this.getPowerStatus(),
       connection: Object.assign({}, this.connection),
       lastOperation: this.lastOperation && { name: this.lastOperation.name, payload: Object.assign({}, this.lastOperation.payload) },
+      energized: this.kind === "relay" && this.isReady(["signalConnected"]) && this.connection.signalLevel === (Number(this.properties.activeLow) ? 0 : 1),
       revision: this.revision
     };
   };
@@ -378,6 +510,8 @@
     createSG90: function (options) { return new SG90Device(options); },
     createBuzzer: function (options) { return new BuzzerDevice(options); },
     createTM1637: function (options) { return new TM1637Device(options); },
+    createMAX7219: function (options) { return new MAX7219Device(options); },
+    createWS2812: function (options) { return new WS2812Device(options); },
     GenericPeripheralDevice: GenericPeripheralDevice,
     createGeneric: function (type, options) { return new GenericPeripheralDevice(type, options); }
   });

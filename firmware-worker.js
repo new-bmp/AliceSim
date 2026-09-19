@@ -95,7 +95,7 @@
     var reference = event && (event.instance || event.spi || event.handle);
     var targets = (Array.isArray(inputs.spi) ? inputs.spi : []).filter(function (target) {
       if (!target || !target.ready || !sameReference(target, reference)) return false;
-      return outputLevel(target.csPin, target.selected ? 0 : 1) === 0;
+      return target.noChipSelect === true || outputLevel(target.csPin, target.selected ? 0 : 1) === 0;
     }).map(function (target) {
       var copy = clone(target);
       copy.selected = true;

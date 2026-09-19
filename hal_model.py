@@ -5053,6 +5053,20 @@ def _parse_source_spi_configuration(
         model["transmitCalls"] = []
         model["receiveCalls"] = []
         model["abortCalls"] = []
+        # The wire-level WS2812 SPI decoder needs the actual bit rate, not the
+        # timer clock. Only infer it when CubeMX supplies the peripheral clock
+        # and the standard STM32 prescaler name is present.
+        values = ioc.get("values", {})
+        apb = "2" if model.get("instance") in {"SPI1", "SPI4", "SPI5", "SPI6"} else "1"
+        clock_value = values.get(f"RCC.APB{apb}Freq_Value") or values.get(f"RCC.PCLK{apb}Freq_Value")
+        divider = re.fullmatch(r"SPI_BAUDRATEPRESCALER_(2|4|8|16|32|64|128|256)", str(model.get("baudRatePrescaler") or ""))
+        if divider and clock_value:
+            try:
+                bit_rate = float(clock_value) / int(divider.group(1))
+                if bit_rate > 0:
+                    model["baudRate"] = bit_rate
+            except (ValueError, TypeError):
+                pass
     return handles
 
 

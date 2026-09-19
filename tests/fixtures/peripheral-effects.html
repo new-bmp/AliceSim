@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AliceSIM 元件效果检查</title><link rel="stylesheet" href="../../styles.css">
+<style>
+  html, body { overflow:auto !important; height:auto !important; margin:0; background:#edf2f5; }
+  body { font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; padding:18px; box-sizing:border-box; }
+  header { position:sticky; top:0; z-index:20; padding:12px; background:#f8fbfd; border:1px solid #d3dee4; border-radius:8px; }
+  h1 { margin:0; font-size:20px; color:#243d4b; } p { margin:4px 0 10px; color:#637783; font-size:12px; }
+  button { padding:7px 12px; border:1px solid #809caa; border-radius:5px; color:#254554; background:white; cursor:pointer; }
+  #result { color:#257148; font-size:12px; margin-left:5px; }
+  main { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:14px; margin-top:15px; }
+  article { background:white; border:1px solid #d8e2e7; border-radius:9px; padding:12px 6px; text-align:center; }
+  h2 { font-size:12px; margin:0 0 12px; color:#304c5b; }
+  .stage { height:175px; display:flex; align-items:center; justify-content:center; }
+  .stage .schematic-component { position:relative !important; flex-shrink:0; transform:scale(1.45); margin:0; }
+  .stage .component-body { inset:0; width:100%; height:100%; }
+</style></head>
+<body class="visio-theme">
+<header><h1>元件效果检查</h1><p>独立测试页：用同一套设备模型与绘图代码检查状态变化，不会改动工程。</p><button id="change">切换输入 A / B</button> <button id="power">断电</button><span id="result"></span></header>
+<main id="gallery"></main>
+<script src="../../peripheral-catalog.js"></script><script src="../../peripheral-devices.js"></script><script src="../../peripheral-visuals.js"></script>
+<script>
+  const D = AlicePeripheralDevices, V = AlicePeripheralVisuals;
+  const connection = { powered:true, vccConnected:true, gndConnected:true, vccLevel:5, gndLevel:0, bindingValid:true, clkConnected:true, dioConnected:true, dataConnected:true, pwmConnected:true, signalConnected:true };
+  const names = ['tm1637','max7219','sg90','ws2812','relay','buzzer','potentiometer','joystick','hcsr04','dht11','bh1750','rotaryEncoder','pir','mq2','mpu6050','sht30','ds18b20','bmp280','pcf8574','pca9685','ina219','ds3231','mosfet','dcDcConverter'];
+  let variant = false, powered = true;
+  const cards = names.map(type => {
+    const item = AlicePeripheralCatalog.find(type);
+    const props = Object.fromEntries(item.controls.map(c => [c.key,c.value]));
+    const article = document.createElement('article');
+    const component = document.createElement('div');
+    component.className = 'schematic-component catalog-peripheral type-' + type;
+    component.style.width = (type === 'tm1637' || type === 'max7219' ? 132 : 116) + 'px';
+    component.style.height = '88px';
+    const title = document.createElement('h2'); title.textContent = item.title; article.appendChild(title);
+    const stage = document.createElement('div'); stage.className = 'stage'; stage.appendChild(component); article.appendChild(stage);
+    component.innerHTML = '<div class="component-body has-catalog-effect"><div class="catalog-live catalog-live-' + type + '">' + V.markup(type) + '<strong class="catalog-primary"></strong><span class="catalog-secondary"></span><span class="catalog-status"></span></div></div>';
+    document.querySelector('#gallery').appendChild(article);
+    return {type, props, component, live:component.querySelector('.catalog-live')};
+  });
+  function maxWrite(d,reg,value) { d.setConnection({...connection,selected:true}); d.transmit([reg,value]); d.setConnection({...connection,selected:false}); }
+  function update() {
+    cards.forEach(card => {
+      const {type,props,component,live} = card;
+      let s = {properties:{...props}, power:{powered}, ready:powered}, label = '', extra = {};
+      if (type === 'tm1637') { const d = D.createTM1637({connection}); d.displayNumber(variant ? -128 : 2345,false,!variant); d.setBrightness(variant ? 3 : 7,true); if (!powered) d.setConnection({powered:false}); s=d.getState(); }
+      else if (type === 'max7219') { const d=D.createMAX7219({connection}); maxWrite(d,11,7); maxWrite(d,12,1); maxWrite(d,10,12); (variant ? [24,60,126,255,255,126,60,24] : [60,66,165,129,165,153,66,60]).forEach((r,i)=>maxWrite(d,i+1,r)); if(!powered)d.setConnection({powered:false}); s=d.getState(); }
+      else if(type === 'ws2812') { const d=D.createWS2812({connection,properties:{count:8}}); let bits=''; (variant ? [0x1111ff,0x0055ff,0x00bbff,0x00ffff,0x00ff99,0x66ff00,0xaaff00,0xffffff] : [0xff2222,0xff8822,0xffdd22,0x22dd66,0x22bbff,0x4455ff,0xbb33ee,0xff55aa]).forEach(rgb=>{[(rgb>>8)&255,(rgb>>16)&255,rgb&255].forEach(b=>{for(let k=7;k>=0;k--)bits+=b&(1<<k)?'110':'100';});}); d.transmitSpi(bits.match(/.{8}/g).map(b=>parseInt(b,2)).concat(Array(18).fill(0)),2400000); if(!powered)d.setConnection({powered:false}); s=d.getState(); }
+      else if(type === 'sg90') { s.angle=variant?155:25; label=s.angle+'°'; }
+      else if(type === 'buzzer') { s.active=powered&&!variant; label=s.active?'2000 Hz':'STOP'; }
+      else if(type === 'relay') { s.energized=powered&&!variant; label=s.energized?'COM → NO':'COM → NC'; }
+      else if(type === 'potentiometer') { s.properties.percent=variant?90:20; label=s.properties.percent+' %'; }
+      else if(type === 'joystick') { s.properties.xPercent=variant?80:20; s.properties.yPercent=variant?15:70; s.properties.pressed=variant?1:0; label='X '+s.properties.xPercent+'% · Y '+s.properties.yPercent+'%'; }
+      else if(type === 'hcsr04') { s.distanceCm=variant?350:60; label=s.distanceCm+' cm'; }
+      else if(['dht11','sht30','ds18b20'].includes(type)) { s.temperatureC=variant?42:18; s.humidityPercent=variant?80:25; label=s.temperatureC+' °C'+(type==='ds18b20'?'':' · '+s.humidityPercent+'%'); }
+      else if(type === 'bh1750') { s.properties.lux=variant?25000:100; label=s.properties.lux+' lx'; }
+      else if(type === 'rotaryEncoder') { s.properties.position=variant?7:-2; label=s.properties.position+' steps'; }
+      else if(type === 'pir') { s.properties.motion=variant?0:1; label=s.properties.motion?'MOTION':'NO MOTION'; }
+      else if(type === 'mq2') { s.properties.ppm=variant?8000:300; label=s.properties.ppm+' ppm'; }
+      else if(type === 'mpu6050') { s.properties.accelX=variant?0.8:-0.4; s.properties.gyroZ=variant?1400:-700; label=s.properties.accelX+' g · '+s.properties.gyroZ+' °/s'; }
+      else if(type === 'pcf8574') { s.properties.inputMask=variant?0xa5:0x5a; label='P7…P0'; }
+      else if(type === 'pca9685') { s.properties.channel0=variant?3300:900; label=Math.round(s.properties.channel0/4095*100)+'% · 50 Hz'; }
+      else if(type === 'ds3231') { s.properties.unixTime=variant?1785477895:1785470400; label='UTC'; }
+      else if(type === 'mosfet') { extra.mosfetOn=powered&&!variant; label=extra.mosfetOn?'ON':'OFF'; }
+      else if(type === 'dcDcConverter') { extra.converterEnabled=powered; extra.powerState={utilizationPercent:variant?90:20}; label=(powered?'5.00':'0.00')+' V OUT'; }
+      else if(type === 'bmp280') { s.properties.pressurePa=variant?65000:101325; label=s.properties.pressurePa+' Pa'; }
+      else if(type === 'ina219') { s.properties.currentA=variant?2.7:-1; label=s.properties.currentA+' A'; }
+      component.classList.toggle('is-unpowered',!powered);
+      live.querySelector('.catalog-primary').textContent=label;
+      live.querySelector('.catalog-status').textContent=powered?'状态 '+(variant?'B':'A'):'POWER OFF';
+      V.update(live,type,s,extra);
+    });
+    const segments=cards[0].live.querySelectorAll('[data-segment]');
+    const red=Array.from(segments).filter(n=>getComputedStyle(n).fill==='rgb(255, 72, 59)').length;
+    document.querySelector('#result').textContent=powered ? (red>0?'段码渲染正常':'段码渲染异常') : (red===0?'断电熄灭正常':'断电检查失败');
+  }
+  document.querySelector('#change').onclick=()=>{variant=!variant;update();};
+  document.querySelector('#power').onclick=()=>{powered=!powered;document.querySelector('#power').textContent=powered?'断电':'通电';update();};
+  update();
+</script></body></html>

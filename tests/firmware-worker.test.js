@@ -200,3 +200,19 @@ test("firmware Worker forwards stdio output from printf", () => {
   assert.equal(event.detail.stream, "stdout");
   assert.equal(event.detail.text, "value=42\n");
 });
+
+test("firmware Worker transmits to a no-CS LED strip while rejecting the wrong SPI bus", () => {
+  const worker = loadWorker();
+  const model = { variables: { bytes: [0x92], ok: -1, wrong: -1 },
+    spis: { hspi1: { handle: "hspi1", instance: "SPI1" }, hspi2: { handle: "hspi2", instance: "SPI2" } },
+    program: { operations: [
+      { op: "spiTransmit", spi: "hspi1", instance: "SPI1", buffer: "bytes", length: 1, resultTarget: "ok" },
+      { op: "spiTransmit", spi: "hspi2", instance: "SPI2", buffer: "bytes", length: 1, resultTarget: "wrong" }
+    ] } };
+  worker.send({ command: "init", model });
+  worker.send({ command: "call", method: "start", args: [] });
+  const state = worker.send({ command: "step", deltaMs: 0, inputs: { gpio: {}, adc: {}, i2c: [], peripherals: [], spi: [{ instance: "SPI1", noChipSelect: true, ready: true, selected: false }] } });
+  assert.equal(state.status, "completed");
+  assert.equal(state.variables.ok, 0);
+  assert.equal(state.variables.wrong, 1);
+});

@@ -102,6 +102,21 @@ def walk_operations(operations):
 
 
 class HalPeripheralModelTests(unittest.TestCase):
+    def test_spi_bit_rate_for_encoded_led_stream(self) -> None:
+        source = """
+SPI_HandleTypeDef hspi1;
+int main(void) {
+  hspi1.Instance = SPI1;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
+  while (1) { HAL_Delay(10); }
+}
+"""
+        ioc = "Mcu.CPN=STM32F103C8T6\nPA5.Signal=SPI1_SCK\nPA7.Signal=SPI1_MOSI\nRCC.APB2Freq_Value=76800000\n"
+        model = build_hal_model([(Path("Led.ioc"), ioc), (Path("main.c"), source)])
+        self.assertEqual(2400000, model["spis"]["hspi1"]["baudRate"])
+        unknown = build_hal_model([(Path("main.c"), source)])
+        self.assertNotIn("baudRate", unknown["spis"]["hspi1"])
+
     def test_timer_pwm_configuration_and_compare_updates_are_modeled(self) -> None:
         timer_ioc = """\
 Mcu.CPN=STM32F103C8T6

@@ -16,6 +16,7 @@ const currentProbe = fs.readFileSync(path.join(root, "assets", "components", "cu
 test("flat peripheral artwork does not duplicate names or bus labels", () => {
   const symbolMarkup = catalog.match(/function symbolMarkup[\s\S]*?\n  }/)?.[0] || "";
   assert.match(symbolMarkup, /component-flat-image/);
+  assert.match(symbolMarkup, /preserveAspectRatio=\"xMidYMid meet\"/);
   assert.doesNotMatch(symbolMarkup, /catalog-module-label/);
   assert.doesNotMatch(symbolMarkup, /catalog-module-bus/);
   assert.match(catalog, /Math\.max\(88, 28 \+ pinCount \* 18\)/);
@@ -52,8 +53,26 @@ test("all schematic component labels have a persistent visibility switch", () =>
 test("MCU artwork is a compact package symbol instead of a board mockup", () => {
   assert.match(schematic, /mcu-simple-outline/);
   assert.match(schematic, /mcu-simple-core/);
+  assert.match(schematic, /mcu-simple-notch/);
+  assert.match(schematic, /packagePins/);
   assert.doesNotMatch(schematic, /blue-pill\.svg/);
   assert.doesNotMatch(styles, /mcu-brand|mcu-part/);
+});
+
+test("basic parts use recognizable physical bodies while keeping electrical pins separate", () => {
+  assert.match(schematic, /resistor-physical-symbol/);
+  assert.match(schematic, /resistor-band-gold/);
+  assert.match(schematic, /led-physical-symbol/);
+  assert.match(schematic, /led-cathode/);
+  assert.match(schematic, /switch-physical-symbol/);
+  assert.match(schematic, /switch-housing/);
+  assert.match(schematic, /capacitor-physical-symbol/);
+  assert.match(schematic, /capacitor-plus/);
+  assert.match(styles, /resistor-body/);
+  assert.match(styles, /led-physical-symbol \.led-lens/);
+  assert.match(styles, /switch-physical-symbol \.switch-lever/);
+  assert.match(styles, /capacitor-physical-symbol \.capacitor-body/);
+  assert.match(index, /library-band/);
 });
 
 test("measurement probe artwork leaves the screen clear for live numeric values", () => {

@@ -164,7 +164,7 @@
 
   function symbolMarkup(item, width, height) {
     return '<svg class="component-symbol component-flat-symbol catalog-module-symbol" viewBox="0 0 ' + width + " " + height + '" aria-hidden="true">' +
-      '<image class="component-flat-image" href="' + flatAssetFor(item) + '" x="7" y="5" width="' + (width - 14) + '" height="' + (height - 10) + '" preserveAspectRatio="none"/></svg>';
+      '<image class="component-flat-image" href="' + flatAssetFor(item) + '" x="7" y="5" width="' + (width - 14) + '" height="' + (height - 10) + '" preserveAspectRatio="xMidYMid meet"/></svg>';
   }
 
   function schematicDefinition(item) {
