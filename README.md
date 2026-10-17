@@ -1,112 +1,171 @@
-# AliceSIM
+<p align="center">
+  <a href="https://github.com/new-bmp/AliceSim/releases/download/v1.0.0/AliceSIM-Launch-2026-1080p.mp4">
+    <img src="docs/showcase/hero.png" alt="AliceSIM · 嵌入式仿真学习平台：写代码、接电路、看结果" width="100%" />
+  </a>
+</p>
 
-AliceSIM 是面向 STM32 的嵌入式仿真学习平台，当前目标器件为 `STM32F103C8T6`。
+<p align="center">
+  <strong>从第一个闪灯程序，到自己的采集与控制终端。</strong><br />
+  在同一工作台里编写 STM32 程序、连接电路、改变输入，观察代码带来的变化。
+</p>
 
-## 教程与例程
+<p align="center">
+  <a href="https://github.com/new-bmp/AliceSim/releases/tag/v1.0.0">观看宣传片</a> ·
+  <a href="https://github.com/new-bmp/AliceSim/archive/refs/heads/main.zip">下载最新源码</a> ·
+  <a href="tutorials/README.md">教程与例程</a> ·
+  <a href="Drivers/AliceSIM/README.md">外设驱动</a> ·
+  <a href="https://github.com/new-bmp/AliceSim/issues">反馈问题</a>
+</p>
 
-启动软件后，点击顶部“教程与例程”，可以按知识点阅读 31 篇教程，查看实际运行截图、CubeMX 配置、接线与代码解释。小屏幕上入口显示为“教程”，帮助中心也保留了入口。也可在实际服务地址后加 `/tutorials/` 直接阅读。
+<p align="center"><sub>STM32F103C8T6 · CubeMX / HAL · 31 篇教程 · 14 套课程工程 + SPI 彩屏例程</sub></p>
 
-十四套例程位于 [`tutorials/examples`](tutorials/README.md)。从电路、最小闪灯、C 数据与指针开始，加入非阻塞计时、消抖、EXTI、定时器中断、UART 命令与总线读手册实验，再进入 ADC、PWM、传感器、显示、DMA 和趋势记录。教材还介绍排错、实机下载与断点调试。配套课程可下载工程 JSON 与源码 ZIP；目录及维护方法见[教程说明](tutorials/README.md)。
+## 先看一次实验怎样发生
 
-新增的 [ST7789 SPI 彩屏例程](examples/ST7789_SPI_Display/README.md) 提供 240×240 屏幕、配套 HAL 驱动和已接线的完整项目，演示文字、RGB 色块及局部刷新的动态进度条。
+AliceSIM 是面向学生与教师的嵌入式仿真学习平台。它把工程、代码、电路和观测工具放在一起：导入 CubeMX 工程，核对 IOC 引脚和外设配置，构建固件，再让程序驱动自己连接的元件。
 
-## 已实现
+点击顶部封面可打开 **85 秒的 1080p 宣传片**，包含中文旁白、配乐和字幕。[Release 中也提供视频、封面与 SRT 下载](https://github.com/new-bmp/AliceSim/releases/tag/v1.0.0)。以下图片均来自 AliceSIM 实际运行画面。
 
-- 导入本地 STM32 工程文件夹，保留 `Core`、`Drivers`、CMSIS、源码、头文件和相对目录结构
-- 完整项目保存：`Ctrl+S` 保存代码、IOC、电路和工作区；可写工程保存到 `AliceSIM` 工作目录，否则使用浏览器本地存储；`Ctrl+Shift+S` 导出完整工程包
-- 电路独立保存/加载：`.alice-sch.json` 保存元件、数值、位置、旋转、导线拐点及画布视图
-- 单独导入并解析 STM32CubeMX `.ioc` 文件
-- IOC 只读报告：完整 LQFP48 引脚、时钟、外设、MCU/项目字段及逐行原始配置
-- HAL 风格 C 代码编辑与基础结构检查
-- VS Code Light+ 风格 C 语法高亮、错误行与问题列表
-- 项目内置 Clang 18 多文件前端诊断，自动收集工程头文件和 HAL/CMSIS include 目录
-- 浏览器内构建、运行、暂停和复位流程；构建结果来自 Clang 诊断与 HAL 语义模型，不再伪造 ELF、Flash/RAM 占用
-- Proteus 风格二维原理图编辑器：元件放置、拖动、选择、删除和端点连线
-- 原理图窗格支持拖拽缩放，以及紧凑、标准、宽屏和专注四种布局；标准宽度会按窗口在约 420–600px 间自适应，内部布线画布为 1200×720
-- 主界面会按窗口宽高自动调整项目栏、代码区和原理图占比；短屏改用单行横向元件库，并为菜单、状态栏、仿真控制与属性窗口设置可读字号和触控尺寸
-- 元件参考标号、型号、实时数值和引脚名分层排版，低缩放时自动补偿文字尺寸，并对电源、MCU 与模块内部标签做避让
-- EDA 风格网络端子支持命名、旋转、保存与导入；同名端子按规范化网络名自动并网，可替代跨画布长导线
-- 元件库包含 STM32F103C8T6、基础无源器件、OLED、环境/运动/测量/存储器件、电位器和 N 沟道 MOSFET
-- 28 个 AliceSIM STM32 HAL 外设驱动均有独立 `.h/.c`、清单登记和一键加入工程入口
-- 自有驱动高层 API 可直接进入语义仿真：OLED 绘图/刷新会下发到 I²C 模型，光敏读取会走 ADC/数字 GPIO 网络
-- IOC、`main.h` GPIO 宏与 HAL 调用会共同生成物理引脚模型；源码与 IOC 冲突时明确报告，并以实际源码行为为准
-- 支持的 HAL 行为包括 GPIO 写入/翻转、`HAL_Delay`、UART 阻塞收发、变量赋值，以及 C 基本控制流：`if/else`、`while`、`for`、`switch/case/default`、`return`、`break`、`continue`
-- C++ 工程（`.cc` / `.cpp` / `.cxx`）使用 STM32 GNU Arm 工具链的 `gnu++17` 语法检查，可直接包含 GCC 的 `bits/stdc++.h` 及其完整 libstdc++ 头文件集合；标准库代码通过编译检查，但不会自动变成 HAL 仿真行为
-- 原理图使用真实端点网络求解高电平、低电平、悬空与驱动冲突；断线后不会再因为导线名称相同而误触发元件
-- 代码输出脚会自动生成对应的 GPIO → 电阻 → LED → GND 支路，并按源码别名显示 RED/GREEN/BLUE 等通道
-- MCU 模块仅显示工程实际使用的 GPIO/通信 IO 与 VDD/VSS，默认隐藏 BOOT、NRST、晶振和 SWD/JTAG 调试脚
-- 可选仿真时间刻（1 μs / 10 μs / 100 μs / 1 ms / 10 ms）、实际 GPIO 波形和 UART 固件收发事件
-- 仿真时间流支持“无限运行”和“包络测试”；FL Studio 风格包络工作台可为多个传感器/旋钮建立关键帧轨道，按统一毫秒时间戳实时写入原理图输入
-- 包络测试支持时长、循环、曲线生成、关键帧增删拖动和数值精调；固件模型不可用时会自动进入传感器独立测试，仍保留同一时间轴与真实器件数值更新
-- 72 MHz 时钟树配置视图
-- 数据手册转器件草稿 API：受限 PDF/结构化文本解析器可提取型号、封装、引脚、电气限制、总线和寄存器；结果必须人工确认并通过校验，接口不会直接安装器件
+![AliceSIM 工作台：工程目录、电路与运行工具](docs/showcase/workbench.png)
 
-## 启动
+| 在工作台里 | 可以做什么 |
+| --- | --- |
+| 工程与代码 | 导入含 `.ioc` 的完整工程，查看引脚配置，编辑 C / C++ 源码，定位构建问题 |
+| 电路设计 | 放置元件、端点接线、调整布局，用撤销与重做修改电路，按需要隐藏标签 |
+| 固件运行 | 构建、运行、暂停和复位，让已支持的 HAL 调用与电路模型联动 |
+| 观察与验证 | 查看串口记录和实际 GPIO 波形，用包络为输入安排随时间变化的数值 |
+| 保存与继续 | 保存代码、IOC、电路和工作区，重新打开完整工程继续实验 |
 
-Windows 下直接双击项目根目录的 `AliceSIM.cmd`。启动器会：
+## 元件会怎样回应程序
 
-- 检查 64 位 Python 3.10+ 与项目内置 Clang 18 运行库
-- 复用已经运行的同一 AliceSIM 实例
-- 从 `4173` 开始自动选择可用的本机端口
-- 等待 `/api/health` 确认服务就绪后再打开浏览器
-- 默认使用 Edge 或 Chrome 的无边框全屏窗口打开 AliceSIM
-- 保持后端窗口可见，按 `Ctrl+C` 或关闭窗口即可停止服务
+用开关改变红绿灯状态，用输入电压控制舵机角度，让距离触发点阵、蜂鸣器和继电器；也可以把双路 ADC 组成带滤波、历史曲线与回差报警的数据记录终端。
 
-也可以在 PowerShell 中运行：
+![四组实验：状态灯、ADC 与舵机、传感器联动、趋势与报警](docs/showcase/experiments.jpg)
+
+元件库覆盖基础电路、输入与传感器、显示与执行器、通信与扩展。配套驱动包含 SSD1306、ST7789、TM1637、MAX7219、SG90、DHT11、HC-SR04、MPU6050、DS3231、W25Qxx 等，可从“项目 → 添加 AliceSIM 驱动”加入工程。[查看驱动接口与接线说明 →](Drivers/AliceSIM/README.md)
+
+### 新增 ST7789 SPI 彩屏
+
+240 × 240 彩屏显示文字、RGB 色块和动态进度条。程序通过普通 HAL GPIO 与 SPI 调用发送命令、地址窗口和像素，屏幕根据接线与实际传输数据更新；例程使用局部刷新，配有驱动、源码、IOC 和完整电路。
+
+![ST7789 SPI 彩屏实际显示与配套接线](docs/showcase/spi-display.png)
+
+[阅读彩屏说明](examples/ST7789_SPI_Display/README.md) · [下载完整工程 JSON](https://github.com/new-bmp/AliceSim/raw/refs/heads/main/examples/ST7789_SPI_Display/ST7789_SPI_Display.alice.json) · [查看驱动](Drivers/AliceSIM/Inc/alicesim_st7789.h)
+
+## 让调试过程看得见
+
+串口查看测量记录和接收命令，逻辑分析仪观察 GPIO / PWM 信号，传感器包络按统一时间轴改变输入。构建与运行日志在电路页也能查看，排错时可以对照程序、连线与输出。
+
+![串口数据、GPIO 波形与传感器包络](docs/showcase/debug-tools.png)
+
+固件运行在 Web Worker；波形按显示需要抽样、压缩，并用 WASM 内核辅助波形变化检测与批量传感器数值处理。运行中遇到不支持的行为会明确停止并报告，便于区分代码问题、模型边界和电路问题。
+
+## 从入门到综合实验
+
+启动软件后，点击顶部 **“教程与例程”**；小屏幕显示为“教程”，帮助中心也保留入口。教程页可直接下载完整工程 JSON 和源码 ZIP，内容包括 CubeMX 配置、接线、代码解释、运行现象与练习。
+
+![AliceSIM 教程入口与配套教材](docs/showcase/tutorials.png)
+
+| 学习阶段 | 内容 | 从这里开始 |
+| --- | --- | --- |
+| 第一次接触单片机 | 电路与电平、CubeMX 配置、最小闪灯、C 数据与指针 | [第一个闪灯程序](tutorials/lessons/mcu-first.md) |
+| 输入与任务调度 | GPIO、非阻塞计时、消抖、长按、EXTI 与定时器中断 | [开关与状态灯](tutorials/lessons/gpio.md) |
+| 外设与总线 | ADC、PWM、UART 收发、I²C、SPI、显示与传感器 | [ADC 与 PWM 舵机](tutorials/lessons/pwm-servo.md) |
+| 综合与验证 | ADC 循环 DMA、滤波、趋势记录、报警、排错与实机调试 | [双路采集与趋势记录](tutorials/lessons/logger.md) |
+
+[浏览全部 31 篇教程与 14 套课程工程 →](tutorials/README.md)
+
+## 快速开始
+
+### 1. 下载并启动
+
+Windows 源码运行需要 **64 位 Python 3.10+**，以及 Edge 或 Chrome。[下载当前主分支源码 ZIP](https://github.com/new-bmp/AliceSim/archive/refs/heads/main.zip)，完整解压后双击根目录 **`AliceSIM.cmd`**。
+
+首次启动会在项目 `.vendor` 目录准备 Clang 18 和相关依赖，需要网络。启动器从 `4173` 开始选择空闲端口，等待服务就绪后打开无边框全屏窗口；以启动窗口显示的地址为准。关闭服务时，在该窗口按 `Ctrl+C`。
+
+C++ 工程另需 GNU Arm 的 `arm-none-eabi-g++`，可使用 STM32CubeIDE 附带的工具链，或通过 `ALICESIM_ARM_GXX` 指定该可执行文件；启动器不会自动安装 C++ 工具链。
+
+需要普通浏览器窗口时，在项目目录运行：
 
 ```powershell
-.\start.ps1
+.\AliceSIM.cmd -Windowed
 ```
 
-常用选项：
+### 2. 打开一套完整例程
+
+打开“教程与例程”，下载第一个闪灯课程的 **完整工程 · JSON**。回到工作台，从 **“项目 → 打开 IOC / 工程包”** 打开文件，构建成功后点击运行。
+
+也可导入 `tutorials/examples/Learning07_Blink` 整个文件夹，或直接打开[彩屏完整工程](examples/ST7789_SPI_Display/ST7789_SPI_Display.alice.json)。自己生成 CubeMX 工程时，应选择同时含 `.ioc`、`Core`、`Drivers` 的根目录；单独 IOC 只包含配置，不包含完整固件。
+
+### 3. 修改、验证并保存
+
+修改代码后重新构建，再观察电路与串口。用 `Ctrl+S` 保存完整项目，用 `Ctrl+Shift+S` 导出可备份、迁移或提交作业的 `.alice.json` 工程包。[详细安装与操作教程 →](tutorials/lessons/setup.md)
+
+## 保存的是哪一部分
+
+| 操作 | 保存内容 |
+| --- | --- |
+| `Ctrl+S` · 保存项目 | 代码、IOC、电路与工作区；可写工程保存到工程内的 `AliceSIM` 工作目录，否则使用当前浏览器与页面地址的本地存储 |
+| `Ctrl+Shift+S` · 导出完整工程 | `.alice.json`，适合备份、换电脑、交作业与分享例程 |
+| `Ctrl+Alt+S` · 电路另存为 | `.alice-sch.json`，包含元件、数值、位置、旋转、导线与画布视图 |
+| `Ctrl+Alt+O` · 打开电路 | 加载独立电路；完整程序请使用工程包或源码目录 |
+
+<details>
+<summary><strong>更多启动选项</strong></summary>
+
+在项目目录的 PowerShell 中运行：
 
 ```powershell
 .\start.ps1 -Port 4300        # 指定首选端口
-.\start.ps1 -NoBrowser        # 不自动打开浏览器
-.\start.ps1 -Windowed         # 使用普通浏览器窗口，不进入全屏
-.\start.ps1 -SkipDependencies # 跳过 Clang 依赖准备
+.\start.ps1 -NoBrowser        # 只启动服务
+.\start.ps1 -Windowed         # 普通浏览器窗口
+.\start.ps1 -SkipDependencies # 跳过依赖准备
 ```
 
-首次启动时脚本会自动在项目的 `.vendor` 目录准备 Clang 18、PDF 数据手册解析器，以及可选的 PySpice 1.5 / NGSpice 34 直流校验器，不会修改系统 LLVM、Python 包或 SPICE 环境。
-如果依赖下载失败，后端仍会启动，编辑器会明确降级到浏览器端基础检查和内置实时直流求解。
+启动器会复用同一项目已经运行的实例。依赖准备不会修改系统 LLVM、Python 包或 SPICE 环境；下载失败时，页面会明确显示当前检查与求解能力。
 
-## PWA 与原生应用
+</details>
 
-AliceSIM 的同一套前端可以作为浏览器/PWA 使用，也可以装进 Tauri 2 原生壳层。Windows、macOS 和 Linux 桌面包会启动随应用分发的本地 Python/Clang 服务；原生窗口不包含 Edge/Chrome 的右键手势界面。手机和平板继续使用相同的触控、鼠标和键盘交互，窄屏时左侧活动栏会打开抽屉式项目栏，不需要从屏幕边缘滑动。
+<details>
+<summary><strong>浏览器、PWA 与原生应用</strong></summary>
 
-浏览器打开 AliceSIM 后，可使用浏览器的“安装应用”功能安装 PWA。PWA 连接正在运行的 AliceSIM 服务时具备完整的 Clang 检查与 HAL 仿真能力；静态离线页面仍可编辑工程和电路，但不会缓存或伪造 `/api/*` 编译结果。
+浏览器可通过“安装应用”将 AliceSIM 安装为 PWA。连接运行中的 AliceSIM 后端时，可以进行 Clang 检查与 HAL 仿真；静态离线页面用于工程和电路编辑，不缓存编译接口结果。
 
-桌面开发和打包需要 Node.js 20+、pnpm、Rust stable、Python 3.10+，发布包还需要 PyInstaller。安装前端依赖后运行：
+项目包含 Tauri 2 原生壳层。Windows、macOS 和 Linux 桌面包在构建时封装本地 Python / Clang 服务，窗口不包含浏览器右键手势界面；移动端提供触控布局。Android / iOS 不内置 Python、Clang 或 HAL 后端，固件构建需要桌面版，或从浏览器连接可用的 AliceSIM 后端地址。
+
+</details>
+
+<details>
+<summary><strong>开发、检查与桌面打包</strong></summary>
+
+前端开发需要 Node.js 20+ 与 pnpm。桌面开发另需 Rust stable、Python 3.10+，打包 sidecar 使用 PyInstaller：
 
 ```powershell
 pnpm install
+pnpm test
+pnpm tutorials:check
 pnpm desktop:dev
 pnpm desktop:build
 ```
 
-`desktop:build` 会先把 `server.py`、页面资源和可用的本地 Clang 运行库封装成当前系统架构的 sidecar，再由 Tauri 生成安装包。macOS 和 Linux 包应分别在对应系统上构建，以得到本机格式的 Python sidecar。
+`desktop:build` 先封装本机架构的服务与页面资源，再由 Tauri 生成桌面包。macOS 与 Linux 应分别在对应系统构建。Android 需要 Android Studio、SDK、NDK 和 Rust targets；iOS 需在安装 Xcode 的 macOS 上构建。
 
-Android 开发需要 Rust 的 Android targets、Android Studio、SDK 与 NDK；初始化后可运行 `pnpm android:dev` 或 `pnpm android:build`。iOS 只能在安装 Xcode 的 macOS 上初始化和构建。原生 Android/iOS 包不内置 Python、Clang 或 HAL 模型服务：代码编辑、工程保存、电路设计和浏览器端基础检查可以本地使用，固件构建请转到桌面版，或在浏览器中连接提供 AliceSIM 后端的地址。移动端会明确停止构建并显示这项限制，不会把基础检查显示为 Clang 编译成功。
+教程维护说明见 [tutorials/README.md](tutorials/README.md)，数据手册转器件草稿接口见 [docs/datasheet-import-api.md](docs/datasheet-import-api.md)。
 
-可以使用 [`examples/BluePill_Blinky.ioc`](examples/BluePill_Blinky.ioc) 测试 IOC 导入。
-[`examples/STM32F103_HAL_Init`](examples/STM32F103_HAL_Init) 是由真实 STM32CubeMX 工程整理出的完整 HAL 初始化示例，包含 72 MHz 时钟、ADC2、I²C1、TIM1 PWM 以及 USART2/USART3，可直接以工程文件夹方式导入。
-[`examples/CppStdlibBlink`](examples/CppStdlibBlink) 是一套可运行的 C++ LED 示例：`main.cpp` 包含 `<stdc++.h>`，同时演示 `for`、`switch`、`break`、`continue`、`return` 与 `malloc/free` 的 C++ 语法检查；配套电路文件已连接 PC13 → 330 Ohm → LED → GND。打开工程后通过“打开电路”导入 [`CppStdlibBlink.alice-sch.json`](examples/CppStdlibBlink/CppStdlibBlink.alice-sch.json)，即可与代码联动运行。
-仓库还包含 [`tests/fixtures/uart_rgb`](tests/fixtures/uart_rgb) 工程夹具，用于验证 USART2 与 PA6/PA7/PB0 三路 RGB 控制的一致性。
+</details>
 
-数据手册草稿接口及安全边界见 [`docs/datasheet-import-api.md`](docs/datasheet-import-api.md)。
+## 仿真范围
 
-## 保存与外设驱动
+当前目标器件为 **STM32F103C8T6**。AliceSIM 使用 HAL 语义级仿真：本地 Clang 检查 C，C++ 检查使用 GNU Arm 工具链；语义运行时执行已支持的 C 表达式、控制流、库函数与 HAL / 外设驱动调用，再将结果送入电路网络和设备模型。包含 GPIO、ADC、UART、I²C、SPI、PWM、定时器、中断和 DMA 等已建模行为。
 
-- `Ctrl+S`：保存完整项目。可写工程保存到工程内 `AliceSIM` 工作目录；否则保存在当前浏览器与页面地址的本地存储中。
-- `Ctrl+Shift+S`：导出完整 `.alice.json` 工程，用于备份、迁移或提交作业。
-- `Ctrl+Alt+S`：保存电路为独立的 `.alice-sch.json`。
-- `Ctrl+Alt+O`：打开已保存的电路；IOC 控制的 MCU 型号和当前有效 IO 不会被旧电路覆盖。
-- “项目 → 添加 AliceSIM 驱动”：可选择全部 28 个已登记器件驱动，复制到工程的 `Drivers/AliceSIM` 目录。默认保留已有同名源码，可显式选择更新。
+它不是完整的 ARM 指令级仿真器。通过 C / C++ 编译检查不代表所有库代码都能建模运行；不支持的操作会报告错误。电路具有电平、连接、驱动冲突及受支持网络的直流求解，完整模拟器件瞬态 SPICE、总线电气时序和芯片周期精度不在当前覆盖范围；UART 监视器通过固件收发队列传递字节，并非 TX / RX 导线逐位采样。
 
-驱动源码与使用示例见 [`Drivers/AliceSIM/README.md`](Drivers/AliceSIM/README.md)。
+适合用来学习程序与外设如何配合、验证连接和控制逻辑，再沿着[实机调试教程](tutorials/lessons/hardware.md)完成真实开发板上的核对。
 
-## 当前边界
+---
 
-当前版本属于可验证的 **HAL 语义级数字仿真**：Clang 对工程 C 文件执行真实的 GNU11 / ARM Cortex-M3 词法、语法及类型诊断，AliceSIM 再把已支持的 HAL 与 AliceSIM 外设驱动调用编译为确定性操作，并将 GPIO、I²C 和 ADC 行为送入原理图网络与设备模型。通过可写目录选择器打开工程时，当前源码可以原位写回；不支持该接口的浏览器仍使用工作区副本和下载保存。
-
-它目前不是完整的 ARM ELF/Cortex-M3 指令级仿真器。电压与电流探针会先由浏览器内置求解器实时刷新，再由 PySpice / NGSpice 对受支持的电源、电阻和探针网络执行直流工作点复核；电容、电感、二极管、晶体管和开关电源的完整瞬态 SPICE 模型仍属于下一阶段。UART 已按工程实例、波特率、收发长度和阻塞语义执行，但串口监视器目前仍直接向固件 UART 队列送入字节，尚未按波特率在 TX/RX 导线上逐位采样。
+<p align="center">
+  <strong>AliceSIM · 从看见现象，走向理解原理。</strong><br />
+  <a href="tutorials/README.md">开始学习</a> ·
+  <a href="https://github.com/new-bmp/AliceSim/releases/tag/v1.0.0">宣传片与发布</a> ·
+  <a href="https://github.com/new-bmp/AliceSim/issues">提交反馈</a>
+</p>

@@ -1,0 +1,491 @@
+{
+  "version": 1,
+  "purpose": "GitHub README showcase: real AliceSIM software captures",
+  "source_policy": "No UI, waveform or reading was redrawn or synthesized. Pure crop and resize only; added design copy is outside the captured UI.",
+  "brand_palette": {
+    "navy": "#19355B",
+    "cyan": "#58DBD0",
+    "background": "#F4F7FB",
+    "accent_text": "#11756C"
+  },
+  "fonts": {
+    "regular": "C:\\Windows\\Fonts\\msyh.ttc",
+    "bold": "C:\\Windows\\Fonts\\msyhbd.ttc"
+  },
+  "outputs": {
+    "hero.png": {
+      "size": [
+        1600,
+        620
+      ],
+      "bytes": 287372,
+      "sha256": "4b806570f86c228f1d7f3b48c6ce29af0577933e8a38112702412a206fdc6286",
+      "description": "Brand introduction beside a real, running ST7789 screen; no display pixels were redrawn.",
+      "encoding": {
+        "format": "PNG",
+        "palette_colors": null
+      },
+      "captures": [
+        {
+          "source": "output/alicesim-launch-2026/assets/current-display-2-full.png",
+          "source_sha256": "9236835a8f8f1c84b7efe731616f8206c28ca6d8dbe0c7b2d400c132975ffa44",
+          "source_size": [
+            1280,
+            720
+          ],
+          "crop_ltrb": [
+            600,
+            157,
+            1280,
+            635
+          ],
+          "frame_xywh": [
+            680,
+            54,
+            850,
+            512
+          ],
+          "placed_image_xywh": [
+            742,
+            55,
+            726,
+            510
+          ],
+          "resampling": "Pillow LANCZOS",
+          "frame_corner_radius": 18
+        },
+        {
+          "source": "output/alicesim-launch-2026/assets/logo.png",
+          "source_sha256": "22037ccfd7b366f4c9f65041bbe4e48014fce5750cac9decd011e83defc24659",
+          "role": "current brand icon",
+          "placed_image_xywh": [
+            74,
+            71,
+            92,
+            92
+          ]
+        }
+      ]
+    },
+    "workbench.png": {
+      "size": [
+        1600,
+        900
+      ],
+      "bytes": 354160,
+      "sha256": "47c482a098f7b7d442d732aac47fcdcd13504b5660e3636227e0d8720b0c80e0",
+      "description": "Uncropped current AliceSIM workbench, enlarged uniformly from the original 1280×720 capture.",
+      "encoding": {
+        "format": "PNG",
+        "palette_colors": 256,
+        "quantizer": "MEDIANCUT with protected display/LED primaries",
+        "dither": false
+      },
+      "captures": [
+        {
+          "source": "output/alicesim-launch-2026/assets/current-workbench.png",
+          "source_sha256": "0f3133d9286d8c90a7e5eb7c9aa42cdf6ef0d87527dd4c465dc1dc08a9eb3a38",
+          "source_size": [
+            1280,
+            720
+          ],
+          "crop_ltrb": [
+            0,
+            0,
+            1280,
+            720
+          ],
+          "frame_xywh": [
+            0,
+            0,
+            1600,
+            900
+          ],
+          "placed_image_xywh": [
+            0,
+            0,
+            1600,
+            900
+          ],
+          "resampling": "Pillow LANCZOS",
+          "frame_corner_radius": 0
+        }
+      ]
+    },
+    "experiments.jpg": {
+      "size": [
+        1600,
+        1220
+      ],
+      "bytes": 414783,
+      "sha256": "25c0c66cc5d68c886131b5fe145da90dd7bde2d6e11071f719e3d761423ca904",
+      "description": "Four real experiments: independent GPIO LEDs, ADC-controlled servo, sonar peripheral linkage, dual-ADC trend and alarm terminal.",
+      "encoding": {
+        "format": "JPEG",
+        "quality": 92,
+        "subsampling": 0,
+        "progressive": true
+      },
+      "captures": [
+        {
+          "source": "output/alicesim-launch-2026/assets/ex-gpio-on.png",
+          "source_sha256": "b0508b5cf70bc887da4a7932d70bcf0f594b4430f2b4c716225b91d460bae6eb",
+          "source_size": [
+            1150,
+            680
+          ],
+          "crop_ltrb": [
+            0,
+            0,
+            1150,
+            680
+          ],
+          "frame_xywh": [
+            60,
+            233,
+            720,
+            424
+          ],
+          "placed_image_xywh": [
+            63,
+            234,
+            714,
+            422
+          ],
+          "resampling": "Pillow LANCZOS",
+          "frame_corner_radius": 18
+        },
+        {
+          "source": "output/alicesim-launch-2026/assets/ex-servo-high.png",
+          "source_sha256": "10e9eadec554a30ff9fcfdc3007e6247477a91abfef65ea2d19dc6745577ceeb",
+          "source_size": [
+            1160,
+            685
+          ],
+          "crop_ltrb": [
+            0,
+            0,
+            1160,
+            685
+          ],
+          "frame_xywh": [
+            820,
+            233,
+            720,
+            424
+          ],
+          "placed_image_xywh": [
+            822,
+            234,
+            715,
+            422
+          ],
+          "resampling": "Pillow LANCZOS",
+          "frame_corner_radius": 18
+        },
+        {
+          "source": "output/alicesim-launch-2026/assets/ex-components-near.png",
+          "source_sha256": "43d89a9c33af2d03c8707dce3e0894fbca1187dea267f0e6476c3fa9f20364d0",
+          "source_size": [
+            1506,
+            883
+          ],
+          "crop_ltrb": [
+            0,
+            0,
+            1506,
+            883
+          ],
+          "frame_xywh": [
+            60,
+            752,
+            720,
+            424
+          ],
+          "placed_image_xywh": [
+            61,
+            753,
+            718,
+            421
+          ],
+          "resampling": "Pillow LANCZOS",
+          "frame_corner_radius": 18
+        },
+        {
+          "source": "output/alicesim-launch-2026/assets/log-alarm.png",
+          "source_sha256": "69373e23482a094e9ae0bb38a28e97128a08d472e2ddcfc5d3f16798d5a37a10",
+          "source_size": [
+            1311,
+            786
+          ],
+          "crop_ltrb": [
+            0,
+            0,
+            1311,
+            786
+          ],
+          "frame_xywh": [
+            820,
+            752,
+            720,
+            424
+          ],
+          "placed_image_xywh": [
+            828,
+            753,
+            704,
+            422
+          ],
+          "resampling": "Pillow LANCZOS",
+          "frame_corner_radius": 18
+        }
+      ]
+    },
+    "spi-display.png": {
+      "size": [
+        1600,
+        960
+      ],
+      "bytes": 585989,
+      "sha256": "52421e2348a9b2732424e86dd10003fd7312a89622f145b34c45f3ec48411d86",
+      "description": "Large genuine ST7789 display close-up and a second real capture of the complete example wiring.",
+      "encoding": {
+        "format": "PNG",
+        "palette_colors": null
+      },
+      "captures": [
+        {
+          "source": "output/alicesim-launch-2026/assets/current-display-2-full.png",
+          "source_sha256": "9236835a8f8f1c84b7efe731616f8206c28ca6d8dbe0c7b2d400c132975ffa44",
+          "source_size": [
+            1280,
+            720
+          ],
+          "crop_ltrb": [
+            680,
+            157,
+            1230,
+            620
+          ],
+          "frame_xywh": [
+            60,
+            185,
+            895,
+            704
+          ],
+          "placed_image_xywh": [
+            90,
+            186,
+            834,
+            702
+          ],
+          "resampling": "Pillow LANCZOS",
+          "frame_corner_radius": 18
+        },
+        {
+          "source": "output/alicesim-launch-2026/assets/current-workbench.png",
+          "source_sha256": "0f3133d9286d8c90a7e5eb7c9aa42cdf6ef0d87527dd4c465dc1dc08a9eb3a38",
+          "source_size": [
+            1280,
+            720
+          ],
+          "crop_ltrb": [
+            310,
+            207,
+            1080,
+            632
+          ],
+          "frame_xywh": [
+            1010,
+            286,
+            530,
+            312
+          ],
+          "placed_image_xywh": [
+            1011,
+            296,
+            528,
+            291
+          ],
+          "resampling": "Pillow LANCZOS",
+          "frame_corner_radius": 18
+        }
+      ]
+    },
+    "tutorials.png": {
+      "size": [
+        1600,
+        1150
+      ],
+      "bytes": 599963,
+      "sha256": "bf2655cb0825f78b7f39f2c1dd6945fa2cd8e077f256138597039da6f6091f70",
+      "description": "Current tutorial home and course tree plus the real Tutorials and Examples button from the current workbench.",
+      "encoding": {
+        "format": "PNG",
+        "palette_colors": null
+      },
+      "captures": [
+        {
+          "source": "output/alicesim-launch-2026/assets/current-workbench.png",
+          "source_sha256": "0f3133d9286d8c90a7e5eb7c9aa42cdf6ef0d87527dd4c465dc1dc08a9eb3a38",
+          "source_size": [
+            1280,
+            720
+          ],
+          "crop_ltrb": [
+            820,
+            0,
+            1160,
+            76
+          ],
+          "frame_xywh": [
+            920,
+            77,
+            620,
+            139
+          ],
+          "placed_image_xywh": [
+            923,
+            78,
+            613,
+            137
+          ],
+          "resampling": "Pillow LANCZOS",
+          "frame_corner_radius": 18
+        },
+        {
+          "source": "output/alicesim-launch-2026/assets/current-tutorials.png",
+          "source_sha256": "bb8d5069e5ca7b115f9f59ab7e3a83bba57217b485e84e39e77a9b45fd1eee2d",
+          "source_size": [
+            1265,
+            712
+          ],
+          "crop_ltrb": [
+            0,
+            0,
+            1265,
+            712
+          ],
+          "frame_xywh": [
+            60,
+            254,
+            1480,
+            836
+          ],
+          "placed_image_xywh": [
+            61,
+            256,
+            1478,
+            832
+          ],
+          "resampling": "Pillow LANCZOS",
+          "frame_corner_radius": 18
+        }
+      ]
+    },
+    "debug-tools.png": {
+      "size": [
+        1600,
+        1170
+      ],
+      "bytes": 596557,
+      "sha256": "1d37116ad245bf8212ff1708a447e79c340493ddb2759688ba6865a66791d91c",
+      "description": "Real UART CSV, a newly captured non-flat PWM waveform, and two-channel sensor envelope editor; no data traces were synthesized.",
+      "encoding": {
+        "format": "PNG",
+        "palette_colors": null
+      },
+      "captures": [
+        {
+          "source": "output/alicesim-launch-2026/assets/serial.png",
+          "source_sha256": "24bee0dc5b388d11331843b2e18f83e4b850b4fdf48037dc60f673c5a77ed7cb",
+          "source_size": [
+            290,
+            60
+          ],
+          "crop_ltrb": [
+            0,
+            0,
+            290,
+            60
+          ],
+          "frame_xywh": [
+            60,
+            191,
+            1480,
+            183
+          ],
+          "placed_image_xywh": [
+            362,
+            192,
+            875,
+            181
+          ],
+          "resampling": "Pillow LANCZOS",
+          "frame_corner_radius": 18
+        },
+        {
+          "source": "output/alicesim-launch-2026/assets/current-logic.png",
+          "source_sha256": "659c78ca1cbad9988e6c37ece284d9a32ba26857654a49e16e06fc00852c113e",
+          "source_size": [
+            1039,
+            191
+          ],
+          "crop_ltrb": [
+            0,
+            0,
+            1039,
+            191
+          ],
+          "frame_xywh": [
+            60,
+            462,
+            1480,
+            246
+          ],
+          "placed_image_xywh": [
+            136,
+            463,
+            1327,
+            244
+          ],
+          "resampling": "Pillow LANCZOS",
+          "frame_corner_radius": 18
+        },
+        {
+          "source": "output/alicesim-launch-2026/assets/envelope.png",
+          "source_sha256": "6a2a1a8416a18c88ef9c5928b165ed51a9e820f7d337a050e698b70be4c14d9f",
+          "source_size": [
+            1693,
+            372
+          ],
+          "crop_ltrb": [
+            0,
+            0,
+            1693,
+            372
+          ],
+          "frame_xywh": [
+            60,
+            800,
+            1480,
+            325
+          ],
+          "placed_image_xywh": [
+            65,
+            801,
+            1470,
+            323
+          ],
+          "resampling": "Pillow LANCZOS",
+          "frame_corner_radius": 18
+        }
+      ]
+    }
+  },
+  "total_image_bytes": 2838824,
+  "limits": {
+    "per_image_bytes": 716800,
+    "total_image_bytes": 3000000
+  }
+}
