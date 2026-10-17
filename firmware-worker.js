@@ -151,6 +151,7 @@
     var reference = event && (event.instance || event.spi || event.handle);
     var targets = (Array.isArray(inputs.spi) ? inputs.spi : []).filter(function (target) {
       if (!target || !target.ready || !sameReference(target, reference)) return false;
+      if (target.resetRequired && outputLevel(target.resetPin, target.resetReleased ? 1 : 0) !== 1) return false;
       return target.noChipSelect === true || outputLevel(target.csPin, target.selected ? 0 : 1) === 0;
     }).map(function (target) {
       var copy = clone(target);

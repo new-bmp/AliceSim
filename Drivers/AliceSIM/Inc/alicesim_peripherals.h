@@ -25,6 +25,7 @@
 #include "alicesim_sg90.h"
 #include "alicesim_sht30.h"
 #include "alicesim_ssd1306.h"
+#include "alicesim_st7789.h"
 #include "alicesim_timing.h"
 #include "alicesim_tm1637.h"
 #include "alicesim_w25qxx.h"

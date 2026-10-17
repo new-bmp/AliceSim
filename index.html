@@ -9,9 +9,9 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>AliceSIM — STM32 Web Simulator</title>
     <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="icon" href="./assets/pwa/v2/32x32.png" sizes="32x32" type="image/png" />
-    <link rel="icon" href="./assets/alicesim-app-icon-v2.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="./assets/pwa/v2/apple-touch-icon.png" />
+    <link rel="icon" href="./assets/pwa/v2/32x32.png?v=20261017.2" sizes="32x32" type="image/png" />
+    <link rel="icon" href="./assets/alicesim-app-icon-v2.svg?v=20261017.2" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./assets/pwa/v2/apple-touch-icon.png?v=20261017.2" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -33,7 +33,7 @@
           <button title="重做"><svg viewBox="0 0 24 24"><path d="m15 7 5 5-5 5"/><path d="M19 12h-8a6 6 0 0 0-6 6"/></svg></button>
         </div>
         <div class="brand" aria-label="AliceSIM">
-          <img class="brand-mark" src="./assets/alicesim-app-icon-v2.svg" width="28" height="28" alt="" />
+          <img class="brand-mark" src="./assets/alicesim-app-icon-v2.svg?v=20261017.2" width="28" height="28" alt="" />
           <div><strong>Alice</strong><em>SIM</em></div>
         </div>
 
@@ -375,7 +375,8 @@
             <button data-component-type="button"><svg class="library-symbol button-symbol" viewBox="0 0 36 30" aria-hidden="true"><path d="M2 15h6m20 0h6"/><rect x="8" y="5" width="20" height="20" rx="5"/><path d="M12 15h12M12 15l9-6"/></svg><b>按键</b></button>
             <button data-component-type="capacitor"><svg class="library-symbol capacitor-symbol" viewBox="0 0 36 30" aria-hidden="true"><path d="M2 15h11m9 0h12"/><rect x="13" y="5" width="9" height="20" rx="3"/><path d="M19 7v16M15 9v4m-2-2h4"/></svg><b>电容</b></button>
             <button data-component-type="oled" title="放置 SSD1306 I²C OLED"><svg class="library-symbol oled-symbol" viewBox="0 0 36 30" aria-hidden="true"><rect x="4" y="4" width="28" height="22" rx="1"/><rect x="8" y="8" width="20" height="13"/><path d="M10 24h3m2 0h3m2 0h3m2 0h2"/></svg><b>OLED</b></button>
-            <button data-component-type="spiDisplay" title="放置 ST7735 SPI 彩色屏幕，接收 HAL_SPI_Transmit 数据"><svg class="library-symbol spi-display-library-symbol" viewBox="0 0 36 30" aria-hidden="true"><rect x="4" y="3" width="28" height="24" rx="2"/><rect x="8" y="7" width="20" height="15"/><path d="M8 25h3m2 0h3m2 0h3m2 0h3M10 10l5 5 4-4 7 7"/></svg><b>SPI 屏幕</b></button>
+            <button data-component-type="spiDisplay" title="放置 ST7735 SPI 彩色屏幕，接收 HAL_SPI_Transmit 数据"><svg class="library-symbol spi-display-library-symbol" viewBox="0 0 36 30" aria-hidden="true"><rect x="4" y="3" width="28" height="24" rx="2"/><rect x="8" y="7" width="20" height="15"/><path d="M8 25h3m2 0h3m2 0h3m2 0h3M10 10l5 5 4-4 7 7"/></svg><b>ST7735 彩屏</b></button>
+            <button data-component-type="st7789" title="放置 ST7789 240×240 SPI 方形彩屏，含背光与复位引脚"><svg class="library-symbol spi-display-library-symbol" viewBox="0 0 36 36" aria-hidden="true"><rect x="4" y="2" width="28" height="32" rx="2"/><rect x="7" y="5" width="22" height="22" rx="1"/><path d="M9 12h18M9 16h12M9 20h16M10 31h3m3 0h4m3 0h3"/></svg><b>ST7789 彩屏</b></button>
             <button data-component-type="lightSensor" title="放置可调照度光敏传感器"><svg class="library-symbol light-sensor-symbol" viewBox="0 0 36 30" aria-hidden="true"><circle cx="17" cy="16" r="7"/><path d="M17 2v5M17 25v3M3 16h6M25 16h7M7 6l4 4M23 22l5 5M28 6l-5 5M7 26l4-4"/></svg><b>光敏</b></button>
             <button data-component-type="dht11" title="放置可调温湿度 DHT11"><svg class="library-symbol dht11-symbol" viewBox="0 0 36 30" aria-hidden="true"><rect x="8" y="3" width="20" height="22" rx="2"/><path d="M12 7v10M16 7v10M20 7v10M24 7v10M12 21h12M13 25v3m5-3v3m5-3v3"/></svg><b>DHT11</b></button>
             <button data-component-type="hcsr04" title="放置可调距离 HC-SR04 超声波传感器"><svg class="library-symbol hcsr04-symbol" viewBox="0 0 36 30" aria-hidden="true"><rect x="3" y="5" width="30" height="20" rx="2"/><circle cx="11" cy="15" r="6"/><circle cx="25" cy="15" r="6"/><circle cx="11" cy="15" r="3"/><circle cx="25" cy="15" r="3"/></svg><b>超声波</b></button>

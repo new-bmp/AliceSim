@@ -43,6 +43,18 @@
       upstream: null
     }
   ];
+  DRIVERS.push({
+    id: "st7789",
+    name: "AliceSIM ST7789 SPI 彩屏",
+    description: "240×240 RGB565 彩屏，支持填充、矩形、像素与缩放文本，无整屏显存占用。",
+    componentTypes: ["st7789"],
+    files: ["Drivers/AliceSIM/Inc/alicesim_st7789.h", "Drivers/AliceSIM/Src/alicesim_st7789.c"],
+    installable: true,
+    status: "available",
+    bus: "SPI",
+    attribution: "AliceSIM 制作",
+    upstream: null
+  });
   var catalogApi = root.AlicePeripheralCatalog;
   if (!catalogApi && typeof require === "function") {
     try { catalogApi = require("./peripheral-catalog.js"); } catch (_) { catalogApi = null; }

@@ -10,10 +10,6 @@
   var WIDTH = 160;
   var HEIGHT = 128;
 
-  function clamp(value, minimum, maximum) {
-    return Math.min(maximum, Math.max(minimum, Number(value) || 0));
-  }
-
   function bytesOf(value) {
     if (Array.isArray(value)) return value.map(function (item) { return Number(item) & 0xff; });
     if (value instanceof Uint8Array) return Array.prototype.slice.call(value);
@@ -22,8 +18,10 @@
 
   function create(options) {
     var config = options || {};
-    var width = Math.max(1, Math.round(Number(config.width) || WIDTH));
-    var height = Math.max(1, Math.round(Number(config.height) || HEIGHT));
+    var controller = config.controller === "ST7789" ? "ST7789" : "ST7735";
+    var squarePanel = controller === "ST7789";
+    var width = Math.max(1, Math.round(Number(config.width) || (squarePanel ? 240 : WIDTH)));
+    var height = Math.max(1, Math.round(Number(config.height) || (squarePanel ? 240 : HEIGHT)));
     var framebuffer = new Uint16Array(width * height);
     var state = {
       width: width,
@@ -52,6 +50,8 @@
         bindingValid: false,
         selected: false,
         dataMode: false,
+        resetReleased: !squarePanel,
+        backlightOn: !squarePanel,
         reason: "power"
       }
     };
@@ -78,8 +78,10 @@
 
     function setConnection(next) {
       var previousPowered = state.connection.powered;
+      var previousReset = state.connection.resetReleased;
       state.connection = Object.assign({}, state.connection, next || {});
       if (previousPowered && !state.connection.powered) resetController(true);
+      if (squarePanel && previousReset && !state.connection.resetReleased) resetController(true);
       return getState();
     }
 
@@ -110,14 +112,14 @@
       if (bytes.length < 4) return false;
       var start = (bytes[0] << 8) | bytes[1];
       var end = (bytes[2] << 8) | bytes[3];
-      var columns = state.madctl & 0x20 ? height : width;
-      var rows = state.madctl & 0x20 ? width : height;
+      // Keep the actual register address. Off-glass RAM windows must not be
+      // clamped onto (and corrupt) the last visible row or column.
       if (command === 0x2a) {
-        state.columnStart = Math.round(clamp(start, 0, columns - 1));
-        state.columnEnd = Math.round(clamp(end, state.columnStart, columns - 1));
+        state.columnStart = start;
+        state.columnEnd = Math.max(start, end);
       } else {
-        state.rowStart = Math.round(clamp(start, 0, rows - 1));
-        state.rowEnd = Math.round(clamp(end, state.rowStart, rows - 1));
+        state.rowStart = start;
+        state.rowEnd = Math.max(start, end);
       }
       return true;
     }
@@ -181,7 +183,7 @@
 
     function transmit(value, dataMode) {
       var bytes = bytesOf(value);
-      if (!state.connection.powered || !state.connection.busConnected || !state.connection.bindingValid || !state.connection.selected) return 0;
+      if (!state.connection.powered || !state.connection.busConnected || !state.connection.bindingValid || !state.connection.selected || squarePanel && !state.connection.resetReleased) return 0;
       if (dataMode) return data(bytes);
       bytes.forEach(command);
       return bytes.length;
@@ -189,6 +191,7 @@
 
     function getState() {
       return {
+        controller: controller,
         width: width,
         height: height,
         initialized: state.initialized,
@@ -197,7 +200,7 @@
         madctl: state.madctl,
         pixelFormat: state.pixelFormat,
         inverse: state.inverse,
-        visible: Boolean(state.connection.powered && state.displayOn && !state.sleeping),
+        visible: Boolean(state.connection.powered && state.displayOn && !state.sleeping && (!squarePanel || state.connection.resetReleased && state.connection.backlightOn)),
         command: state.command,
         columnStart: state.columnStart,
         columnEnd: state.columnEnd,

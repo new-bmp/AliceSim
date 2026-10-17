@@ -94,7 +94,7 @@ test("screen components keep status and address metadata off the framebuffer", (
   assert.doesNotMatch(spiMarkup, /spi-display-status/);
   assert.doesNotMatch(styles, /\.oled-status|\.oled-address|\.spi-display-status/);
   assert.match(schematic, /screenNode\.setAttribute\("aria-label", "OLED 128×64/);
-  assert.match(schematic, /screenNode\.setAttribute\("aria-label", "ST7735 160×128 SPI/);
+  assert.match(schematic, /screenNode\.setAttribute\("aria-label", state\.controller \+ " " \+ state\.width/);
 });
 
 test("power overloads are visible on both the component and the schematic canvas", () => {

@@ -8,6 +8,8 @@ AliceSIM 是面向 STM32 的嵌入式仿真学习平台，当前目标器件为 
 
 十四套例程位于 [`tutorials/examples`](tutorials/README.md)。从电路、最小闪灯、C 数据与指针开始，加入非阻塞计时、消抖、EXTI、定时器中断、UART 命令与总线读手册实验，再进入 ADC、PWM、传感器、显示、DMA 和趋势记录。教材还介绍排错、实机下载与断点调试。配套课程可下载工程 JSON 与源码 ZIP；目录及维护方法见[教程说明](tutorials/README.md)。
 
+新增的 [ST7789 SPI 彩屏例程](examples/ST7789_SPI_Display/README.md) 提供 240×240 屏幕、配套 HAL 驱动和已接线的完整项目，演示文字、RGB 色块及局部刷新的动态进度条。
+
 ## 已实现
 
 - 导入本地 STM32 工程文件夹，保留 `Core`、`Drivers`、CMSIS、源码、头文件和相对目录结构
@@ -25,7 +27,7 @@ AliceSIM 是面向 STM32 的嵌入式仿真学习平台，当前目标器件为 
 - 元件参考标号、型号、实时数值和引脚名分层排版，低缩放时自动补偿文字尺寸，并对电源、MCU 与模块内部标签做避让
 - EDA 风格网络端子支持命名、旋转、保存与导入；同名端子按规范化网络名自动并网，可替代跨画布长导线
 - 元件库包含 STM32F103C8T6、基础无源器件、OLED、环境/运动/测量/存储器件、电位器和 N 沟道 MOSFET
-- 26 个 AliceSIM STM32 HAL 外设驱动均有独立 `.h/.c`、清单登记和一键加入工程入口，不再保留只有界面占位而没有安装文件的器件
+- 28 个 AliceSIM STM32 HAL 外设驱动均有独立 `.h/.c`、清单登记和一键加入工程入口
 - 自有驱动高层 API 可直接进入语义仿真：OLED 绘图/刷新会下发到 I²C 模型，光敏读取会走 ADC/数字 GPIO 网络
 - IOC、`main.h` GPIO 宏与 HAL 调用会共同生成物理引脚模型；源码与 IOC 冲突时明确报告，并以实际源码行为为准
 - 支持的 HAL 行为包括 GPIO 写入/翻转、`HAL_Delay`、UART 阻塞收发、变量赋值，以及 C 基本控制流：`if/else`、`while`、`for`、`switch/case/default`、`return`、`break`、`continue`
@@ -99,7 +101,7 @@ Android 开发需要 Rust 的 Android targets、Android Studio、SDK 与 NDK；�
 - `Ctrl+Shift+S`：导出完整 `.alice.json` 工程，用于备份、迁移或提交作业。
 - `Ctrl+Alt+S`：保存电路为独立的 `.alice-sch.json`。
 - `Ctrl+Alt+O`：打开已保存的电路；IOC 控制的 MCU 型号和当前有效 IO 不会被旧电路覆盖。
-- “项目 → 添加 AliceSIM 驱动”：可选择全部 26 个已登记器件驱动，复制到工程的 `Drivers/AliceSIM` 目录。默认保留已有同名源码，可显式选择更新。
+- “项目 → 添加 AliceSIM 驱动”：可选择全部 28 个已登记器件驱动，复制到工程的 `Drivers/AliceSIM` 目录。默认保留已有同名源码，可显式选择更新。
 
 驱动源码与使用示例见 [`Drivers/AliceSIM/README.md`](Drivers/AliceSIM/README.md)。
 

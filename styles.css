@@ -4099,6 +4099,7 @@ body.visio-theme::after {
   pointer-events: none;
 }
 .visio-theme .spi-display-canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+.visio-theme .st7789-live-screen { left: 18px; top: 14px; width: 124px; height: 124px; }
 .visio-theme .component-property-field textarea {
   width: 100%;
   min-height: 84px;

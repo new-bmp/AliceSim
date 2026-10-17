@@ -40,6 +40,15 @@
       "attribution": "AliceSIM 制作"
     },
     {
+      "id": "st7789",
+      "name": "AliceSIM ST7789 SPI 彩屏",
+      "description": "240×240 RGB565 彩屏，无整屏显存的填充、矩形、像素和缩放文本绘制。",
+      "componentTypes": ["st7789"],
+      "files": ["Drivers/AliceSIM/Inc/alicesim_st7789.h", "Drivers/AliceSIM/Src/alicesim_st7789.c"],
+      "halModules": ["SPI", "GPIO"],
+      "attribution": "AliceSIM 制作"
+    },
+    {
       "id": "dht11",
       "name": "AliceSIM DHT11 温湿度传感器",
       "description": "单总线温湿度读取、校验与超时处理。",

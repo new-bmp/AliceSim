@@ -222,6 +222,24 @@
       ],
       symbol: '<svg class="component-symbol spi-display-symbol" viewBox="0 0 144 108" aria-hidden="true"><rect x="8" y="5" width="128" height="98" rx="5"/><rect class="spi-display-bezel" x="19" y="13" width="106" height="80" rx="2"/><circle cx="72" cy="98" r="2"/></svg>'
     },
+    st7789: {
+      width: 160,
+      height: 168,
+      prefix: "TFT",
+      value: "ST7789 · 240×240",
+      title: "ST7789 SPI 方形彩屏",
+      pins: [
+        { name: "VCC", x: 0, y: 20, side: "left" },
+        { name: "DC", x: 0, y: 52, side: "left" },
+        { name: "RST", x: 0, y: 84, side: "left" },
+        { name: "GND", x: 0, y: 148, side: "left" },
+        { name: "SCK", x: 160, y: 20, side: "right" },
+        { name: "MOSI", x: 160, y: 52, side: "right" },
+        { name: "CS", x: 160, y: 84, side: "right" },
+        { name: "BL", x: 160, y: 116, side: "right" }
+      ],
+      symbol: '<svg class="component-symbol spi-display-symbol" viewBox="0 0 160 168" aria-hidden="true"><rect x="8" y="4" width="144" height="160" rx="5"/><rect class="spi-display-bezel" x="18" y="14" width="124" height="124" rx="2"/><circle cx="18" cy="153" r="3"/><circle cx="142" cy="153" r="3"/></svg>'
+    },
     lightSensor: {
       width: 104,
       height: 76,
@@ -310,6 +328,7 @@
     button: 0,
     oled: 0,
     spiDisplay: 0,
+    st7789: 0,
     lightSensor: 0,
     capacitor: 0
   };
@@ -1145,15 +1164,19 @@
     return String(props[first.key] == null ? first.value : props[first.key]) + (first.unit ? " " + first.unit : "");
   }
 
+  function isSpiDisplay(component) {
+    return Boolean(component && (component.type === "spiDisplay" || component.type === "st7789"));
+  }
+
   function ensureComponentDevice(component) {
-    if (!component || (component.type !== "oled" && component.type !== "spiDisplay" && component.type !== "lightSensor" && !catalogDefinition(component.type))) return null;
+    if (!component || (component.type !== "oled" && !isSpiDisplay(component) && component.type !== "lightSensor" && !catalogDefinition(component.type))) return null;
     var existing = schematicState.devices.get(component.id);
     if (existing) return existing;
     var device = null;
     if (component.type === "oled" && window.AliceOledDevice && typeof window.AliceOledDevice.create === "function") {
       device = window.AliceOledDevice.create({ address: component.oledAddress });
-    } else if (component.type === "spiDisplay" && window.AliceSpiDisplayDevice && typeof window.AliceSpiDisplayDevice.create === "function") {
-      device = window.AliceSpiDisplayDevice.create({ width: 160, height: 128 });
+    } else if (isSpiDisplay(component) && window.AliceSpiDisplayDevice && typeof window.AliceSpiDisplayDevice.create === "function") {
+      device = window.AliceSpiDisplayDevice.create({ controller: component.type === "st7789" ? "ST7789" : "ST7735" });
     } else if (component.type === "lightSensor" && window.AliceLightSensorDevice && typeof window.AliceLightSensorDevice.create === "function") {
       device = window.AliceLightSensorDevice.create({
         lux: component.lux,
@@ -1381,25 +1404,40 @@
     target.classList.toggle("has-error", Boolean(runtime.error));
   }
 
-  function createSpiDisplayLiveMarkup(body) {
+  function createSpiDisplayLiveMarkup(component, body) {
+    var squarePanel = component.type === "st7789";
+    var label = squarePanel ? "ST7789 240×240 SPI" : "ST7735 160×128 SPI";
     var screen = document.createElement("div");
     screen.className = "spi-display-live-screen";
-    screen.setAttribute("aria-label", "ST7735 160×128 SPI 显示区域");
+    if (squarePanel) screen.classList.add("st7789-live-screen");
+    screen.setAttribute("aria-label", label + " 显示区域");
     var canvas = document.createElement("canvas");
     canvas.className = "spi-display-canvas";
-    canvas.width = 160;
-    canvas.height = 128;
-    canvas.setAttribute("aria-label", "ST7735 160×128 SPI 屏幕显示区域");
+    canvas.width = squarePanel ? 240 : 160;
+    canvas.height = squarePanel ? 240 : 128;
+    canvas.setAttribute("aria-label", label + " 屏幕显示区域");
     screen.appendChild(canvas);
     body.appendChild(screen);
   }
 
-  function updateSpiDisplayVisual(component, element) {
-    if (!component || component.type !== "spiDisplay") return;
+  function updateSpiDisplayVisual(component, element, renderNow) {
+    if (!isSpiDisplay(component)) return;
     var target = element || schematicState.componentElements.get(component.id);
     var device = componentDevice(component);
     var canvas = target && target.querySelector(".spi-display-canvas");
     if (!target || !canvas || !device || typeof device.getState !== "function") return;
+    // A fill reaches the controller in hundreds of small HAL transfers. Draw
+    // once per browser frame while replaying every byte into device RAM.
+    if (!renderNow && typeof window.requestAnimationFrame === "function") {
+      if (!target.spiRenderPending) {
+        target.spiRenderPending = true;
+        window.requestAnimationFrame(function () {
+          target.spiRenderPending = false;
+          updateSpiDisplayVisual(component, target, true);
+        });
+      }
+      return;
+    }
     var state = device.getState();
     var context = canvas.getContext("2d", { alpha: false });
     context.imageSmoothingEnabled = false;
@@ -1418,9 +1456,9 @@
       context.putImageData(image, 0, 0);
     }
     var connection = state.connection || {};
-    var spiStateLabel = state.visible ? "DISPLAY ON" : (!connection.powered ? "NO POWER" : (!connection.busConnected || !connection.bindingValid ? "NO SPI" : (!connection.selected ? "CS HIGH" : (state.initialized ? "DISPLAY OFF" : "WAIT INIT"))));
+    var spiStateLabel = state.visible ? "DISPLAY ON" : (!connection.powered ? "NO POWER" : (!connection.busConnected || !connection.bindingValid ? "NO SPI" : (component.type === "st7789" && !connection.resetReleased ? "RESET" : (component.type === "st7789" && !connection.backlightOn ? "BACKLIGHT OFF" : (state.initialized ? "DISPLAY OFF" : "WAIT INIT")))));
     var screenNode = target.querySelector(".spi-display-live-screen");
-    if (screenNode) screenNode.setAttribute("aria-label", "ST7735 160×128 SPI · " + spiStateLabel);
+    if (screenNode) screenNode.setAttribute("aria-label", state.controller + " " + state.width + "×" + state.height + " SPI · " + spiStateLabel);
     target.classList.toggle("is-powered", Boolean(connection.powered));
     target.classList.toggle("is-bus-connected", Boolean(connection.busConnected));
     target.classList.toggle("is-display-on", Boolean(state.visible));
@@ -1611,8 +1649,8 @@
       body.classList.add("mcu-simple-body");
     } else if (model.type === "oled") {
       createOledLiveMarkup(model, body);
-    } else if (model.type === "spiDisplay") {
-      createSpiDisplayLiveMarkup(body);
+    } else if (isSpiDisplay(model)) {
+      createSpiDisplayLiveMarkup(model, body);
     } else if (model.type === "adcSource") {
       createAdcSourceLiveMarkup(model, body);
     } else if (model.type === "uartSender") {
@@ -2134,7 +2172,7 @@
       } else if (component.type === "oled") {
         var oledDevice = componentDevice(component);
         compiled.oleds.push({ componentId: component.id, ref: component.ref, state: oledDevice ? oledDevice.getState() : null });
-      } else if (component.type === "spiDisplay") {
+      } else if (isSpiDisplay(component)) {
         var spiDisplayDevice = componentDevice(component);
         compiled.spiDisplays.push({ componentId: component.id, ref: component.ref, state: spiDisplayDevice ? spiDisplayDevice.getState() : null });
       } else if (component.type === "lightSensor") {
@@ -2336,7 +2374,7 @@
           reason: !powered ? "power" : (!busConnected ? "bus-disconnected" : (!binding ? "ioc-pin-mismatch" : ""))
         });
         if (changed) updateOledVisual(component);
-      } else if (component.type === "spiDisplay") {
+      } else if (isSpiDisplay(component)) {
         var spiScreen = componentDevice(component);
         if (!spiScreen) return;
         var spiVccNet = netForEndpoint(compiled, { componentId: component.id, pin: "VCC" });
@@ -2345,16 +2383,21 @@
         var mosiNet = netForEndpoint(compiled, { componentId: component.id, pin: "MOSI" });
         var csNet = netForEndpoint(compiled, { componentId: component.id, pin: "CS" });
         var dcNet = netForEndpoint(compiled, { componentId: component.id, pin: "DC" });
+        var resetNet = netForEndpoint(compiled, { componentId: component.id, pin: "RST" });
+        var backlightNet = component.type === "st7789" ? netForEndpoint(compiled, { componentId: component.id, pin: "BL" }) : null;
         var spiBinding = spis.find(function (spi) {
           return netHasMcuPin(sckNet, spi.sckPin) && netHasMcuPin(mosiNet, spi.mosiPin);
         }) || null;
         var spiVcc = spiVccNet && !spiVccNet.analogConflict ? spiVccNet.voltage : null;
         var spiGnd = spiGndNet && !spiGndNet.analogConflict ? spiGndNet.voltage : null;
         var spiRail = spiVcc != null && spiGnd != null ? spiVcc - spiGnd : 0;
-        var spiPowered = netHasExternalEndpoint(spiVccNet, component.id) && netHasExternalEndpoint(spiGndNet, component.id) && spiRail >= 2.4 && spiRail <= 5.5;
+        var spiPowered = netHasExternalEndpoint(spiVccNet, component.id) && netHasExternalEndpoint(spiGndNet, component.id) && spiRail >= 2.4 && spiRail <= (component.type === "st7789" ? 3.6 : 5.5);
         var spiBusConnected = netHasExternalEndpoint(sckNet, component.id) && netHasExternalEndpoint(mosiNet, component.id);
         var csLevel = csNet && !csNet.conflict ? csNet.level : null;
         var dcLevel = dcNet && !dcNet.conflict ? dcNet.level : null;
+        var resetReleased = component.type !== "st7789" || Boolean(resetNet && !resetNet.conflict && resetNet.level === 1);
+        var backlightOn = component.type !== "st7789" || Boolean(backlightNet && !backlightNet.conflict && backlightNet.level === 1);
+        var controlsConnected = component.type !== "st7789" || netHasExternalEndpoint(csNet, component.id) && netHasExternalEndpoint(dcNet, component.id) && netHasExternalEndpoint(resetNet, component.id);
         component.spiBinding = spiBinding ? {
           handle: spiBinding.handle || "",
           instance: spiBinding.instance || "",
@@ -2365,9 +2408,11 @@
         var spiChanged = setDeviceConnectionIfChanged(spiScreen, {
           powered: spiPowered,
           busConnected: spiBusConnected,
-          bindingValid: Boolean(spiBinding),
+          bindingValid: Boolean(spiBinding) && controlsConnected,
           selected: csLevel === 0,
           dataMode: dcLevel === 1,
+          resetReleased: resetReleased,
+          backlightOn: backlightOn,
           vccLevel: spiVcc,
           gndLevel: spiGnd,
           sckPin: spiBinding && spiBinding.sckPin || "",
@@ -2679,16 +2724,16 @@
     var bytes = i2cBytes(event.bytes != null ? event.bytes : (event.buffer != null ? event.buffer : event.data));
     compileNetlist();
     schematicState.components.forEach(function (component) {
-      if (["spiDisplay", "max7219", "ws2812", "w25qxx"].indexOf(component.type) < 0) return;
+      if (["spiDisplay", "st7789", "max7219", "ws2812", "w25qxx"].indexOf(component.type) < 0) return;
       var device = componentDevice(component);
       var state = device && device.getState();
       var bindingMatches = descriptor && component.spiBinding && peripheralMatches(descriptor, component.spiBinding.instance || component.spiBinding.handle);
-      var ready = component.type !== "spiDisplay" ? state && state.ready : state && state.connection.powered && state.connection.busConnected && state.connection.bindingValid;
+      var ready = !isSpiDisplay(component) ? state && state.ready : state && state.connection.powered && state.connection.busConnected && state.connection.bindingValid && (component.type !== "st7789" || state.connection.resetReleased);
       if (!device || !ready || !state.connection.selected || !bindingMatches) return;
       var flashResponse = component.type === "w25qxx" ? device.transmit(Object.assign({ timeMs: schematicState.time }, event, { bytes: bytes })) : null;
       if (flashResponse && !flashResponse.accepted) return;
       var byteCount = flashResponse ? flashResponse.byteCount : component.type === "ws2812" ? device.transmitSpi(bytes, Number(descriptor.baudRate)) : device.transmit(bytes, Boolean(state.connection.dataMode));
-      if (component.type === "spiDisplay") updateSpiDisplayVisual(component);
+      if (isSpiDisplay(component)) updateSpiDisplayVisual(component);
       else updateCatalogVisual(component);
       accepted.push({ componentId: component.id, ref: component.ref, byteCount: byteCount, dataMode: Boolean(state.connection.dataMode) });
     });
@@ -2921,7 +2966,7 @@
         });
         return;
       }
-      if (component.type === "spiDisplay" || component.type === "max7219" || (component.type === "ws2812" && !connection.timer) || component.type === "w25qxx") {
+      if (isSpiDisplay(component) || component.type === "max7219" || (component.type === "ws2812" && !connection.timer) || component.type === "w25qxx") {
         var csNet = netForEndpoint(compiled, { componentId: component.id, pin: "CS" });
         var dcNet = netForEndpoint(compiled, { componentId: component.id, pin: "DC" });
         snapshot.spi.push({
@@ -2934,9 +2979,12 @@
           csPin: externalMcuPinOnNet(csNet, component.id),
           noChipSelect: component.type === "ws2812",
           dcPin: externalMcuPinOnNet(dcNet, component.id),
+          resetRequired: component.type === "st7789",
+          resetPin: component.type === "st7789" ? externalMcuPinOnNet(netForEndpoint(compiled, { componentId: component.id, pin: "RST" }), component.id) : "",
+          resetReleased: connection.resetReleased,
           selected: Boolean(connection.selected),
           dataMode: Boolean(connection.dataMode),
-          ready: component.type !== "spiDisplay" ? Boolean(state.ready) : Boolean(connection.powered && connection.busConnected && connection.bindingValid)
+          ready: !isSpiDisplay(component) ? Boolean(state.ready) : Boolean(connection.powered && connection.busConnected && connection.bindingValid)
         });
         return;
       }
@@ -4910,13 +4958,13 @@
     var container = schematicNodes.componentAdvancedProperties;
     if (!container) return;
     container.replaceChildren();
-    container.hidden = component.type !== "oled" && component.type !== "spiDisplay" && component.type !== "adcSource" && component.type !== "uartSender" && component.type !== "lightSensor" && !catalogDefinition(component.type);
+    container.hidden = component.type !== "oled" && !isSpiDisplay(component) && component.type !== "adcSource" && component.type !== "uartSender" && component.type !== "lightSensor" && !catalogDefinition(component.type);
     if (component.type === "oled") {
       container.innerHTML = '<label class="component-property-field"><span>I²C 地址（7 位）</span><input id="componentOledAddressInput" type="text" inputmode="text" maxlength="4" value="0x' + component.oledAddress.toString(16).toUpperCase().padStart(2, "0") + '" /></label><div class="component-property-readout">只有 VCC/GND 正确供电、SCL/SDA 与 IOC 中同一 I²C 实例匹配时，HAL 写入才会显示。</div>';
       return;
     }
-    if (component.type === "spiDisplay") {
-      container.innerHTML = '<div class="component-property-readout">ST7735 · 160×128 · RGB565。连接 VCC/GND、SCK/MOSI，并用 CS 低电平选中、DC 区分命令与数据；HAL_SPI_Transmit 会实时写入屏幕。</div>';
+    if (isSpiDisplay(component)) {
+      container.innerHTML = '<div class="component-property-readout">' + (component.type === "st7789" ? 'ST7789 · 240×240 · RGB565。VCC 接 3.3V，RST 高电平运行，BL 高电平点亮背光。可安装 AliceSIM ST7789 驱动，支持文字、像素与矩形。' : 'ST7735 · 160×128 · RGB565。') + '连接 VCC/GND、SCK/MOSI，并用 CS 低电平选中、DC 区分命令与数据；HAL_SPI_Transmit 会实时写入屏幕。</div>';
       return;
     }
     if (component.type === "adcSource") {
@@ -5180,7 +5228,7 @@
     modal.querySelector("#componentTypeInput").value = componentDefinitions[component.type].title;
     schematicNodes.componentValueInput.value = component.value;
     schematicNodes.componentValueInput.placeholder = componentValuePlaceholder(component.type);
-    schematicNodes.componentValueInput.readOnly = component.type === "oled" || component.type === "spiDisplay" || component.type === "adcSource" || component.type === "uartSender" || component.type === "lightSensor" || component.type === "voltageProbe" || component.type === "currentProbe" || Boolean(catalogDefinition(component.type));
+    schematicNodes.componentValueInput.readOnly = component.type === "oled" || isSpiDisplay(component) || component.type === "adcSource" || component.type === "uartSender" || component.type === "lightSensor" || component.type === "voltageProbe" || component.type === "currentProbe" || Boolean(catalogDefinition(component.type));
     schematicNodes.componentValueInput.setAttribute("aria-invalid", "false");
     renderAdvancedProperties(component);
     schematicNodes.componentRotationSelect.value = String(normalizeRotation(component.rotation));
@@ -5804,7 +5852,7 @@
       if (component.type === "oled" && device && typeof device.reset === "function") {
         device.reset({ address: component.oledAddress });
         updateOledVisual(component);
-      } else if (component.type === "spiDisplay" && device && typeof device.reset === "function") {
+      } else if (isSpiDisplay(component) && device && typeof device.reset === "function") {
         device.reset();
         updateSpiDisplayVisual(component);
       } else if (component.type === "uartSender") {

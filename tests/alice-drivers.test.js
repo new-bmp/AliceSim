@@ -19,9 +19,9 @@ test("frontend registrations, manifest entries and installable files stay in syn
 
 test("peripheral registry exposes one independently installable driver per active component", () => {
   const drivers = AlicePeripheralDrivers.list();
-  assert.equal(drivers.length, 27);
-  assert.deepEqual(drivers.slice(0, 7).map((driver) => driver.id), [
-    "ssd1306", "light-sensor", "dht11", "hcsr04", "sg90", "buzzer", "tm1637"
+  assert.equal(drivers.length, 28);
+  assert.deepEqual(drivers.slice(0, 8).map((driver) => driver.id), [
+    "ssd1306", "light-sensor", "st7789", "dht11", "hcsr04", "sg90", "buzzer", "tm1637"
   ]);
   assert.deepEqual(drivers[0].componentTypes, ["oled"]);
   assert.deepEqual(drivers[1].componentTypes, ["lightSensor"]);
@@ -83,7 +83,7 @@ test("getFiles for all peripherals includes the umbrella header", async () => {
   });
   assert.ok(Object.hasOwn(files, "Drivers/AliceSIM/Inc/alicesim_peripherals.h"));
   assert.ok(Object.hasOwn(files, "Drivers/AliceSIM/Inc/alicesim_timing.h"));
-  assert.equal(Object.keys(files).length, 56);
+  assert.equal(Object.keys(files).length, 58);
 });
 
 test("previously planned drivers now resolve to installable source files", async () => {

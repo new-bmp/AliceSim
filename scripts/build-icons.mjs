@@ -26,19 +26,21 @@ try {
   await writeFile(backgroundSource, svg.replace(surface, background).replace(symbol, ""));
   await mkdir(pwa, { recursive: true });
   run(source, "--output", pwa, ...[16, 32, 192, 512, 1024].flatMap(size => ["--png", String(size)]));
+  await cp(path.join(pwa, "512x512.png"), path.join(pwa, "preview.png"));
 
   const opaqueOutput = path.join(temporary, "opaque");
   run(opaqueSource, "--output", opaqueOutput, "--png", "180", "--png", "512");
+  await cp(path.join(opaqueOutput, "180x180.png"), path.join(pwa, "180x180.png"));
   await cp(path.join(opaqueOutput, "180x180.png"), path.join(pwa, "apple-touch-icon.png"));
   await cp(path.join(opaqueOutput, "512x512.png"), path.join(pwa, "maskable-512x512.png"));
 
   const manifest = path.join(temporary, "icon.json");
   await writeFile(manifest, JSON.stringify({
     default: source,
-    bg_color: "#2E56D4",
+    bg_color: "#19355B",
     android_bg: backgroundSource,
     android_fg: foregroundSource,
-    android_fg_scale: 100
+    android_fg_scale: 75
   }));
   run(manifest, "--output", native);
 
@@ -47,10 +49,8 @@ try {
   run(opaqueSource, "--output", appleOutput);
   await cp(path.join(appleOutput, "ios"), path.join(native, "ios"), { recursive: true });
 
-  // Mobile project generation reads these standard resource directories.
-  for (const platform of ["android", "ios"]) {
-    await cp(path.join(native, platform), path.join(root, "src-tauri", "icons", platform), { recursive: true });
-  }
+  // Keep standard desktop and mobile resource paths in sync with the configured set.
+  await cp(native, path.join(root, "src-tauri", "icons"), { recursive: true });
   console.log("AliceSIM icons exported for web, Windows, macOS, Android and iOS.");
 } finally {
   await rm(temporary, { recursive: true, force: true });

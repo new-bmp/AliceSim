@@ -106,13 +106,13 @@ class AliceSIMPeripheralDriverTests(unittest.TestCase):
         manifest = json.loads((DRIVER_ROOT / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(2, manifest["schemaVersion"])
         expected_ids = {
-            "ssd1306", "light-sensor", "dht11", "hcsr04", "sg90", "buzzer", "tm1637",
+            "ssd1306", "light-sensor", "st7789", "dht11", "hcsr04", "sg90", "buzzer", "tm1637",
             "bmp280", "mpu6050", "bh1750", "sht30", "ds3231", "pcf8574", "pca9685",
             "ina219", "ds18b20", "max7219", "w25qxx", "ws2812", "rotary-encoder",
             "potentiometer", "relay", "pir", "mq2", "joystick", "mosfet", "dc-dc-converter",
         }
         self.assertEqual(expected_ids, {item["id"] for item in manifest["drivers"]})
-        self.assertEqual({"oled", "lightSensor", "dht11", "hcsr04", "sg90", "buzzer", "tm1637", "bmp280", "mpu6050", "bh1750", "sht30", "ds3231", "pcf8574", "pca9685", "ina219", "ds18b20", "max7219", "w25qxx", "ws2812", "rotaryEncoder", "potentiometer", "relay", "pir", "mq2", "joystick", "mosfet", "dcDcConverter"}, {
+        self.assertEqual({"oled", "lightSensor", "st7789", "dht11", "hcsr04", "sg90", "buzzer", "tm1637", "bmp280", "mpu6050", "bh1750", "sht30", "ds3231", "pcf8574", "pca9685", "ina219", "ds18b20", "max7219", "w25qxx", "ws2812", "rotaryEncoder", "potentiometer", "relay", "pir", "mq2", "joystick", "mosfet", "dcDcConverter"}, {
             component
             for driver in manifest["drivers"]
             for component in driver["componentTypes"]

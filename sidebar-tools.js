@@ -66,7 +66,7 @@
   const CATEGORIES = {
     basic: ["vcc", "ground", "netTerminal", "voltageProbe", "currentProbe", "resistor", "capacitor", "dcDcConverter", "mosfet"],
     input: ["adcSource", "button", "lightSensor", "dht11", "hcsr04", "bmp280", "mpu6050", "bh1750", "sht30", "ina219", "ds18b20", "rotaryEncoder", "potentiometer", "pir", "mq2", "joystick"],
-    display: ["led", "oled", "spiDisplay", "sg90", "buzzer", "tm1637", "max7219", "ws2812", "relay"]
+    display: ["led", "oled", "spiDisplay", "st7789", "sg90", "buzzer", "tm1637", "max7219", "ws2812", "relay"]
   };
   const CATEGORY_LABELS = { basic: "基础与电源", input: "输入与传感器", display: "显示与输出", bus: "通信与扩展" };
   let mounted = false;

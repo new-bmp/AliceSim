@@ -85,3 +85,47 @@ test("ST7735 COLMOD RGB666 accepts split pixel data and switches back to RGB565"
   register(display, 0x2c, [0x00, 0x1f]);
   assert.equal(display.getFramebuffer()[0], 0x001f);
 });
+
+test("ST7789 has a 240 square framebuffer and accepts real RGB565 register writes", () => {
+  const display = spiDisplay.create({ controller: "ST7789" });
+  display.setConnection({ powered: true, busConnected: true, bindingValid: true, selected: true, resetReleased: true, backlightOn: true });
+  register(display, 0x11);
+  register(display, 0x29);
+  register(display, 0x3a, [0x55]);
+  register(display, 0x2a, [0, 239, 0, 239]);
+  register(display, 0x2b, [0, 239, 0, 239]);
+  register(display, 0x2c, [0xf8]);
+  display.transmit([0], true);
+  assert.equal(display.getState().controller, "ST7789");
+  assert.equal(display.getState().width, 240);
+  assert.equal(display.getState().height, 240);
+  assert.equal(display.getFramebuffer()[239 * 240 + 239], 0xf800);
+  assert.equal(display.getState().visible, true);
+});
+
+test("ST7789 backlight blanks the glass without losing RAM and reset holds the controller", () => {
+  const display = spiDisplay.create({ controller: "ST7789" });
+  display.setConnection({ powered: true, busConnected: true, bindingValid: true, selected: true, resetReleased: true, backlightOn: true });
+  register(display, 0x11);
+  register(display, 0x29);
+  register(display, 0x2c, [0x07, 0xe0]);
+  display.setConnection({ backlightOn: false });
+  assert.equal(display.getState().visible, false);
+  assert.equal(display.getFramebuffer()[0], 0x07e0);
+  display.setConnection({ backlightOn: true });
+  assert.equal(display.getState().visible, true);
+  display.setConnection({ resetReleased: false });
+  assert.equal(display.transmit([0x11, 0x29], false), 0);
+  assert.equal(display.getState().visible, false);
+  assert.equal(display.getFramebuffer()[0], 0);
+  display.setConnection({ resetReleased: true });
+  assert.equal(display.getState().visible, false, "reset needs a fresh initialization sequence");
+});
+
+test("off-glass SPI display addresses never overwrite the last visible pixel", () => {
+  const display = connectedDisplay();
+  register(display, 0x2a, [0, 100, 0, 101]);
+  register(display, 0x2b, [0, 100, 0, 101]);
+  register(display, 0x2c, [0xff, 0xff]);
+  assert.ok(Array.from(display.getFramebuffer()).every(pixel => pixel === 0));
+});

@@ -14,7 +14,7 @@ AliceSIM 优先选择成熟、MIT 许可的 [libdriver](https://github.com/libdr
 
 ## 目录
 
-- 显示与输出：SSD1306、TM1637、MAX7219、WS2812B、SG90、蜂鸣器、继电器、MOSFET。
+- 显示与输出：SSD1306、ST7789 SPI 彩屏、TM1637、MAX7219、WS2812B、SG90、蜂鸣器、继电器、MOSFET。
 - 电源：可调 DC-DC 转换模块（输出电压、使能、额定电流和过载状态）。
 - 环境与测量：光敏、DHT11、BMP280、BH1750、SHT30、INA219、MQ-2、PIR、HC-SR04。
 - 运动与输入：MPU6050、EC11、电位器、双轴摇杆。
@@ -50,6 +50,36 @@ AliceSIM_SSD1306_Update(&display);
 
 地址参数使用 7 位地址（通常是 `0x3C`），驱动内部会转换成 STM32 HAL 所需的左移地址。显存大小为 1024 字节。内置 5×7 字体支持数字、英文字母和常用标点；小写字母按大写字形显示。
 
+## ST7789 SPI 彩屏
+
+适用规格是 240×240、RGB565、零偏移的 ST7789 模块。驱动由 AliceSIM 编写，使用标准 `HAL_SPI_Transmit()` 和 GPIO 发送真实的 CASET、RASET、RAMWR 指令及像素数据，不依赖仿真专用显示接口。
+
+CubeMX 中将 SPI1 配为主机、8 位、MSB first、软件 NSS、CPOL=Low / CPHA=1 Edge（Mode 0）。示例中 PA5 接 SCK、PA7 接 MOSI/SDA；PA4、PB0、PB1 分别作为推挽输出接 CS、DC、RST。屏幕接 3.3V 并共地，BL 接 3.3V；MISO 不需要连接。CS 和 RST 低有效，DC 低为命令、高为数据。
+
+```c
+#include "alicesim_st7789.h"
+
+AliceSIM_ST7789 screen;
+
+HAL_StatusTypeDef status = AliceSIM_ST7789_Init(&screen, &hspi1,
+  GPIOA, GPIO_PIN_4, GPIOB, GPIO_PIN_0, GPIOB, GPIO_PIN_1, 100);
+if (status == HAL_OK) {
+  status = AliceSIM_ST7789_Fill(&screen, ALICESIM_ST7789_COLOR_BLACK);
+}
+if (status == HAL_OK) {
+  status = AliceSIM_ST7789_DrawString(&screen, 12, 12, "SPI DISPLAY", 2,
+    ALICESIM_ST7789_COLOR_WHITE, ALICESIM_ST7789_COLOR_BLACK);
+}
+if (status == HAL_OK) {
+  status = AliceSIM_ST7789_FillRect(&screen, 12, 48, 120, 16,
+    ALICESIM_ST7789_COLOR_CYAN);
+}
+```
+
+`Fill()`、`FillRect()`、`DrawPixel()` 和 `DrawString()` 直接更新屏幕，不需要另调 `Update()`。坐标范围为 0～239，矩形和文本会裁剪越界部分；空矩形不发送数据。`DrawString()` 使用 6×8 字符单元、1～8 倍缩放，带前景色和背景色；支持数字、英文字母、常用标点与换行，小写按大写显示，其他字形显示问号。所有接口返回 `HAL_StatusTypeDef`，通信失败立即停止后续传输并释放 CS。
+
+驱动不申请 115200 字节的整屏显存；最大像素缓冲为栈上的 128 字节，适合 STM32F103C8T6 的 RAM。填充每发送 64 个数据块让出 1 ms，文本每字符让出 1 ms，放大的字符每 8 行也让出 1 ms，避免长绘制连续占用主循环。屏幕刷新会消耗 SPI 带宽，动态效果应只更新发生变化的矩形，不要在每次循环中整屏重绘。此版本不提供旋转、中文字体、DMA 或带面板偏移的其他分辨率配置；真实模块若采用不同像素偏移、扫描方向或反色设置，需要按面板规格调整初始化。
+
 ## 光敏传感器
 
 ```c
@@ -78,10 +108,10 @@ const files = await AlicePeripheralDrivers.getFiles(["ssd1306", "light-sensor"])
 await AlicePeripheralDrivers.install("ssd1306");
 ```
 
-`getFiles()` 返回 `{ [工程相对路径]: 源码文本 }`。`install()` 优先调用工作区的增量 `addFiles()` 接口；当前工作区没有该接口时，会合并现有文件后重新载入工程，并默认跳过同名文件。当前清单包含 27 个可安装驱动和 56 个去重后的全量安装文件（含总入口与共用计时头）。
+`getFiles()` 返回 `{ [工程相对路径]: 源码文本 }`。`install()` 优先调用工作区的增量 `addFiles()` 接口；当前工作区没有该接口时，会合并现有文件后重新载入工程，并默认跳过同名文件。当前清单包含 28 个可安装驱动和 58 个去重后的全量安装文件（含总入口与共用计时头）。
 
 ## AliceSIM 仿真支持
 
 AliceSIM 会把 `main()` 中直接出现的 `AliceSIM_SSD1306_*` 与 `AliceSIM_LightSensor_*` 调用降低为高层仿真操作：OLED 绘图会写入运行时的 1024 字节显存，`Update()` 再通过现有 I²C 网络发送到已接线的 OLED；光敏读取会通过 ADC/数字网络采样 AO 和 DO。因此同一套 API 可以同时用于真实 STM32 HAL 工程和浏览器电路仿真。
 
-当前模型构建器不会自动内联任意层级的用户自定义 C 包装函数。若希望浏览器仿真观察到驱动行为，请让这些驱动 API 直接出现在 `main()` 或 `main()` 的 `while` 主循环中；真实编译和烧录不受此限制。
+ST7789 安装后会把驱动源码加入工程，编译器执行其中的普通 C 函数并输出实际 GPIO/SPI 操作；可以在自定义函数中封装调用。显示内容取决于电路接线、供电与控制器收到的指令，不会因调用某个绘图 API 就凭空出现。
