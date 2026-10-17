@@ -1,4 +1,6 @@
+import threading
 import unittest
+import urllib.request
 from pathlib import Path
 
 import server
@@ -40,6 +42,30 @@ class ServerProjectLimitTests(unittest.TestCase):
         arguments = server.parse_arguments(["--open-browser", "--windowed-browser"])
         self.assertTrue(arguments.open_browser)
         self.assertFalse(arguments.browser_fullscreen)
+
+    def test_local_preview_port_can_call_the_hal_api(self) -> None:
+        httpd = server.AliceSIMHTTPServer(("127.0.0.1", 0), server.AliceSIMHandler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            url = f"http://127.0.0.1:{httpd.server_address[1]}/api/health"
+            request = urllib.request.Request(url, headers={"Origin": "http://127.0.0.1:4175"})
+            with urllib.request.urlopen(request, timeout=5) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.headers["Access-Control-Allow-Origin"], "http://127.0.0.1:4175")
+
+            options = urllib.request.Request(
+                url,
+                method="OPTIONS",
+                headers={"Origin": "http://127.0.0.1:4175", "Access-Control-Request-Method": "POST"},
+            )
+            with urllib.request.urlopen(options, timeout=5) as response:
+                self.assertEqual(response.status, 204)
+                self.assertEqual(response.headers["Access-Control-Allow-Methods"], "GET, POST, OPTIONS")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=5)
 
 
 if __name__ == "__main__":

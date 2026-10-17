@@ -107,6 +107,8 @@ def fixture_files(main_h: str = MAIN_H, main_c: str = MAIN_C):
 def walk_operations(operations):
     for operation in operations:
         yield operation
+        if operation["op"] == "expression" and operation.get("expression", {}).get("kind") == "inlineCall":
+            yield from walk_operations(operation["expression"]["operations"])
         if operation["op"] == "while":
             yield from walk_operations(operation["body"])
         elif operation["op"] == "for":
@@ -542,11 +544,17 @@ int main(void)
 
         self.assertEqual("hadc1", adc_start["adc"])
         self.assertEqual("hadc1", adc_value["adc"])
-        self.assertEqual("raw_value", adc_value["target"])
-        self.assertEqual({"kind": "variable", "name": "raw_value"}, display_assignment["value"])
+        self.assertEqual("dereference", adc_value["target"]["kind"])
+        bindings = {item["target"]: item for item in operations if item["op"] == "assign" and isinstance(item.get("target"), str)}
+        raw_binding = bindings[adc_value["target"]["pointer"]["name"]]
+        self.assertEqual("uint32_t*", raw_binding["cType"])
+        self.assertEqual({"kind": "addressOf", "value": {"kind": "variable", "name": "raw_value"}}, raw_binding["value"])
+        display_binding = bindings[display_assignment["value"]["name"]]
+        outer_binding = bindings[display_binding["value"]["name"]]
+        self.assertEqual({"kind": "variable", "name": "raw_value"}, outer_binding["value"])
         self.assertEqual("huart2", uart_send["uart"])
-        self.assertEqual("tx_data", uart_send["buffer"])
-        self.assertEqual(8, uart_send["length"])
+        self.assertEqual({"kind": "variable", "name": "tx_data"}, bindings[uart_send["buffer"]]["value"])
+        self.assertEqual(8, bindings[uart_send["length"]["name"]]["value"]["value"])
 
     def test_local_multi_declarations_returning_helpers_and_source_macros_are_lowered(self) -> None:
         source = r'''
@@ -584,7 +592,7 @@ int main(void)
             if item["op"] == "assign" and item.get("target") == "millivolts" and item["value"].get("kind") == "literal"
         )
         converted = [item for item in operations if item["op"] == "assign" and item.get("target") == "millivolts"][-1]
-        buffer = next(item for item in operations if item["op"] == "assign" and item.get("target") == "buf")
+        buffer = next(item for item in operations if item["op"] == "assign" and str(item.get("target", "")).endswith("_buf"))
         formatted = next(item for item in operations if item["op"] == "formatString")
 
         self.assertEqual(2048, raw_initializer["value"]["value"])
@@ -593,11 +601,13 @@ int main(void)
         self.assertEqual("Convert_Raw_To_mV_x10", converted["value"]["function"])
         returned = converted["value"]["operations"][-1]
         self.assertEqual("return", returned["op"])
-        self.assertEqual("div", returned["value"]["kind"])
-        self.assertEqual(3300, returned["value"]["left"]["left"]["right"]["value"])
-        self.assertEqual(4095, returned["value"]["right"]["value"])
+        self.assertEqual(("cast", "uint16_t"), (returned["value"]["kind"], returned["value"]["cType"]))
+        quotient = returned["value"]["value"]
+        self.assertEqual("div", quotient["kind"])
+        self.assertEqual(3300, quotient["left"]["left"]["right"]["value"])
+        self.assertEqual(4095, quotient["right"]["value"])
         self.assertEqual(32, len(buffer["value"]))
-        self.assertEqual("buf", formatted["buffer"])
+        self.assertEqual(buffer["target"], formatted["buffer"])
 
     def test_adc_poll_call_inside_a_condition_is_lowered_as_a_runtime_expression(self) -> None:
         source = r'''
@@ -886,8 +896,11 @@ int main(void)
         self.assertEqual(("oled_line", "sizeOf"), (formats[0]["buffer"], formats[0]["capacity"]["kind"]))
         self.assertEqual("report_length", formats[1]["resultTarget"])
         self.assertEqual("uart_report", transmit["buffer"])
-        self.assertEqual("stringLength", transmit["length"]["kind"])
-        self.assertEqual("uart_report", transmit["length"]["value"]["name"])
+        self.assertEqual(("cast", "uint16_t"), (transmit["length"]["kind"], transmit["length"]["cType"]))
+        length = transmit["length"]["value"]
+        self.assertEqual("stringLength", length["kind"])
+        self.assertEqual("char*", length["value"]["cType"])
+        self.assertEqual("uart_report", length["value"]["value"]["name"])
 
     def test_snprintf_preserves_an_addressed_destination_offset(self) -> None:
         source = r'''
@@ -1399,6 +1412,29 @@ int main(void)
         status = next(item for item in operations if item["op"] == "adcStart")
         self.assertEqual("start_status", status["resultTarget"])
 
+    def test_cmsis_irq_mask_calls_are_explicit_operations_and_mask_is_a_value(self) -> None:
+        source = r'''
+uint32_t previous_mask = 0;
+uint32_t inside_mask = 0;
+int main(void)
+{
+  previous_mask = __get_PRIMASK();
+  __disable_irq();
+  inside_mask = __get_PRIMASK();
+  __set_PRIMASK(previous_mask);
+  __enable_irq();
+  while (1) { HAL_Delay(1U); }
+}
+'''
+        model = build_hal_model(fixture_files(main_c=source))
+        self.assertEqual([], [item for item in model["diagnostics"] if item["severity"] == "error"])
+        operations = model["program"]["operations"]
+        self.assertEqual(["assign", "irqDisable", "assign", "irqSetMask", "irqEnable", "while"],
+                         [item["op"] for item in operations])
+        self.assertEqual({"kind": "irqMask"}, operations[0]["value"])
+        self.assertEqual({"kind": "irqMask"}, operations[2]["value"])
+        self.assertEqual({"kind": "variable", "name": "previous_mask"}, operations[3]["value"])
+
     def test_exti_adc_uart_and_timer_interrupts_are_lowered_with_callbacks(self) -> None:
         header = MAIN_H + r'''
 #define BUTTON_Pin GPIO_PIN_0
@@ -1745,8 +1781,10 @@ int main(void)
         errors = [item for item in model["diagnostics"] if item["severity"] == "error"]
         self.assertFalse(errors, errors)
         assignment = next(item for item in model["program"]["operations"] if item.get("target") == "bytes")
-        self.assertEqual("addressOf", assignment["value"]["kind"])
-        self.assertEqual("sample", assignment["value"]["value"]["name"])
+        self.assertEqual("cast", assignment["value"]["kind"])
+        self.assertEqual("uint8_t*", assignment["value"]["cType"])
+        self.assertEqual("addressOf", assignment["value"]["value"]["kind"])
+        self.assertEqual("sample", assignment["value"]["value"]["value"]["name"])
 
     def test_hal_buffer_arguments_preserve_literal_and_pointer_expressions(self) -> None:
         source = r'''
@@ -1767,7 +1805,8 @@ int main(void)
         self.assertFalse(errors, errors)
         transfers = [item for item in model["program"]["operations"] if item["op"] == "uartTransmit"]
         self.assertEqual(2, len(transfers))
-        self.assertEqual({"kind": "string", "value": "OK", "bytes": [79, 75]}, transfers[0]["buffer"])
+        self.assertEqual("uint8_t*", transfers[0]["buffer"]["cType"])
+        self.assertEqual({"kind": "string", "value": "OK", "bytes": [79, 75]}, transfers[0]["buffer"]["value"])
         self.assertEqual("addressOf", transfers[1]["buffer"]["kind"])
 
     def test_common_embedded_c_idioms_work_together_without_false_unsupported_errors(self) -> None:
@@ -1840,7 +1879,7 @@ int main(void)
         self.assertTrue(any(item["op"] == "continue" for item in loop["body"][2]["then"]))
         self.assertTrue(any(item["op"] == "break" for item in loop["body"][3]["then"]))
         self.assertEqual("inlineCall", returned["value"]["kind"])
-        helper_branch = returned["value"]["operations"][0]
+        helper_branch = next(item for item in returned["value"]["operations"] if item["op"] == "if")
         self.assertEqual("samples", helper_branch["then"][0]["value"]["left"]["value"]["name"])
         self.assertEqual(5, helper_branch["else"][0]["value"]["value"])
 

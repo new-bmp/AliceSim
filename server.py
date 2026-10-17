@@ -1694,7 +1694,25 @@ class AliceSIMHandler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
+        # A preview/static page may be open on a neighboring loopback port
+        # while this Python service remains on its normal port. Allow only
+        # loopback origins to call the local HAL API across that port split.
+        origin = self.headers.get("Origin", "")
+        if re.fullmatch(r"https?://(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?", origin, re.IGNORECASE):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Max-Age", "300")
+            self.send_header("Vary", "Origin")
         super().end_headers()
+
+    def do_OPTIONS(self):
+        if self.path.startswith("/api/"):
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_error(404, "Not found")
 
     def do_GET(self):
         if self.path == "/api/health":

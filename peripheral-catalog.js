@@ -52,8 +52,8 @@
     { type: "bh1750", id: "bh1750", prefix: "LUX", title: "BH1750 数字照度传感器", value: "500 lux", bus: "I²C", pins: [["VCC", "left", "power"], ["GND", "left", "ground"], ["SCL", "right", "clk"], ["SDA", "right", "dio"]], controls: [{ key: "lux", label: "照度", min: 0, max: 65535, step: 1, value: 500, unit: "lux" }] },
     { type: "sht30", id: "sht30", prefix: "SHT", title: "SHT30 高精度温湿度", value: "25.0 °C · 50.0 %RH", bus: "I²C", pins: [["VCC", "left", "power"], ["GND", "left", "ground"], ["SCL", "right", "clk"], ["SDA", "right", "dio"]], controls: [{ key: "temperatureC", label: "温度", min: -40, max: 125, step: 0.1, value: 25, unit: "°C" }, { key: "humidityPercent", label: "湿度", min: 0, max: 100, step: 0.1, value: 50, unit: "%RH" }] },
     { type: "ds3231", id: "ds3231", prefix: "RTC", title: "DS3231 高精度实时时钟", value: "2026-07-31 12:00:00", bus: "I²C", pins: [["VCC", "left", "power"], ["GND", "left", "ground"], ["SCL", "right", "clk"], ["SDA", "right", "dio"], ["SQW", "right", "signal"]], controls: [{ key: "unixTime", label: "Unix 时间", min: 0, max: 4102444800, step: 1, value: 1785470400, unit: "s" }] },
-    { type: "pcf8574", id: "pcf8574", prefix: "IOX", title: "PCF8574 八位 IO 扩展", value: "ADDR 0x20", bus: "I²C", pins: [["VCC", "left", "power"], ["GND", "left", "ground"], ["SCL", "right", "clk"], ["SDA", "right", "dio"], ["INT", "right", "interrupt"]], controls: [{ key: "inputMask", label: "输入电平掩码", min: 0, max: 255, step: 1, value: 255, unit: "" }] },
-    { type: "pca9685", id: "pca9685", prefix: "PWM", title: "PCA9685 16 路 PWM 控制器", value: "50 Hz · 16 CH", bus: "I²C", pins: [["VCC", "left", "power"], ["GND", "left", "ground"], ["SCL", "right", "clk"], ["SDA", "right", "dio"], ["PWM0", "right", "pwm"]], controls: [{ key: "frequencyHz", label: "PWM 频率", min: 24, max: 1526, step: 1, value: 50, unit: "Hz" }, { key: "channel0", label: "通道 0", min: 0, max: 4095, step: 1, value: 0, unit: "/4095" }] },
+    { type: "pcf8574", id: "pcf8574", prefix: "IOX", title: "PCF8574 八位 IO 扩展", value: "ADDR 0x20", bus: "I²C", pins: [["VCC", "left", "power"], ["GND", "left", "ground"], ["SCL", "right", "clk"], ["SDA", "right", "dio"], ["INT", "right", "interrupt"]].concat(Array.from({ length: 8 }, function (_, index) { return ["P" + index, "right", "port"]; })), controls: [{ key: "inputMask", label: "输入电平掩码", min: 0, max: 255, step: 1, value: 255, unit: "" }] },
+    { type: "pca9685", id: "pca9685", prefix: "PWM", title: "PCA9685 16 路 PWM 控制器", value: "50 Hz · 16 CH", bus: "I²C", pins: [["VCC", "left", "power"], ["GND", "left", "ground"], ["SCL", "right", "clk"], ["SDA", "right", "dio"], ["OE", "left", "enable"]].concat(Array.from({ length: 16 }, function (_, index) { return ["PWM" + index, "right", "pwm-output"]; })), controls: [{ key: "frequencyHz", label: "初始 PWM 频率", min: 24, max: 1526, step: 1, value: 50, unit: "Hz" }].concat(Array.from({ length: 16 }, function (_, index) { return { key: "channel" + index, label: "初始通道 " + index, min: 0, max: 4095, step: 1, value: 0, unit: "/4096" }; })) },
     { type: "ina219", id: "ina219", prefix: "MON", title: "INA219 电压电流监测", value: "12.00 V · 0.50 A", bus: "I²C", pins: [["VCC", "left", "power"], ["GND", "left", "ground"], ["SCL", "right", "clk"], ["SDA", "right", "dio"]], controls: [{ key: "busVoltageV", label: "总线电压", min: 0, max: 26, step: 0.01, value: 12, unit: "V" }, { key: "currentA", label: "电流", min: -3.2, max: 3.2, step: 0.001, value: 0.5, unit: "A" }] },
     { type: "ds18b20", id: "ds18b20", prefix: "TEMP", title: "DS18B20 单总线温度传感器", value: "25.00 °C", bus: "1-Wire", pins: [["VCC", "left", "power"], ["GND", "left", "ground"], ["DQ", "right", "data"]], controls: [{ key: "temperatureC", label: "温度", min: -55, max: 125, step: 0.0625, value: 25, unit: "°C" }] },
     { type: "max7219", id: "max7219", prefix: "MAT", title: "MAX7219 8×8 LED 点阵", value: "8×8 MATRIX", bus: "SPI", pins: [["VCC", "left", "power"], ["GND", "left", "ground"], ["DIN", "right", "data"], ["CLK", "right", "clk"], ["CS", "right", "signal"]], controls: [{ key: "intensity", label: "亮度", min: 0, max: 15, step: 1, value: 8, unit: "/15" }] },
@@ -68,6 +68,24 @@
     { type: "mosfet", id: "mosfet", prefix: "Q", title: "N 沟道 MOSFET", value: "N-MOS · VTH 2.0 V", bus: "GPIO/SW", pins: [["G", "left", "signal"], ["D", "right", "passive"], ["S", "right", "passive"]], controls: [{ key: "gateThresholdV", label: "栅极阈值", min: 0.5, max: 5, step: 0.1, value: 2, unit: "V" }, { key: "rdsOnMilliohm", label: "导通电阻", min: 1, max: 1000, step: 1, value: 35, unit: "mΩ" }] },
     { type: "dcDcConverter", id: "dc-dc-converter", prefix: "PSU", title: "可调 DC-DC 电源转换模块", value: "5.0 V · 2.0 A · 90%", bus: "POWER", nominalVoltage: 12, minOperatingVoltage: 3, maxOperatingVoltage: 36, pins: [["VIN", "left", "power"], ["GND", "left", "ground"], ["EN", "left", "signal"], ["VOUT", "right", "analog"]], controls: [{ key: "outputVoltageV", label: "输出电压", min: 0.8, max: 24, step: 0.1, value: 5, unit: "V" }, { key: "maxOutputCurrentA", label: "最大输出电流", min: 0.05, max: 10, step: 0.05, value: 2, unit: "A" }, { key: "efficiencyPercent", label: "转换效率", min: 50, max: 99, step: 1, value: 90, unit: "%" }, { key: "quiescentCurrentMa", label: "静态电流", min: 0, max: 100, step: 0.5, value: 5, unit: "mA" }, { key: "enabled", label: "模块使能", min: 0, max: 1, step: 1, value: 1, unit: "" }] }
   ];
+
+  // I²C entries model chip supply rails. A breakout board's regulator would
+  // need its own model rather than silently accepting a 5 V chip supply.
+  var DEVICE_LIMITS = {
+    bmp280: [0x76, 1.71, 3.6], mpu6050: [0x68, 2.375, 3.46], bh1750: [0x23, 2.4, 3.6],
+    sht30: [0x44, 2.15, 5.5], ds3231: [0x68, 2.3, 5.5], ina219: [0x40, 2.7, 5.5],
+    pcf8574: [0x20, 2.5, 5.5], pca9685: [0x40, 2.3, 5.5], w25qxx: [null, 2.7, 3.6],
+    dht11: [null, 3, 5.5], hcsr04: [null, 4.5, 5.5, 5], sg90: [null, 4.5, 6, 5],
+    buzzer: [null, 2.5, 5.5], tm1637: [null, 3, 5.5], max7219: [null, 4, 5.5, 5], ws2812: [null, 3.5, 5.5, 5]
+  };
+  ITEMS.forEach(function (item) {
+    var limits = DEVICE_LIMITS[item.type];
+    if (!limits) return;
+    item.minOperatingVoltage = limits[1];
+    item.maxOperatingVoltage = limits[2];
+    if (limits[3] != null) item.nominalVoltage = limits[3];
+    if (limits[0] != null) item.controls.push({ key: "address", label: "I²C 地址（十进制）", min: 3, max: 119, step: 1, value: limits[0], unit: "" });
+  });
 
   var LIBRARY_LABELS = Object.freeze({
     dht11: "DHT11 温湿度",

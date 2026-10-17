@@ -35,6 +35,95 @@ function loadWorker() {
   return { messages, send };
 }
 
+test("Worker recomputes PCF MCU lows and their release inside the same batch", () => {
+  const worker = loadWorker();
+  const model = { variables: { low: [0], high: [0], lowStatus: -1, highStatus: -1 },
+    i2cs: { hi2c1: { instance: "I2C1", handle: "hi2c1" } }, program: { operations: [
+      { op: "i2cMasterReceive", instance: "I2C1", deviceAddress: 0x40, buffer: "low", length: 1, resultTarget: "lowStatus" },
+      { op: "gpioWrite", pin: "PA0", value: 1 },
+      { op: "i2cMasterReceive", instance: "I2C1", deviceAddress: 0x40, buffer: "high", length: 1, resultTarget: "highStatus" }
+    ] } };
+  worker.send({ command: "init", model }); worker.send({ command: "call", method: "start" });
+  const state = worker.send({ command: "step", deltaMs: 0, inputs: { gpio: { PA0: 0 }, adc: {}, spi: [], peripherals: [], i2c: [
+    { componentId: "port", type: "pcf8574", instance: "I2C1", address: 0x20, ready: true, properties: { inputMask: 255 },
+      connection: { ...busConnection, externalInputMask: 255 }, portPins: ["PA0", "", "", "", "", "", "", ""], portMcuLevels: { PA0: 0 } }
+  ] } });
+  assert.equal(state.variables.lowStatus, 0);
+  assert.equal(state.variables.highStatus, 0);
+  assert.deepEqual(Array.from(state.variables.low), [0xfe]);
+  assert.deepEqual(Array.from(state.variables.high), [0xff]);
+});
+
+test("Worker shares Flash SPI with a write-only WS2812 without inventing MISO contention", () => {
+  const worker = loadWorker();
+  const model = { variables: { command: [0x9f], id: [0, 0, 0], txStatus: -1, rxStatus: -1 },
+    spis: { hspi1: { instance: "SPI1", handle: "hspi1" } }, program: { operations: [
+      { op: "gpioWrite", pin: "PB0", value: 0 },
+      { op: "spiTransmit", instance: "SPI1", buffer: "command", length: 1, resultTarget: "txStatus" },
+      { op: "spiReceive", instance: "SPI1", buffer: "id", length: 3, resultTarget: "rxStatus" },
+      { op: "gpioWrite", pin: "PB0", value: 1 }
+    ] } };
+  worker.send({ command: "init", model }); worker.send({ command: "call", method: "start" });
+  const state = worker.send({ command: "step", deltaMs: 0, inputs: { gpio: {}, adc: {}, i2c: [], peripherals: [], spi: [
+    { componentId: "flash", type: "w25qxx", instance: "SPI1", ready: true, selected: false, csPin: "PB0", properties: {},
+      connection: { ...busConnection, dataConnected: true, signalConnected: true, selected: false } },
+    { componentId: "strip", type: "ws2812", instance: "SPI1", ready: true, selected: true, noChipSelect: true, csPin: "" }
+  ] } });
+  assert.equal(state.variables.txStatus, 0);
+  assert.equal(state.variables.rxStatus, 0);
+  assert.deepEqual(Array.from(state.variables.id), [0xef, 0x40, 0x17]);
+});
+
+const busConnection = {powered: true, vccConnected: true, gndConnected: true, vccLevel: 3.3, gndLevel: 0,
+  bindingValid: true, busConnected: true, clkConnected: true, dioConnected: true};
+
+test("Worker keeps I2C registers between batches, binds HAL shifted low addresses, and rejects collisions", () => {
+  const worker = loadWorker();
+  const model = {variables: {config: [0x18], range: [0], readStatus: -1, luxCommand: [0x10], lux: [0, 0], luxStatus: -1},
+    i2cs: {hi2c1: {handle: "hi2c1", instance: "I2C1"}}, program: {operations: [
+      {op: "i2cMemWrite", instance: "I2C1", deviceAddress: 0xd0, memoryAddress: 0x1b, buffer: "config", length: 1},
+      {op: "delay", ms: 10},
+      {op: "i2cMemRead", instance: "I2C1", deviceAddress: 0xd0, memoryAddress: 0x1b, buffer: "range", length: 1, resultTarget: "readStatus"},
+      {op: "i2cTransmit", instance: "I2C1", deviceAddress: 0x46, buffer: "luxCommand", length: 1},
+      {op: "delay", ms: 180},
+      {op: "i2cMasterReceive", instance: "I2C1", deviceAddress: 0x46, buffer: "lux", length: 2, resultTarget: "luxStatus"}
+    ]}};
+  const inputs = {gpio: {}, adc: {}, peripherals: [], spi: [], i2c: [
+    {componentId: "imu", type: "mpu6050", instance: "I2C1", address: 0x68, ready: true, properties: {}, connection: busConnection},
+    {componentId: "lux", type: "bh1750", instance: "I2C1", address: 0x23, ready: true, properties: {lux: 500}, connection: busConnection}
+  ]};
+  worker.send({command: "init", model}); worker.send({command: "call", method: "start"});
+  worker.send({command: "step", deltaMs: 0, inputs});
+  worker.send({command: "step", deltaMs: 10, inputs});
+  const state = worker.send({command: "step", deltaMs: 180, inputs});
+  assert.equal(state.variables.readStatus, 0);
+  assert.deepEqual(Array.from(state.variables.range), [0x18]);
+  assert.equal(state.variables.luxStatus, 0);
+  assert.deepEqual(Array.from(state.variables.lux), [2, 88]);
+  worker.send({command: "init", model}); worker.send({command: "call", method: "start"});
+  const collision = {...inputs, i2c: [...inputs.i2c, {...inputs.i2c[1], componentId: "lux2"}]};
+  worker.send({command: "step", deltaMs: 0, inputs: collision});
+  worker.send({command: "step", deltaMs: 10, inputs: collision});
+  assert.equal(worker.send({command: "step", deltaMs: 180, inputs: collision}).variables.luxStatus, 1);
+});
+
+test("Worker latches W25Q writes on GPIO chip-select and reads them in the same batch", () => {
+  const worker = loadWorker();
+  const model = {variables: {wren: [6], program: [2, 0, 0, 16, 0xa5, 0x5a], command: [3, 0, 0, 16], result: [0, 0], status: -1},
+    outputs: {PB0: {physicalPin: "PB0", initial: 1}}, spis: {hspi1: {instance: "SPI1", handle: "hspi1"}}, program: {operations: [
+      {op: "gpioWrite", pin: "PB0", value: 0}, {op: "spiTransmit", instance: "SPI1", buffer: "wren", length: 1}, {op: "gpioWrite", pin: "PB0", value: 1},
+      {op: "gpioWrite", pin: "PB0", value: 0}, {op: "spiTransmit", instance: "SPI1", buffer: "program", length: 6}, {op: "gpioWrite", pin: "PB0", value: 1},
+      {op: "gpioWrite", pin: "PB0", value: 0}, {op: "spiTransmit", instance: "SPI1", buffer: "command", length: 4},
+      {op: "spiReceive", instance: "SPI1", buffer: "result", length: 2, resultTarget: "status"}, {op: "gpioWrite", pin: "PB0", value: 1}
+    ]}};
+  worker.send({command: "init", model}); worker.send({command: "call", method: "start"});
+  const state = worker.send({command: "step", deltaMs: 0, inputs: {gpio: {}, adc: {}, i2c: [], peripherals: [], spi: [
+    {componentId: "flash", type: "w25qxx", instance: "SPI1", ready: true, selected: false, csPin: "PB0", properties: {}, connection: {...busConnection, dataConnected: true, signalConnected: true, selected: false}}
+  ]}});
+  assert.equal(state.variables.status, 0);
+  assert.deepEqual(Array.from(state.variables.result), [0xa5, 0x5a]);
+});
+
 test("firmware Worker uses synchronized I2C and SPI wiring state for HAL results", () => {
   const worker = loadWorker();
   const model = {

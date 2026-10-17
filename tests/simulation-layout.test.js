@@ -30,16 +30,13 @@ test("simulation controls are integrated into the unified time observer", () => 
   assert.match(styles, /grid-template-rows: 38px 34px minmax\(0, 1fr\)/);
 });
 
-test("simulation page contains the FreeRTOS debugger and the real UART terminal", () => {
+test("simulation page contains the real UART terminal", () => {
   const simulator = html.indexOf('<aside class="simulator-panel" data-page-surface="simulation">');
   const runtimeDock = html.indexOf('id="simulationRuntimeDock"', simulator);
-  const rtos = html.indexOf('id="freertosMonitor"', runtimeDock);
   const serial = html.indexOf('id="simulationSerialForm"', runtimeDock);
   const observer = html.indexOf('<div class="simulation-time-observer">', runtimeDock);
 
-  assert.ok(simulator >= 0 && simulator < runtimeDock && runtimeDock < rtos && rtos < serial && serial < observer);
-  assert.match(html, /<th>任务<\/th><th>状态<\/th><th>优先级<\/th><th>栈余量<\/th><th>CPU<\/th><th>运行时间<\/th><th>等待对象<\/th>/);
-  assert.match(app, /function updateFreeRtosMonitor/);
+  assert.ok(simulator >= 0 && simulator < runtimeDock && runtimeDock < serial && serial < observer);
   assert.match(app, /AliceHalSimulator\.enqueueSerial\(value, uartName\)/);
   assert.match(html, /id="virtualUartSelect"[^>]*aria-label="虚拟 UART 端口"/);
   assert.match(app, /function renderVirtualUart/);
@@ -49,13 +46,10 @@ test("simulation page contains the FreeRTOS debugger and the real UART terminal"
   assert.match(styles, /\.simulation-runtime-dock[\s\S]*?grid-template-columns/);
 });
 
-test("FreeRTOS and serial panes can be folded independently", () => {
-  assert.match(html, /id="freertosPaneToggle"[^>]*aria-controls="freertosMonitor"[^>]*aria-expanded="true"/);
+test("serial pane can be folded", () => {
   assert.match(html, /id="serialPaneToggle"[^>]*aria-controls="simulationSerialMonitor"[^>]*aria-expanded="true"/);
-  assert.match(app, /function setRuntimePaneCollapsed\(name, collapsed/);
-  assert.match(app, /setRuntimePaneCollapsed\("freertos"/);
-  assert.match(app, /setRuntimePaneCollapsed\("serial"/);
-  assert.match(styles, /\.freertos-monitor\.collapsed \.freertos-table-wrap/);
+  assert.match(app, /function setSerialPaneCollapsed\(collapsed/);
+  assert.match(app, /setSerialPaneCollapsed\(!\$\("#simulationSerialMonitor"\)/);
   assert.match(styles, /\.simulation-serial-monitor\.collapsed \.simulation-serial-lines/);
 });
 
@@ -129,10 +123,10 @@ test("power calculation can be disabled while retaining voltage-only simulation"
   assert.match(styles, /power-calculation-disabled[\s\S]*?power-calculation-toggle/);
 });
 
-test("the envelope editor opens by default when the simulation page is shown", () => {
-  assert.match(automation, /alice:workspace-page-change/);
-  assert.match(automation, /event\.detail\.page === "simulation"[\s\S]*?open\(\)/);
-  assert.match(automation, /body\.classList\.contains\("app-page-simulation"\)[\s\S]*?requestAnimationFrame\(open\)/);
+test("the envelope editor opens through the workbench instead of stealing space on every page switch", () => {
+  assert.match(automation, /AliceSimulationWorkbench\.select\("envelope"\)/);
+  assert.doesNotMatch(automation, /requestAnimationFrame\(open\)/);
+  assert.doesNotMatch(automation, /alice:workspace-page-change/);
 });
 
 test("placing an automatable component refreshes the envelope target list", () => {

@@ -1,10 +1,12 @@
 (function (root, factory) {
   "use strict";
 
-  var api = factory();
+  var busDevices = typeof module === "object" && module.exports ? require("./peripheral-bus-devices.js") : root.AlicePeripheralBusDevices;
+  var ds18b20 = typeof module === "object" && module.exports ? require("./ds18b20-device.js") : root.AliceDS18B20Device;
+  var api = factory(busDevices, ds18b20);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.AlicePeripheralDevices = api;
-}(typeof globalThis !== "undefined" ? globalThis : this, function () {
+}(typeof globalThis !== "undefined" ? globalThis : this, function (busDevices, ds18b20) {
   "use strict";
 
   function finite(value, fallback) {
@@ -459,6 +461,34 @@
       visible: this.getPowerStatus().powered, power: this.getPowerStatus(), connection: Object.assign({}, this.connection), revision: this.revision };
   };
 
+  WS2812Device.prototype.transmitPwm = function (pulses, period, frequencyHz) {
+    var cycleTicks = Number(period) + 1;
+    if (!this.isReady(["dataConnected"]) || !Array.isArray(pulses) || !Number.isInteger(cycleTicks) || cycleTicks <= 1 || frequencyHz < 700000 || frequencyHz > 900000 || !Number.isFinite(frequencyHz)) return 0;
+    var decoded = [], resetSlots = 0, latched = false;
+    for (var index = 0; index < pulses.length; index += 1) {
+      var high = Number(pulses[index]);
+      if (!Number.isInteger(high) || high < 0 || high >= cycleTicks) return 0;
+      if (high === 0) { resetSlots += 1; continue; }
+      if (resetSlots && decoded.length) return 0;
+      resetSlots = 0;
+      var highUs = high / cycleTicks / frequencyHz * 1000000;
+      if (highUs >= 0.2 && highUs <= 0.5) decoded.push(0);
+      else if (highUs >= 0.55 && highUs <= 0.95) decoded.push(1);
+      else return 0;
+      if (decoded.length > 6144) return 0;
+    }
+    latched = decoded.length > 0 && decoded.length % 24 === 0 && resetSlots / frequencyHz >= 0.00005;
+    if (!latched) return 0;
+    for (var led = 0; led < Math.min(this.colors.length, decoded.length / 24); led += 1) {
+      var grb = 0;
+      for (var bit = 0; bit < 24; bit += 1) grb = grb * 2 + decoded[led * 24 + bit];
+      this.colors[led] = ((grb >> 8) & 255) << 16 | ((grb >> 16) & 255) << 8 | (grb & 255);
+    }
+    this.resetDecoder();
+    this.revision += 1;
+    return pulses.length;
+  };
+
   function GenericPeripheralDevice(type, options) {
     var config = options && typeof options === "object" ? options : {};
     BaseDevice.call(this, String(type || "peripheral"), config, {
@@ -513,6 +543,9 @@
     createMAX7219: function (options) { return new MAX7219Device(options); },
     createWS2812: function (options) { return new WS2812Device(options); },
     GenericPeripheralDevice: GenericPeripheralDevice,
-    createGeneric: function (type, options) { return new GenericPeripheralDevice(type, options); }
+    createGeneric: function (type, options) {
+      if (type === "ds18b20" && ds18b20) return ds18b20.create(options);
+      return busDevices && busDevices.supports(type) ? busDevices.create(type, options) : new GenericPeripheralDevice(type, options);
+    }
   });
 }));

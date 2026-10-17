@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">AliceSIM</title>
+  <desc id="desc">A letterform drawn as a circuit, with a cyan signal trace inside a blue microchip.</desc>
+  <defs>
+    <linearGradient id="tile" x1="48" y1="24" x2="464" y2="512" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#497CFA"/>
+      <stop offset=".5" stop-color="#2E56D4"/>
+      <stop offset="1" stop-color="#18317E"/>
+    </linearGradient>
+    <linearGradient id="die" x1="128" y1="112" x2="384" y2="400" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#254FC1"/>
+      <stop offset="1" stop-color="#182F7A"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="193" y1="256" x2="334" y2="340" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7DFFF0"/>
+      <stop offset="1" stop-color="#39DCCD"/>
+    </linearGradient>
+  </defs>
+  <g id="surface">
+    <rect width="512" height="512" rx="112" fill="url(#tile)"/>
+    <rect x="1.5" y="1.5" width="509" height="509" rx="110.5" stroke="#FFF" stroke-opacity=".16" stroke-width="3"/>
+  </g>
+  <g id="symbol">
+    <path d="M192 88V116M256 88V116M320 88V116M192 396V424M256 396V424M320 396V424M88 192H116M88 256H116M88 320H116M396 192H424M396 256H424M396 320H424" stroke="#B9D2FF" stroke-width="18" stroke-linecap="round"/>
+    <rect x="116" y="116" width="280" height="280" rx="56" fill="url(#die)" stroke="#A7C4FF" stroke-width="10"/>
+    <path d="M169 340L243 177C248 166 264 166 269 177L343 340" stroke="#F7FBFF" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M197 280H226L244 257L266 303L284 280H315" stroke="url(#signal)" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="343" cy="340" r="15" fill="#4DE7D8"/>
+  </g>
+</svg>

@@ -1,0 +1,307 @@
+{
+  "schemaVersion": 1,
+  "kind": "AliceSIMCircuit",
+  "mcu": "STM32F103C8T6",
+  "components": [
+    {
+      "id": "mcu",
+      "type": "mcu",
+      "ref": "U1",
+      "value": "STM32F103C8T6",
+      "x": 360,
+      "y": 200,
+      "rotation": 0
+    },
+    {
+      "id": "power",
+      "type": "vcc",
+      "ref": "3V3",
+      "value": "+3V3",
+      "x": 270,
+      "y": 50,
+      "rotation": 0
+    },
+    {
+      "id": "ground",
+      "type": "ground",
+      "ref": "GND",
+      "value": "0V",
+      "x": 270,
+      "y": 550,
+      "rotation": 0
+    },
+    {
+      "id": "adc-source",
+      "type": "adcSource",
+      "ref": "ADC_PA0",
+      "value": "1.100 V",
+      "x": 70,
+      "y": 250,
+      "rotation": 0,
+      "adcReferenceVoltage": 3.3,
+      "adcBits": 12,
+      "adcVoltage": 1.1
+    },
+    {
+      "id": "resistor",
+      "type": "resistor",
+      "ref": "R_HEART",
+      "value": "1 kOhm",
+      "x": 670,
+      "y": 260,
+      "rotation": 0
+    },
+    {
+      "id": "led",
+      "type": "led",
+      "ref": "D_HEART",
+      "value": "GREEN",
+      "x": 840,
+      "y": 260,
+      "rotation": 0,
+      "ledColor": "green"
+    }
+  ],
+  "wires": [
+    {
+      "id": "w1",
+      "from": {
+        "componentId": "power",
+        "pin": "VCC"
+      },
+      "to": {
+        "componentId": "mcu",
+        "pin": "VDD"
+      },
+      "signal": "3V3",
+      "route": [
+        {
+          "x": 302,
+          "y": 108
+        },
+        {
+          "x": 302,
+          "y": 150
+        },
+        {
+          "x": 445,
+          "y": 150
+        },
+        {
+          "x": 445,
+          "y": 200
+        }
+      ]
+    },
+    {
+      "id": "w2",
+      "from": {
+        "componentId": "ground",
+        "pin": "GND"
+      },
+      "to": {
+        "componentId": "mcu",
+        "pin": "VSS"
+      },
+      "signal": "GND",
+      "route": [
+        {
+          "x": 302,
+          "y": 550
+        },
+        {
+          "x": 302,
+          "y": 510
+        },
+        {
+          "x": 445,
+          "y": 510
+        },
+        {
+          "x": 445,
+          "y": 410
+        }
+      ]
+    },
+    {
+      "id": "w3",
+      "from": {
+        "componentId": "ground",
+        "pin": "GND"
+      },
+      "to": {
+        "componentId": "adc-source",
+        "pin": "GND"
+      },
+      "signal": "GND",
+      "route": [
+        {
+          "x": 302,
+          "y": 550
+        },
+        {
+          "x": 302,
+          "y": 510
+        },
+        {
+          "x": 40,
+          "y": 510
+        },
+        {
+          "x": 40,
+          "y": 304
+        },
+        {
+          "x": 70,
+          "y": 304
+        }
+      ]
+    },
+    {
+      "id": "w4",
+      "from": {
+        "componentId": "adc-source",
+        "pin": "AO"
+      },
+      "to": {
+        "componentId": "mcu",
+        "pin": "PA0"
+      },
+      "signal": "ADC1_IN0",
+      "route": [
+        {
+          "x": 182,
+          "y": 286
+        },
+        {
+          "x": 220,
+          "y": 286
+        },
+        {
+          "x": 220,
+          "y": 170
+        },
+        {
+          "x": 580,
+          "y": 170
+        },
+        {
+          "x": 580,
+          "y": 230
+        },
+        {
+          "x": 530,
+          "y": 230
+        }
+      ]
+    },
+    {
+      "id": "w5",
+      "from": {
+        "componentId": "mcu",
+        "pin": "PC13"
+      },
+      "to": {
+        "componentId": "resistor",
+        "pin": "1"
+      },
+      "signal": "HEARTBEAT",
+      "route": [
+        {
+          "x": 360,
+          "y": 380
+        },
+        {
+          "x": 320,
+          "y": 380
+        },
+        {
+          "x": 320,
+          "y": 450
+        },
+        {
+          "x": 630,
+          "y": 450
+        },
+        {
+          "x": 630,
+          "y": 286
+        },
+        {
+          "x": 670,
+          "y": 286
+        }
+      ]
+    },
+    {
+      "id": "w6",
+      "from": {
+        "componentId": "resistor",
+        "pin": "2"
+      },
+      "to": {
+        "componentId": "led",
+        "pin": "A"
+      },
+      "signal": "HEART_LED",
+      "route": [
+        {
+          "x": 766,
+          "y": 286
+        },
+        {
+          "x": 800,
+          "y": 286
+        },
+        {
+          "x": 800,
+          "y": 292
+        },
+        {
+          "x": 840,
+          "y": 292
+        }
+      ]
+    },
+    {
+      "id": "w7",
+      "from": {
+        "componentId": "led",
+        "pin": "K"
+      },
+      "to": {
+        "componentId": "ground",
+        "pin": "GND"
+      },
+      "signal": "GND",
+      "route": [
+        {
+          "x": 912,
+          "y": 292
+        },
+        {
+          "x": 950,
+          "y": 292
+        },
+        {
+          "x": 950,
+          "y": 510
+        },
+        {
+          "x": 302,
+          "y": 510
+        },
+        {
+          "x": 302,
+          "y": 550
+        }
+      ]
+    }
+  ],
+  "view": {
+    "zoom": 0.95,
+    "panX": 0,
+    "panY": 0,
+    "userView": false
+  }
+}

@@ -1,0 +1,4 @@
+# Tutorial manifests and ZIPs verify the exact bytes of bundled CubeMX sources.
+# Keep those bytes unchanged when cloning on Windows, macOS, or Linux.
+examples/Learning*/** -text
+tutorials/** -text

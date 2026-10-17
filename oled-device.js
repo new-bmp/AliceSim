@@ -11,6 +11,7 @@
   var HEIGHT = 64;
   var PAGES = HEIGHT / 8;
   var BUFFER_SIZE = WIDTH * PAGES;
+  var SCROLL_INTERVAL_FRAMES = [5, 64, 128, 256, 3, 4, 25, 2];
 
   function clampByte(value) {
     var numeric = Number(value);
@@ -58,6 +59,8 @@
     this.width = WIDTH;
     this.height = HEIGHT;
     this.address = normalizeAddress(config.address);
+    this.frameRateHz = Math.max(1, Math.min(240, Number(config.frameRateHz) || 60));
+    this.timeMs = 0;
     this.connection = copyConnection(config.connection);
     this.framebuffer = new Uint8Array(BUFFER_SIZE);
     this.textEntries = [];
@@ -87,6 +90,8 @@
     this.comScanDec = true;
     this.pendingCommand = null;
     this.contentMode = "framebuffer";
+    this.scroll = { active: false, mode: "horizontal", direction: 1, startPage: 0, endPage: 7, intervalFrames: 5,
+      verticalOffset: 0, topFixedRows: 0, scrollRows: HEIGHT, startedAtMs: this.timeMs, stoppedSteps: 0 };
   };
 
   SSD1306Device.prototype.reset = function (options) {
@@ -153,6 +158,18 @@
       this.contrast = pending.values[0];
     } else if (pending.command === 0xd3) {
       this.displayOffset = pending.values[0] & 0x3f;
+    } else if (pending.command === 0xa3) {
+      this.scroll.topFixedRows = Math.min(HEIGHT - 1, pending.values[0]);
+      this.scroll.scrollRows = Math.max(1, Math.min(HEIGHT - this.scroll.topFixedRows, pending.values[1]));
+    } else if ([0x26, 0x27, 0x29, 0x2a].indexOf(pending.command) >= 0) {
+      this.scroll.active = false;
+      this.scroll.mode = pending.command === 0x29 || pending.command === 0x2a ? "diagonal" : "horizontal";
+      this.scroll.direction = pending.command === 0x26 || pending.command === 0x29 ? 1 : -1;
+      this.scroll.startPage = pending.values[1] & 7;
+      this.scroll.endPage = Math.max(this.scroll.startPage, pending.values[3] & 7);
+      this.scroll.intervalFrames = SCROLL_INTERVAL_FRAMES[pending.values[2] & 7];
+      this.scroll.verticalOffset = this.scroll.mode === "diagonal" ? pending.values[4] & 0x3f : 0;
+      this.scroll.stoppedSteps = 0;
     }
     this.pendingCommand = null;
     return true;
@@ -162,7 +179,19 @@
     this.pendingCommand = { command: command, count: count, values: [] };
   };
 
-  SSD1306Device.prototype.command = function (input) {
+  SSD1306Device.prototype.setTime = function (timeMs) {
+    var time = Number(timeMs);
+    if (Number.isFinite(time)) this.timeMs = Math.max(0, time);
+    return this.timeMs;
+  };
+
+  SSD1306Device.prototype._scrollSteps = function () {
+    if (!this.scroll.active) return this.scroll.stoppedSteps;
+    return Math.floor(Math.max(0, this.timeMs - this.scroll.startedAtMs) * this.frameRateHz / (1000 * this.scroll.intervalFrames));
+  };
+
+  SSD1306Device.prototype.command = function (input, options) {
+    if (options && options.timeMs != null) this.setTime(options.timeMs);
     var bytes = normalizeBytes(input);
     for (var index = 0; index < bytes.length; index += 1) {
       var command = bytes[index];
@@ -175,6 +204,17 @@
       else if (command === 0xa5) this.entireDisplayOn = true;
       else if (command === 0xa6) this.inverse = false;
       else if (command === 0xa7) this.inverse = true;
+      else if (command === 0x2e) {
+        this.scroll.stoppedSteps = this._scrollSteps();
+        this.scroll.active = false;
+      } else if (command === 0x2f) {
+        this.scroll.startedAtMs = this.timeMs;
+        this.scroll.stoppedSteps = 0;
+        this.scroll.active = true;
+      }
+      else if (command === 0x26 || command === 0x27) this._startPending(command, 6);
+      else if (command === 0x29 || command === 0x2a) this._startPending(command, 5);
+      else if (command === 0xa3) this._startPending(command, 2);
       else if (command === 0x20) this._startPending(command, 1);
       else if (command === 0x21 || command === 0x22) this._startPending(command, 2);
       else if (command === 0x81 || command === 0x8d || command === 0xa8 || command === 0xd3 || command === 0xd5 || command === 0xd9 || command === 0xda || command === 0xdb) this._startPending(command, 1);
@@ -252,7 +292,8 @@
     return Object.assign({}, entry);
   };
 
-  SSD1306Device.prototype.pixelAt = function (x, y) {
+  SSD1306Device.prototype.pixelAt = function (x, y, timeMs) {
+    if (timeMs != null) this.setTime(timeMs);
     var column = Math.floor(Number(x));
     var row = Math.floor(Number(y));
     if (column < 0 || column >= WIDTH || row < 0 || row >= HEIGHT) return 0;
@@ -263,6 +304,15 @@
     var mappedColumn = this.segmentRemap ? column : WIDTH - 1 - column;
     var mappedRow = this.comScanDec ? row : HEIGHT - 1 - row;
     mappedRow = (mappedRow + this.startLine + this.displayOffset) % HEIGHT;
+    var steps = this._scrollSteps();
+    var withinScrollArea = mappedRow >= this.scroll.topFixedRows && mappedRow < this.scroll.topFixedRows + this.scroll.scrollRows;
+    if (this.scroll.mode === "diagonal" && withinScrollArea) {
+      mappedRow = this.scroll.topFixedRows + (mappedRow - this.scroll.topFixedRows + steps * this.scroll.verticalOffset) % this.scroll.scrollRows;
+    }
+    var mappedPage = Math.floor(mappedRow / 8);
+    if ((this.scroll.mode !== "diagonal" || withinScrollArea) && mappedPage >= this.scroll.startPage && mappedPage <= this.scroll.endPage) {
+      mappedColumn = ((mappedColumn - steps * this.scroll.direction) % WIDTH + WIDTH) % WIDTH;
+    }
     var bit = (this.framebuffer[Math.floor(mappedRow / 8) * WIDTH + mappedColumn] >> (mappedRow & 7)) & 1;
     if (this.entireDisplayOn) bit = 1;
     if (this.inverse) bit = bit ? 0 : 1;
@@ -279,6 +329,7 @@
 
   SSD1306Device.prototype.getState = function (options) {
     var config = options && typeof options === "object" ? options : {};
+    if (config.timeMs != null) this.setTime(config.timeMs);
     var state = {
       width: WIDTH,
       height: HEIGHT,
@@ -292,6 +343,7 @@
       column: this.column,
       page: this.page,
       contrast: this.contrast,
+      scroll: Object.assign({}, this.scroll, { steps: this._scrollSteps(), frameRateHz: this.frameRateHz }),
       contentMode: this.contentMode,
       textEntries: this.textEntries.map(function (entry) { return Object.assign({}, entry); }),
       connection: Object.assign({}, this.connection),

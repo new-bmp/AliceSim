@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f8fafc">
+  <title>AliceSIM 教程与例程</title>
+  <link rel="icon" href="../assets/alicesim-app-icon-v2.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./tutorials.css">
+  <script src="./reader.js" defer></script>
+  <script src="./tutorials.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#lesson">跳到教程正文</a>
+  <header class="topbar">
+    <button id="menuToggle" class="icon-button menu-toggle" aria-label="展开教程目录" aria-expanded="false" aria-controls="sidebar">☰</button>
+    <a class="brand" href="#start"><span class="brand-mark" aria-hidden="true">A</span><strong>AliceSIM</strong><span class="brand-divider"></span><span>教程与例程</span></a>
+    <a id="backApp" class="back-app" href="../">返回仿真工作台 <span aria-hidden="true">↗</span></a>
+  </header>
+  <div class="layout">
+    <aside id="sidebar" class="sidebar" aria-label="教程目录">
+      <div class="sidebar-top"><span class="eyebrow">STM32 · HAL</span><h2>在实验里学会</h2><p>配置引脚，理解代码，观察结果。</p></div>
+      <label class="search-label" for="search">搜索教程</label>
+      <div class="search-box"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="ADC、舵机、OLED…" autocomplete="off"></div>
+      <nav id="navigation" aria-label="知识点分类"></nav>
+      <p id="searchStatus" class="search-status" role="status"></p>
+      <div class="sidebar-note"><strong>例程就在教程文件夹</strong><p><code>tutorials/examples</code> 包含源码、IOC 和接线电路。每篇也提供完整工程下载。</p></div>
+    </aside>
+    <main id="lesson" class="main" tabindex="-1">
+      <div id="lessonStatus" role="status" class="load-status">正在打开教程…</div>
+      <div id="lessonContent" hidden>
+        <div id="breadcrumb" class="breadcrumb"></div>
+        <header class="lesson-header"><p id="lessonLabel" class="eyebrow"></p><h1 id="lessonTitle"></h1><p id="lessonSummary" class="lead"></p></header>
+        <section id="exampleActions" class="example-actions" aria-label="配套例程" hidden></section>
+        <div id="article" class="prose"></div>
+        <nav id="pagination" class="pagination" aria-label="上一篇与下一篇"></nav>
+        <footer class="lesson-footer">AliceSIM 嵌入式仿真学习平台 · 用接线、代码和输入解释每一次输出</footer>
+      </div>
+    </main>
+    <aside class="contents" aria-label="本页目录"><span class="eyebrow">本页内容</span><nav id="contents"></nav></aside>
+  </div>
+  <noscript><p class="noscript">浏览目录需要启用 JavaScript。也可以直接打开 tutorials/README.md，按链接阅读各篇教程与例程源码。</p></noscript>
+</body>
+</html>

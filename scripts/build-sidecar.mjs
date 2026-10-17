@@ -51,8 +51,8 @@ const staticFiles = [
   "index.html", "manifest.webmanifest", "service-worker.js", "styles.css", "platform-runtime.js",
   "clock-tree.js", "envelope-automation.js", "app.js", "datasheet-import.js", "oled-device.js",
   "spi-display-device.js", "light-sensor-device.js", "libdriver-registry.js", "peripheral-catalog.js",
-  "peripheral-devices.js", "simulation-accel.js", "schematic.js", "alice-drivers.js", "ui-actions.js",
-  "panel-resize.js", "ioc-viewer.js", "project-folder.js", "firmware-runtime.js", "firmware-worker.js",
+  "peripheral-bus-devices.js", "ds18b20-device.js", "peripheral-audio.js", "peripheral-devices.js", "peripheral-visuals.js", "simulation-accel.js", "schematic.js", "alice-drivers.js", "ui-actions.js",
+  "panel-resize.js", "simulation-workbench.js", "sidebar-tools.js", "ioc-viewer.js", "project-folder.js", "firmware-runtime.js", "firmware-worker.js",
   "hal-simulator.js", "serial-device-bridge.js"
 ];
 const args = [
@@ -65,7 +65,7 @@ const args = [
 ];
 
 for (const relative of staticFiles) args.push("--add-data", `${path.join(root, relative)}${dataSeparator}.`);
-for (const directory of ["assets", "Drivers"]) args.push("--add-data", `${path.join(root, directory)}${dataSeparator}${directory}`);
+for (const directory of ["assets", "Drivers", "tutorials"]) args.push("--add-data", `${path.join(root, directory)}${dataSeparator}${directory}`);
 
 const bundledClang = path.join(root, ".vendor", "clang", "native", process.platform === "win32" ? "libclang.dll" : "libclang.so");
 try {

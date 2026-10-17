@@ -820,9 +820,6 @@
     }
     root.document.addEventListener("alice:schematic-change", function () { refreshTargets(); });
     root.document.addEventListener("alice:schematic-reset", function () { engine.reset(applyTargetValue); updatePlaybackUi({ timeMs: 0, values: [] }); });
-    root.document.addEventListener("alice:workspace-page-change", function (event) {
-      if (event.detail && event.detail.page === "simulation" && !modal.classList.contains("open")) open();
-    });
     root.document.addEventListener("keydown", function (event) {
       if (event.key === "Escape" && modal.classList.contains("open")) close();
       if ((event.key === "Delete" || event.key === "Backspace") && modal.classList.contains("open")) {
@@ -831,13 +828,17 @@
       }
     });
     renderAll();
-    if (root.document.body.classList.contains("app-page-simulation")) root.requestAnimationFrame(open);
     return true;
   }
 
-  function open() {
+  function open(options) {
+    options = options || {};
     if (!uiState.mounted) mount();
-    root.document.dispatchEvent(new CustomEvent("alice:app-page-request", { detail: { page: "simulation" } }));
+    if (!options.fromWorkbench) root.document.dispatchEvent(new CustomEvent("alice:app-page-request", { detail: { page: "simulation" } }));
+    if (!options.fromWorkbench && root.AliceSimulationWorkbench) {
+      root.AliceSimulationWorkbench.select("envelope");
+      return true;
+    }
     uiState.nodes.modal.classList.add("open");
     if (uiState.nodes.openButton) {
       uiState.nodes.openButton.classList.add("active");
@@ -845,18 +846,23 @@
     }
     refreshTargets();
     root.requestAnimationFrame(function () { renderCanvas(); });
-    if (uiState.nodes.testButton) uiState.nodes.testButton.focus();
+    if (options.focus !== false && uiState.nodes.testButton) uiState.nodes.testButton.focus();
     return true;
   }
 
-  function close() {
+  function close(options) {
+    options = options || {};
     if (!uiState.mounted) return false;
+    if (!options.fromWorkbench && root.AliceSimulationWorkbench) {
+      root.AliceSimulationWorkbench.collapse();
+      return true;
+    }
     uiState.nodes.modal.classList.remove("open");
     if (uiState.nodes.openButton) {
       uiState.nodes.openButton.classList.remove("active");
       uiState.nodes.openButton.setAttribute("aria-expanded", "false");
     }
-    uiState.nodes.openButton && uiState.nodes.openButton.focus();
+    if (options.focus !== false && uiState.nodes.openButton) uiState.nodes.openButton.focus();
     return true;
   }
 

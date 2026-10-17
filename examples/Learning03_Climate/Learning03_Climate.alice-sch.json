@@ -1,0 +1,686 @@
+{
+  "schemaVersion": 1,
+  "kind": "AliceSIMCircuit",
+  "mcu": "STM32F103C8T6",
+  "components": [
+    {
+      "id": "mcu",
+      "type": "mcu",
+      "ref": "U1",
+      "value": "STM32F103C8T6",
+      "x": 400,
+      "y": 220,
+      "rotation": 0
+    },
+    {
+      "id": "power",
+      "type": "vcc",
+      "ref": "3V3",
+      "value": "+3V3",
+      "x": 310,
+      "y": 10,
+      "rotation": 0
+    },
+    {
+      "id": "ground",
+      "type": "ground",
+      "ref": "GND",
+      "value": "0V",
+      "x": 310,
+      "y": 570,
+      "rotation": 0
+    },
+    {
+      "id": "sensor",
+      "type": "dht11",
+      "ref": "DHT1",
+      "value": "25.0 °C · 50.0 %RH",
+      "x": 80,
+      "y": 220,
+      "rotation": 0,
+      "peripheralProperties": {
+        "temperatureC": 25,
+        "humidityPercent": 50
+      }
+    },
+    {
+      "id": "digits",
+      "type": "tm1637",
+      "ref": "DISP1",
+      "value": "0",
+      "x": 740,
+      "y": 220,
+      "rotation": 0,
+      "peripheralProperties": {
+        "displayValue": 0,
+        "brightness": 5
+      }
+    },
+    {
+      "id": "dht-pullup",
+      "type": "resistor",
+      "ref": "R_DATA",
+      "value": "4.7 kOhm",
+      "x": 240,
+      "y": 130,
+      "rotation": 90
+    },
+    {
+      "id": "clk-pullup",
+      "type": "resistor",
+      "ref": "R_CLK",
+      "value": "4.7 kOhm",
+      "x": 900,
+      "y": 130,
+      "rotation": 90
+    },
+    {
+      "id": "dio-pullup",
+      "type": "resistor",
+      "ref": "R_DIO",
+      "value": "4.7 kOhm",
+      "x": 1020,
+      "y": 130,
+      "rotation": 90
+    },
+    {
+      "id": "alarm-resistor",
+      "type": "resistor",
+      "ref": "R_ALARM",
+      "value": "330 Ohm",
+      "x": 700,
+      "y": 430,
+      "rotation": 0
+    },
+    {
+      "id": "alarm-led",
+      "type": "led",
+      "ref": "D_ALARM",
+      "value": "TEMP >= 30 C",
+      "x": 870,
+      "y": 430,
+      "rotation": 0,
+      "ledColor": "red"
+    }
+  ],
+  "wires": [
+    {
+      "id": "w1",
+      "from": {
+        "componentId": "power",
+        "pin": "VCC"
+      },
+      "to": {
+        "componentId": "mcu",
+        "pin": "VDD"
+      },
+      "signal": "3V3",
+      "route": [
+        {
+          "x": 342,
+          "y": 68
+        },
+        {
+          "x": 342,
+          "y": 100
+        },
+        {
+          "x": 485,
+          "y": 100
+        },
+        {
+          "x": 485,
+          "y": 220
+        }
+      ]
+    },
+    {
+      "id": "w2",
+      "from": {
+        "componentId": "ground",
+        "pin": "GND"
+      },
+      "to": {
+        "componentId": "mcu",
+        "pin": "VSS"
+      },
+      "signal": "GND",
+      "route": [
+        {
+          "x": 342,
+          "y": 570
+        },
+        {
+          "x": 342,
+          "y": 550
+        },
+        {
+          "x": 485,
+          "y": 550
+        },
+        {
+          "x": 485,
+          "y": 430
+        }
+      ]
+    },
+    {
+      "id": "w3",
+      "from": {
+        "componentId": "power",
+        "pin": "VCC"
+      },
+      "to": {
+        "componentId": "sensor",
+        "pin": "VCC"
+      },
+      "signal": "3V3",
+      "route": [
+        {
+          "x": 342,
+          "y": 68
+        },
+        {
+          "x": 342,
+          "y": 100
+        },
+        {
+          "x": 40,
+          "y": 100
+        },
+        {
+          "x": 40,
+          "y": 236
+        },
+        {
+          "x": 80,
+          "y": 236
+        }
+      ]
+    },
+    {
+      "id": "w4",
+      "from": {
+        "componentId": "ground",
+        "pin": "GND"
+      },
+      "to": {
+        "componentId": "sensor",
+        "pin": "GND"
+      },
+      "signal": "GND",
+      "route": [
+        {
+          "x": 342,
+          "y": 570
+        },
+        {
+          "x": 342,
+          "y": 550
+        },
+        {
+          "x": 50,
+          "y": 550
+        },
+        {
+          "x": 50,
+          "y": 292
+        },
+        {
+          "x": 80,
+          "y": 292
+        }
+      ]
+    },
+    {
+      "id": "w5",
+      "from": {
+        "componentId": "sensor",
+        "pin": "DATA"
+      },
+      "to": {
+        "componentId": "mcu",
+        "pin": "PB0"
+      },
+      "signal": "DHT_DATA",
+      "route": [
+        {
+          "x": 196,
+          "y": 264
+        },
+        {
+          "x": 220,
+          "y": 264
+        },
+        {
+          "x": 220,
+          "y": 110
+        },
+        {
+          "x": 620,
+          "y": 110
+        },
+        {
+          "x": 620,
+          "y": 325
+        },
+        {
+          "x": 570,
+          "y": 325
+        }
+      ]
+    },
+    {
+      "id": "w6",
+      "from": {
+        "componentId": "power",
+        "pin": "VCC"
+      },
+      "to": {
+        "componentId": "digits",
+        "pin": "VCC"
+      },
+      "signal": "3V3",
+      "route": [
+        {
+          "x": 342,
+          "y": 68
+        },
+        {
+          "x": 342,
+          "y": 100
+        },
+        {
+          "x": 700,
+          "y": 100
+        },
+        {
+          "x": 700,
+          "y": 236
+        },
+        {
+          "x": 740,
+          "y": 236
+        }
+      ]
+    },
+    {
+      "id": "w7",
+      "from": {
+        "componentId": "ground",
+        "pin": "GND"
+      },
+      "to": {
+        "componentId": "digits",
+        "pin": "GND"
+      },
+      "signal": "GND",
+      "route": [
+        {
+          "x": 342,
+          "y": 570
+        },
+        {
+          "x": 342,
+          "y": 550
+        },
+        {
+          "x": 680,
+          "y": 550
+        },
+        {
+          "x": 680,
+          "y": 292
+        },
+        {
+          "x": 740,
+          "y": 292
+        }
+      ]
+    },
+    {
+      "id": "w8",
+      "from": {
+        "componentId": "digits",
+        "pin": "CLK"
+      },
+      "to": {
+        "componentId": "mcu",
+        "pin": "PB6"
+      },
+      "signal": "DISP_CLK",
+      "route": [
+        {
+          "x": 872,
+          "y": 236
+        },
+        {
+          "x": 900,
+          "y": 236
+        },
+        {
+          "x": 900,
+          "y": 350
+        },
+        {
+          "x": 620,
+          "y": 350
+        },
+        {
+          "x": 620,
+          "y": 400
+        },
+        {
+          "x": 570,
+          "y": 400
+        }
+      ]
+    },
+    {
+      "id": "w9",
+      "from": {
+        "componentId": "digits",
+        "pin": "DIO"
+      },
+      "to": {
+        "componentId": "mcu",
+        "pin": "PB7"
+      },
+      "signal": "DISP_DIO",
+      "route": [
+        {
+          "x": 872,
+          "y": 292
+        },
+        {
+          "x": 1080,
+          "y": 292
+        },
+        {
+          "x": 1080,
+          "y": 520
+        },
+        {
+          "x": 360,
+          "y": 520
+        },
+        {
+          "x": 360,
+          "y": 400
+        },
+        {
+          "x": 400,
+          "y": 400
+        }
+      ]
+    },
+    {
+      "id": "w10",
+      "from": {
+        "componentId": "power",
+        "pin": "VCC"
+      },
+      "to": {
+        "componentId": "dht-pullup",
+        "pin": "1"
+      },
+      "signal": "3V3",
+      "route": [
+        {
+          "x": 342,
+          "y": 68
+        },
+        {
+          "x": 342,
+          "y": 100
+        },
+        {
+          "x": 266,
+          "y": 100
+        },
+        {
+          "x": 266,
+          "y": 130
+        }
+      ]
+    },
+    {
+      "id": "w11",
+      "from": {
+        "componentId": "dht-pullup",
+        "pin": "2"
+      },
+      "to": {
+        "componentId": "sensor",
+        "pin": "DATA"
+      },
+      "signal": "DHT_DATA",
+      "route": [
+        {
+          "x": 266,
+          "y": 226
+        },
+        {
+          "x": 266,
+          "y": 264
+        },
+        {
+          "x": 196,
+          "y": 264
+        }
+      ]
+    },
+    {
+      "id": "w12",
+      "from": {
+        "componentId": "power",
+        "pin": "VCC"
+      },
+      "to": {
+        "componentId": "clk-pullup",
+        "pin": "1"
+      },
+      "signal": "3V3",
+      "route": [
+        {
+          "x": 342,
+          "y": 68
+        },
+        {
+          "x": 342,
+          "y": 100
+        },
+        {
+          "x": 926,
+          "y": 100
+        },
+        {
+          "x": 926,
+          "y": 130
+        }
+      ]
+    },
+    {
+      "id": "w13",
+      "from": {
+        "componentId": "clk-pullup",
+        "pin": "2"
+      },
+      "to": {
+        "componentId": "digits",
+        "pin": "CLK"
+      },
+      "signal": "DISP_CLK",
+      "route": [
+        {
+          "x": 926,
+          "y": 226
+        },
+        {
+          "x": 926,
+          "y": 236
+        },
+        {
+          "x": 872,
+          "y": 236
+        }
+      ]
+    },
+    {
+      "id": "w14",
+      "from": {
+        "componentId": "power",
+        "pin": "VCC"
+      },
+      "to": {
+        "componentId": "dio-pullup",
+        "pin": "1"
+      },
+      "signal": "3V3",
+      "route": [
+        {
+          "x": 342,
+          "y": 68
+        },
+        {
+          "x": 342,
+          "y": 100
+        },
+        {
+          "x": 1046,
+          "y": 100
+        },
+        {
+          "x": 1046,
+          "y": 130
+        }
+      ]
+    },
+    {
+      "id": "w15",
+      "from": {
+        "componentId": "dio-pullup",
+        "pin": "2"
+      },
+      "to": {
+        "componentId": "digits",
+        "pin": "DIO"
+      },
+      "signal": "DISP_DIO",
+      "route": [
+        {
+          "x": 1046,
+          "y": 226
+        },
+        {
+          "x": 1046,
+          "y": 292
+        },
+        {
+          "x": 872,
+          "y": 292
+        }
+      ]
+    },
+    {
+      "id": "w16",
+      "from": {
+        "componentId": "mcu",
+        "pin": "PB12"
+      },
+      "to": {
+        "componentId": "alarm-resistor",
+        "pin": "1"
+      },
+      "signal": "TEMP_ALARM",
+      "route": [
+        {
+          "x": 400,
+          "y": 325
+        },
+        {
+          "x": 320,
+          "y": 325
+        },
+        {
+          "x": 320,
+          "y": 456
+        },
+        {
+          "x": 700,
+          "y": 456
+        }
+      ]
+    },
+    {
+      "id": "w17",
+      "from": {
+        "componentId": "alarm-resistor",
+        "pin": "2"
+      },
+      "to": {
+        "componentId": "alarm-led",
+        "pin": "A"
+      },
+      "signal": "ALARM_LED",
+      "route": [
+        {
+          "x": 796,
+          "y": 456
+        },
+        {
+          "x": 830,
+          "y": 456
+        },
+        {
+          "x": 830,
+          "y": 462
+        },
+        {
+          "x": 870,
+          "y": 462
+        }
+      ]
+    },
+    {
+      "id": "w18",
+      "from": {
+        "componentId": "alarm-led",
+        "pin": "K"
+      },
+      "to": {
+        "componentId": "ground",
+        "pin": "GND"
+      },
+      "signal": "GND",
+      "route": [
+        {
+          "x": 942,
+          "y": 462
+        },
+        {
+          "x": 1000,
+          "y": 462
+        },
+        {
+          "x": 1000,
+          "y": 550
+        },
+        {
+          "x": 342,
+          "y": 550
+        },
+        {
+          "x": 342,
+          "y": 570
+        }
+      ]
+    }
+  ],
+  "view": {
+    "zoom": 0.9,
+    "panX": 0,
+    "panY": 0,
+    "userView": false
+  }
+}

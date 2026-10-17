@@ -1,0 +1,959 @@
+{
+  "schemaVersion": 1,
+  "kind": "AliceSIMCircuit",
+  "mcu": "STM32F103C8T6",
+  "components": [
+    {
+      "id": "mcu",
+      "type": "mcu",
+      "ref": "MCU",
+      "value": "STM32F103C8T6",
+      "x": 460,
+      "y": 240,
+      "rotation": 0
+    },
+    {
+      "id": "range",
+      "type": "hcsr04",
+      "ref": "RANGE",
+      "value": "150.0 cm",
+      "x": 100,
+      "y": 160,
+      "rotation": 0,
+      "peripheralProperties": {
+        "distanceCm": 150
+      }
+    },
+    {
+      "id": "matrix",
+      "type": "max7219",
+      "ref": "MATRIX",
+      "value": "8x8 MATRIX",
+      "x": 810,
+      "y": 150,
+      "rotation": 0,
+      "peripheralProperties": {
+        "intensity": 8
+      }
+    },
+    {
+      "id": "buzzer",
+      "type": "buzzer",
+      "ref": "BUZZER",
+      "value": "PWM ALARM",
+      "x": 100,
+      "y": 450,
+      "rotation": 0,
+      "peripheralProperties": {
+        "frequencyHz": 2000,
+        "dutyPermille": 500
+      }
+    },
+    {
+      "id": "relay",
+      "type": "relay",
+      "ref": "RELAY",
+      "value": "5V ACTIVE LOW",
+      "x": 780,
+      "y": 430,
+      "rotation": 0,
+      "peripheralProperties": {
+        "activeLow": 1
+      }
+    },
+    {
+      "id": "red-r",
+      "type": "resistor",
+      "ref": "RED-R",
+      "value": "330 Ohm",
+      "x": 970,
+      "y": 420,
+      "rotation": 0
+    },
+    {
+      "id": "red",
+      "type": "led",
+      "ref": "RED",
+      "value": "STOP",
+      "x": 1100,
+      "y": 420,
+      "rotation": 0,
+      "ledColor": "red"
+    },
+    {
+      "id": "green-r",
+      "type": "resistor",
+      "ref": "GREEN-R",
+      "value": "330 Ohm",
+      "x": 970,
+      "y": 560,
+      "rotation": 0
+    },
+    {
+      "id": "green",
+      "type": "led",
+      "ref": "GREEN",
+      "value": "SAFE",
+      "x": 1100,
+      "y": 560,
+      "rotation": 0,
+      "ledColor": "green"
+    },
+    {
+      "id": "cpu-3v3",
+      "type": "vcc",
+      "ref": "CPU-3V3",
+      "value": "+3V3",
+      "x": 510,
+      "y": 100,
+      "rotation": 0
+    },
+    {
+      "id": "cpu-gnd",
+      "type": "ground",
+      "ref": "CPU-GND",
+      "value": "0V",
+      "x": 510,
+      "y": 500,
+      "rotation": 0
+    },
+    {
+      "id": "range-5v",
+      "type": "vcc",
+      "ref": "RANGE-5V",
+      "value": "+5V",
+      "x": 10,
+      "y": 70,
+      "rotation": 0
+    },
+    {
+      "id": "range-gnd",
+      "type": "ground",
+      "ref": "RANGE-GND",
+      "value": "0V",
+      "x": 10,
+      "y": 290,
+      "rotation": 0
+    },
+    {
+      "id": "buzz-3v3",
+      "type": "vcc",
+      "ref": "BUZZ-3V3",
+      "value": "+3V3",
+      "x": 10,
+      "y": 360,
+      "rotation": 0
+    },
+    {
+      "id": "buzz-gnd",
+      "type": "ground",
+      "ref": "BUZZ-GND",
+      "value": "0V",
+      "x": 10,
+      "y": 580,
+      "rotation": 0
+    },
+    {
+      "id": "matrix-5v",
+      "type": "vcc",
+      "ref": "MATRIX-5V",
+      "value": "+5V",
+      "x": 710,
+      "y": 50,
+      "rotation": 0
+    },
+    {
+      "id": "matrix-gnd",
+      "type": "ground",
+      "ref": "MATRIX-GND",
+      "value": "0V",
+      "x": 710,
+      "y": 280,
+      "rotation": 0
+    },
+    {
+      "id": "relay-5v",
+      "type": "vcc",
+      "ref": "RELAY-5V",
+      "value": "+5V",
+      "x": 680,
+      "y": 340,
+      "rotation": 0
+    },
+    {
+      "id": "relay-gnd",
+      "type": "ground",
+      "ref": "RELAY-GND",
+      "value": "0V",
+      "x": 680,
+      "y": 570,
+      "rotation": 0
+    },
+    {
+      "id": "load-3v3",
+      "type": "vcc",
+      "ref": "LOAD-3V3",
+      "value": "+3V3",
+      "x": 960,
+      "y": 300,
+      "rotation": 0
+    },
+    {
+      "id": "load-gnd",
+      "type": "ground",
+      "ref": "LOAD-GND",
+      "value": "0V",
+      "x": 1100,
+      "y": 660,
+      "rotation": 0
+    }
+  ],
+  "wires": [
+    {
+      "id": "w1",
+      "from": {
+        "componentId": "range-5v",
+        "pin": "VCC"
+      },
+      "to": {
+        "componentId": "range",
+        "pin": "VCC"
+      },
+      "signal": "VCC",
+      "route": [
+        {
+          "x": 42,
+          "y": 128
+        },
+        {
+          "x": 42,
+          "y": 176
+        },
+        {
+          "x": 100,
+          "y": 176
+        }
+      ]
+    },
+    {
+      "id": "w2",
+      "from": {
+        "componentId": "range",
+        "pin": "GND"
+      },
+      "to": {
+        "componentId": "range-gnd",
+        "pin": "GND"
+      },
+      "signal": "GND",
+      "route": [
+        {
+          "x": 100,
+          "y": 232
+        },
+        {
+          "x": 42,
+          "y": 232
+        },
+        {
+          "x": 42,
+          "y": 290
+        }
+      ]
+    },
+    {
+      "id": "w3",
+      "from": {
+        "componentId": "buzz-3v3",
+        "pin": "VCC"
+      },
+      "to": {
+        "componentId": "buzzer",
+        "pin": "VCC"
+      },
+      "signal": "VCC",
+      "route": [
+        {
+          "x": 42,
+          "y": 418
+        },
+        {
+          "x": 42,
+          "y": 466
+        },
+        {
+          "x": 100,
+          "y": 466
+        }
+      ]
+    },
+    {
+      "id": "w4",
+      "from": {
+        "componentId": "buzzer",
+        "pin": "GND"
+      },
+      "to": {
+        "componentId": "buzz-gnd",
+        "pin": "GND"
+      },
+      "signal": "GND",
+      "route": [
+        {
+          "x": 100,
+          "y": 522
+        },
+        {
+          "x": 42,
+          "y": 522
+        },
+        {
+          "x": 42,
+          "y": 580
+        }
+      ]
+    },
+    {
+      "id": "w5",
+      "from": {
+        "componentId": "matrix-5v",
+        "pin": "VCC"
+      },
+      "to": {
+        "componentId": "matrix",
+        "pin": "VCC"
+      },
+      "signal": "VCC",
+      "route": [
+        {
+          "x": 742,
+          "y": 108
+        },
+        {
+          "x": 742,
+          "y": 166
+        },
+        {
+          "x": 810,
+          "y": 166
+        }
+      ]
+    },
+    {
+      "id": "w6",
+      "from": {
+        "componentId": "matrix",
+        "pin": "GND"
+      },
+      "to": {
+        "componentId": "matrix-gnd",
+        "pin": "GND"
+      },
+      "signal": "GND",
+      "route": [
+        {
+          "x": 810,
+          "y": 222
+        },
+        {
+          "x": 742,
+          "y": 222
+        },
+        {
+          "x": 742,
+          "y": 280
+        }
+      ]
+    },
+    {
+      "id": "w7",
+      "from": {
+        "componentId": "relay-5v",
+        "pin": "VCC"
+      },
+      "to": {
+        "componentId": "relay",
+        "pin": "VCC"
+      },
+      "signal": "VCC",
+      "route": [
+        {
+          "x": 712,
+          "y": 398
+        },
+        {
+          "x": 712,
+          "y": 446
+        },
+        {
+          "x": 780,
+          "y": 446
+        }
+      ]
+    },
+    {
+      "id": "w8",
+      "from": {
+        "componentId": "relay",
+        "pin": "GND"
+      },
+      "to": {
+        "componentId": "relay-gnd",
+        "pin": "GND"
+      },
+      "signal": "GND",
+      "route": [
+        {
+          "x": 780,
+          "y": 514
+        },
+        {
+          "x": 712,
+          "y": 514
+        },
+        {
+          "x": 712,
+          "y": 570
+        }
+      ]
+    },
+    {
+      "id": "w9",
+      "from": {
+        "componentId": "cpu-3v3",
+        "pin": "VCC"
+      },
+      "to": {
+        "componentId": "mcu",
+        "pin": "VDD"
+      },
+      "signal": "VCC",
+      "route": [
+        {
+          "x": 542,
+          "y": 158
+        },
+        {
+          "x": 542,
+          "y": 200
+        },
+        {
+          "x": 545,
+          "y": 200
+        },
+        {
+          "x": 545,
+          "y": 240
+        }
+      ]
+    },
+    {
+      "id": "w10",
+      "from": {
+        "componentId": "mcu",
+        "pin": "VSS"
+      },
+      "to": {
+        "componentId": "cpu-gnd",
+        "pin": "GND"
+      },
+      "signal": "VSS",
+      "route": [
+        {
+          "x": 545,
+          "y": 450
+        },
+        {
+          "x": 545,
+          "y": 480
+        },
+        {
+          "x": 542,
+          "y": 480
+        },
+        {
+          "x": 542,
+          "y": 500
+        }
+      ]
+    },
+    {
+      "id": "w11",
+      "from": {
+        "componentId": "mcu",
+        "pin": "PB1"
+      },
+      "to": {
+        "componentId": "range",
+        "pin": "TRIG"
+      },
+      "signal": "PB1",
+      "route": [
+        {
+          "x": 630,
+          "y": 383
+        },
+        {
+          "x": 680,
+          "y": 383
+        },
+        {
+          "x": 680,
+          "y": 90
+        },
+        {
+          "x": 260,
+          "y": 90
+        },
+        {
+          "x": 260,
+          "y": 176
+        },
+        {
+          "x": 216,
+          "y": 176
+        }
+      ]
+    },
+    {
+      "id": "w12",
+      "from": {
+        "componentId": "mcu",
+        "pin": "PB10"
+      },
+      "to": {
+        "componentId": "range",
+        "pin": "ECHO"
+      },
+      "signal": "PB10",
+      "route": [
+        {
+          "x": 460,
+          "y": 420
+        },
+        {
+          "x": 280,
+          "y": 420
+        },
+        {
+          "x": 280,
+          "y": 232
+        },
+        {
+          "x": 216,
+          "y": 232
+        }
+      ]
+    },
+    {
+      "id": "w13",
+      "from": {
+        "componentId": "mcu",
+        "pin": "PA0"
+      },
+      "to": {
+        "componentId": "buzzer",
+        "pin": "SIG"
+      },
+      "signal": "PA0",
+      "route": [
+        {
+          "x": 630,
+          "y": 270
+        },
+        {
+          "x": 660,
+          "y": 270
+        },
+        {
+          "x": 660,
+          "y": 620
+        },
+        {
+          "x": 260,
+          "y": 620
+        },
+        {
+          "x": 260,
+          "y": 494
+        },
+        {
+          "x": 216,
+          "y": 494
+        }
+      ]
+    },
+    {
+      "id": "w14",
+      "from": {
+        "componentId": "mcu",
+        "pin": "PA5"
+      },
+      "to": {
+        "componentId": "matrix",
+        "pin": "CLK"
+      },
+      "signal": "PA5",
+      "route": [
+        {
+          "x": 460,
+          "y": 320
+        },
+        {
+          "x": 420,
+          "y": 320
+        },
+        {
+          "x": 420,
+          "y": 20
+        },
+        {
+          "x": 970,
+          "y": 20
+        },
+        {
+          "x": 970,
+          "y": 194
+        },
+        {
+          "x": 942,
+          "y": 194
+        }
+      ]
+    },
+    {
+      "id": "w15",
+      "from": {
+        "componentId": "mcu",
+        "pin": "PA7"
+      },
+      "to": {
+        "componentId": "matrix",
+        "pin": "DIN"
+      },
+      "signal": "PA7",
+      "route": [
+        {
+          "x": 630,
+          "y": 345
+        },
+        {
+          "x": 650,
+          "y": 345
+        },
+        {
+          "x": 650,
+          "y": 120
+        },
+        {
+          "x": 990,
+          "y": 120
+        },
+        {
+          "x": 990,
+          "y": 166
+        },
+        {
+          "x": 942,
+          "y": 166
+        }
+      ]
+    },
+    {
+      "id": "w16",
+      "from": {
+        "componentId": "mcu",
+        "pin": "PB0"
+      },
+      "to": {
+        "componentId": "matrix",
+        "pin": "CS"
+      },
+      "signal": "PB0",
+      "route": [
+        {
+          "x": 460,
+          "y": 370
+        },
+        {
+          "x": 400,
+          "y": 370
+        },
+        {
+          "x": 400,
+          "y": 40
+        },
+        {
+          "x": 1010,
+          "y": 40
+        },
+        {
+          "x": 1010,
+          "y": 222
+        },
+        {
+          "x": 942,
+          "y": 222
+        }
+      ]
+    },
+    {
+      "id": "w17",
+      "from": {
+        "componentId": "mcu",
+        "pin": "PB12"
+      },
+      "to": {
+        "componentId": "relay",
+        "pin": "IN"
+      },
+      "signal": "PB12",
+      "route": [
+        {
+          "x": 630,
+          "y": 420
+        },
+        {
+          "x": 940,
+          "y": 420
+        },
+        {
+          "x": 940,
+          "y": 446
+        },
+        {
+          "x": 896,
+          "y": 446
+        }
+      ]
+    },
+    {
+      "id": "w18",
+      "from": {
+        "componentId": "load-3v3",
+        "pin": "VCC"
+      },
+      "to": {
+        "componentId": "relay",
+        "pin": "COM"
+      },
+      "signal": "VCC",
+      "route": [
+        {
+          "x": 992,
+          "y": 358
+        },
+        {
+          "x": 992,
+          "y": 390
+        },
+        {
+          "x": 920,
+          "y": 390
+        },
+        {
+          "x": 920,
+          "y": 469
+        },
+        {
+          "x": 896,
+          "y": 469
+        }
+      ]
+    },
+    {
+      "id": "w19",
+      "from": {
+        "componentId": "relay",
+        "pin": "NO"
+      },
+      "to": {
+        "componentId": "red-r",
+        "pin": "1"
+      },
+      "signal": "NO",
+      "route": [
+        {
+          "x": 896,
+          "y": 491
+        },
+        {
+          "x": 930,
+          "y": 491
+        },
+        {
+          "x": 930,
+          "y": 446
+        },
+        {
+          "x": 970,
+          "y": 446
+        }
+      ]
+    },
+    {
+      "id": "w20",
+      "from": {
+        "componentId": "relay",
+        "pin": "NC"
+      },
+      "to": {
+        "componentId": "green-r",
+        "pin": "1"
+      },
+      "signal": "NC",
+      "route": [
+        {
+          "x": 896,
+          "y": 514
+        },
+        {
+          "x": 950,
+          "y": 514
+        },
+        {
+          "x": 950,
+          "y": 586
+        },
+        {
+          "x": 970,
+          "y": 586
+        }
+      ]
+    },
+    {
+      "id": "w21",
+      "from": {
+        "componentId": "red-r",
+        "pin": "2"
+      },
+      "to": {
+        "componentId": "red",
+        "pin": "A"
+      },
+      "signal": "2",
+      "route": [
+        {
+          "x": 1066,
+          "y": 446
+        },
+        {
+          "x": 1080,
+          "y": 446
+        },
+        {
+          "x": 1080,
+          "y": 452
+        },
+        {
+          "x": 1100,
+          "y": 452
+        }
+      ]
+    },
+    {
+      "id": "w22",
+      "from": {
+        "componentId": "red",
+        "pin": "K"
+      },
+      "to": {
+        "componentId": "load-gnd",
+        "pin": "GND"
+      },
+      "signal": "K",
+      "route": [
+        {
+          "x": 1172,
+          "y": 452
+        },
+        {
+          "x": 1180,
+          "y": 452
+        },
+        {
+          "x": 1180,
+          "y": 640
+        },
+        {
+          "x": 1132,
+          "y": 640
+        },
+        {
+          "x": 1132,
+          "y": 660
+        }
+      ]
+    },
+    {
+      "id": "w23",
+      "from": {
+        "componentId": "green-r",
+        "pin": "2"
+      },
+      "to": {
+        "componentId": "green",
+        "pin": "A"
+      },
+      "signal": "2",
+      "route": [
+        {
+          "x": 1066,
+          "y": 586
+        },
+        {
+          "x": 1080,
+          "y": 586
+        },
+        {
+          "x": 1080,
+          "y": 592
+        },
+        {
+          "x": 1100,
+          "y": 592
+        }
+      ]
+    },
+    {
+      "id": "w24",
+      "from": {
+        "componentId": "green",
+        "pin": "K"
+      },
+      "to": {
+        "componentId": "load-gnd",
+        "pin": "GND"
+      },
+      "signal": "K",
+      "route": [
+        {
+          "x": 1172,
+          "y": 592
+        },
+        {
+          "x": 1180,
+          "y": 592
+        },
+        {
+          "x": 1180,
+          "y": 640
+        },
+        {
+          "x": 1132,
+          "y": 640
+        },
+        {
+          "x": 1132,
+          "y": 660
+        }
+      ]
+    }
+  ],
+  "view": {
+    "zoom": 0.85,
+    "panX": 0,
+    "panY": 0,
+    "userView": false
+  }
+}

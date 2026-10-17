@@ -25,8 +25,9 @@ test("service worker keeps compilation APIs network-only", () => {
   const apiGuard = worker.indexOf('url.pathname.startsWith("/api/")');
   const respondWith = worker.indexOf("event.respondWith", worker.indexOf('addEventListener("fetch"'));
   assert.ok(apiGuard >= 0 && apiGuard < respondWith);
-  assert.match(worker, /assets\/pwa\/192x192\.png/);
-  assert.match(worker, /assets\/pwa\/512x512\.png/);
+  for (const icon of JSON.parse(read("manifest.webmanifest")).icons) {
+    assert.ok(worker.includes(JSON.stringify(icon.src)), `${icon.src} should be available offline`);
+  }
   assert.doesNotMatch(worker.match(/const APP_SHELL = \[[\s\S]*?\];/)?.[0] || "", /\/api\//);
 });
 

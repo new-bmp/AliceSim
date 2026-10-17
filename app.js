@@ -57,6 +57,29 @@ const APP_PAGE_STORAGE_KEY = "alice.workspace.page.v1";
 const SIMULATION_SPEED_STORAGE_KEY = "alice.simulation.speed.v1";
 const POWER_CALCULATION_STORAGE_KEY = "alice.simulation.power-calculation.v1";
 
+function handlePlatformBackendStatus(detail = {}) {
+  if (state.running || state.buildBusy) return;
+  const engine = $("#engineState span");
+  const mcu = $("#mcuState");
+  const hint = $("#simHint");
+  if (!engine || !mcu || !hint) return;
+  if (detail.available) {
+    if (state.runtimeStatus === "idle") {
+      engine.textContent = "ENGINE READY";
+      mcu.textContent = "IDLE";
+      hint.textContent = "运行后，数字信号会按选择的时间刻在导线上传播。";
+    }
+    return;
+  }
+  if (detail.detail && detail.detail !== "not-probed") {
+    engine.textContent = "HAL OFFLINE";
+    mcu.textContent = "WAITING";
+    hint.textContent = "未连接 AliceSIM HAL 服务 · 请启动本地服务后重试构建。";
+  }
+}
+
+window.addEventListener("alice:platform-backend", event => handlePlatformBackendStatus(event.detail));
+
 function normalizeAppPage(page) {
   return page === "simulation" ? "simulation" : "code";
 }
@@ -67,6 +90,7 @@ function setAppPage(page, options = {}) {
   document.body.classList.toggle("app-page-code", !simulationActive);
   document.body.classList.toggle("app-page-simulation", simulationActive);
   document.body.dataset.appPage = nextPage;
+  setMobileSidebarOpen(false);
   if (simulationActive) document.body.classList.remove("hide-simulator-pane", "ui-editor-focus");
   $$('[data-app-page]').forEach(button => {
     const active = button.dataset.appPage === nextPage;
@@ -443,10 +467,10 @@ $$(".activity-item[data-view]").forEach(btn => btn.addEventListener("click", () 
   $$(".activity-item[data-view]").forEach(item => item.classList.remove("active"));
   btn.classList.add("active");
   $$(".side-view").forEach(view => view.classList.toggle("active", view.dataset.panel === btn.dataset.view));
+  document.body.classList.remove("hide-project-pane");
+  const projectPaneToggle = $('[data-pane-toggle="project"]');
+  if (projectPaneToggle) projectPaneToggle.checked = true;
   if (mobileSidebarMedia.matches) {
-    document.body.classList.remove("hide-project-pane");
-    const projectPaneToggle = $('[data-pane-toggle="project"]');
-    if (projectPaneToggle) projectPaneToggle.checked = true;
     setMobileSidebarOpen(!repeatMobileSelection);
   }
 }));
@@ -491,6 +515,7 @@ function appendTerminal(text, className = "") {
     buildState.textContent = nextState;
     buildState.className = nextState.toLowerCase();
   }
+  document.dispatchEvent(new CustomEvent("alice:build-message", { detail: { text, severity: className } }));
 }
 
 function setBuildOutput(text) { $("#buildOutput").textContent += `\n${text}`; }
@@ -719,6 +744,12 @@ async function processCircuitTicks() {
     return;
   }
   runtimeState = runtimeState || window.AliceHalSimulator.getRuntimeState() || {};
+  if (!state.running) {
+    state.elapsed = state.circuitTime;
+    updateSimulationClocks();
+    state.processingFrame = false;
+    return;
+  }
   const finalRuntimeTime = Number(runtimeState.timeMs);
   if (Number.isFinite(finalRuntimeTime)) state.circuitTime = Math.max(state.circuitTime, finalRuntimeTime);
   state.elapsed = state.circuitTime;
@@ -814,6 +845,7 @@ async function startSimulation() {
     return false;
   }
   state.running = true;
+  window.AlicePeripheralAudio?.setRunning(true);
   state.envelopeOnly = false;
   state.circuitTime = Number(runtimeState?.timeMs) || 0;
   state.elapsed = state.circuitTime;
@@ -849,6 +881,7 @@ async function startSimulation() {
 function stopSimulation(options = {}) {
   const wasEnvelopeOnly = state.envelopeOnly;
   state.running = false;
+  window.AlicePeripheralAudio?.setRunning(false);
   state.envelopeOnly = false;
   window.AliceEnvelopeAutomation?.pause?.();
   if (!wasEnvelopeOnly && !options.skipRuntimePause) {
@@ -888,6 +921,14 @@ async function toggleRun() {
 
 $("#buildButton").addEventListener("click", buildProject);
 $("#runButton").addEventListener("click", toggleRun);
+$("#peripheralSoundToggle")?.addEventListener("click", async event => {
+  const button = event.currentTarget;
+  const enabled = await window.AlicePeripheralAudio?.setEnabled(button.getAttribute("aria-pressed") !== "true");
+  button.setAttribute("aria-pressed", enabled ? "true" : "false");
+  button.textContent = enabled ? "声音：开" : "声音：关";
+  if (enabled) window.AlicePeripheralAudio.sync(window.AliceSchematic?.getState()?.components || [], {running: state.running});
+  else if (window.AlicePeripheralAudio?.getState().available === false) showToast("当前环境无法播放蜂鸣器声音", "warn");
+});
 $("#sideLaunch").addEventListener("click", toggleRun);
 
 window.addEventListener("keydown", event => {
@@ -1020,10 +1061,6 @@ function renderVirtualUart(summary, options = {}) {
   }
 
   if (!uart) {
-    $("#debugUartName").textContent = "UART";
-    $("#debugUartSummary").textContent = "代码未启用 UART";
-    $("#logicTxChannel").textContent = "UART_TX";
-    $("#logicRxChannel").textContent = "UART_RX";
     $("#serialInput").placeholder = "当前固件没有 UART";
     $("#simulationSerialInput").placeholder = "当前固件没有 UART";
     $("#simulationSerialPort").textContent = "未连接 UART";
@@ -1036,10 +1073,6 @@ function renderVirtualUart(summary, options = {}) {
   }
 
   const uartName = uart.instance || uart.handle || "UART";
-  $("#debugUartName").textContent = uartName;
-  $("#debugUartSummary").textContent = `${uart.baudRate || "?"} · ${uart.rxPin || "RX?"}/${uart.txPin || "TX?"}`;
-  $("#logicTxChannel").textContent = `${uartName}_TX`;
-  $("#logicRxChannel").textContent = `${uartName}_RX`;
   $("#serialInput").placeholder = `向 ${uartName} RX 发送数据…`;
   $("#simulationSerialInput").placeholder = `向 ${uartName} RX 发送数据…`;
   $("#simulationSerialPort").textContent = `${uart.baudRate || "?"} baud`;
@@ -1215,41 +1248,27 @@ $("#clearSimulationSerial")?.addEventListener("click", () => {
   if (lines) lines.innerHTML = '<p><span>00:00:00.000</span> 串口记录已清空</p>';
 });
 
-function setRuntimeDockCollapsed(collapsed) {
+function setSerialPaneCollapsed(collapsed) {
   const dock = $("#simulationRuntimeDock");
-  if (!dock) return;
-  dock.classList.toggle("collapsed", Boolean(collapsed));
-  ["freertos", "serial"].forEach(name => setRuntimePaneCollapsed(name, Boolean(collapsed), { resize: false }));
-  window.dispatchEvent(new Event("resize"));
-}
-
-function setRuntimePaneCollapsed(name, collapsed, options = {}) {
-  const dock = $("#simulationRuntimeDock");
-  const pane = name === "freertos" ? $("#freertosMonitor") : $("#simulationSerialMonitor");
-  const toggle = name === "freertos" ? $("#freertosPaneToggle") : $("#serialPaneToggle");
+  const pane = $("#simulationSerialMonitor");
+  const toggle = $("#serialPaneToggle");
   if (!dock || !pane || !toggle) return;
   pane.classList.toggle("collapsed", Boolean(collapsed));
   toggle.setAttribute("aria-expanded", String(!collapsed));
-  toggle.setAttribute("title", `${collapsed ? "展开" : "折叠"}${name === "freertos" ? " FreeRTOS" : "串口"}面板`);
+  toggle.setAttribute("title", `${collapsed ? "展开" : "折叠"}串口面板`);
   const symbol = toggle.querySelector('[aria-hidden="true"]');
   if (symbol) symbol.textContent = collapsed ? "⌄" : "⌃";
   const label = toggle.querySelector(".sr-only");
-  if (label) label.textContent = `${collapsed ? "展开" : "折叠"}${name === "freertos" ? " FreeRTOS" : "串口"}面板`;
-  const bothCollapsed = $("#freertosMonitor")?.classList.contains("collapsed")
-    && $("#simulationSerialMonitor")?.classList.contains("collapsed");
-  dock.classList.toggle("collapsed", Boolean(bothCollapsed));
-  if (options.resize !== false) window.dispatchEvent(new Event("resize"));
+  if (label) label.textContent = `${collapsed ? "展开" : "折叠"}串口面板`;
+  dock.classList.toggle("collapsed", Boolean(collapsed));
+  window.dispatchEvent(new Event("resize"));
 }
 
-$("#freertosPaneToggle")?.addEventListener("click", () => {
-  setRuntimePaneCollapsed("freertos", !$("#freertosMonitor")?.classList.contains("collapsed"));
-});
-
 $("#serialPaneToggle")?.addEventListener("click", () => {
-  setRuntimePaneCollapsed("serial", !$("#simulationSerialMonitor")?.classList.contains("collapsed"));
+  setSerialPaneCollapsed(!$("#simulationSerialMonitor")?.classList.contains("collapsed"));
 });
 
-if (window.matchMedia?.("(max-height: 780px)").matches) setRuntimeDockCollapsed(true);
+if (window.matchMedia?.("(max-height: 780px)").matches) setSerialPaneCollapsed(true);
 
 document.addEventListener("alice:firmware-uart-tx", event => {
   const detail = event.detail || {};
@@ -1277,54 +1296,6 @@ document.addEventListener("alice:uart-source-send", event => {
   appendSerialLine(`${escapeHtml(source)} → ${escapeHtml(uartName)} RX: ${escapeHtml(String(detail.text || ""))}`);
 });
 
-function updateFreeRtosMonitor(runtimeState = null, model = state.firmwareModel) {
-  const descriptor = model?.middlewares?.freertos;
-  const runtimeRtos = runtimeState?.rtos;
-  const detected = Boolean(runtimeRtos?.detected || descriptor?.detected);
-  const scheduler = $("#freertosSchedulerState");
-  const body = $("#freertosTaskBody");
-  if (!scheduler || !body) return;
-  if (!detected) {
-    scheduler.textContent = "BARE METAL";
-    scheduler.classList.remove("running");
-    $("#freertosTick").textContent = "0";
-    $("#freertosHeap").textContent = "—";
-    body.innerHTML = '<tr class="freertos-empty" id="freertosEmpty"><td colspan="7">Bare Metal · 未检测到 FreeRTOS</td></tr>';
-    return;
-  }
-  const schedulerState = String(runtimeRtos?.schedulerState || descriptor?.scheduler || "ready");
-  scheduler.textContent = `${runtimeRtos?.api || descriptor?.api || "FreeRTOS"} · ${schedulerState.toUpperCase()}`;
-  scheduler.classList.toggle("running", schedulerState === "running");
-  $("#freertosTick").textContent = Number(runtimeRtos?.tickCount || 0).toLocaleString();
-  const heapTotal = Number(runtimeRtos?.heapTotalBytes ?? descriptor?.heapBytes ?? 0);
-  const heapUsed = Number(runtimeRtos?.heapUsedBytes || 0);
-  $("#freertosHeap").textContent = heapTotal ? `${Math.round(heapUsed / 1024 * 10) / 10}/${Math.round(heapTotal / 1024 * 10) / 10} KB` : "未配置";
-  const tasks = runtimeRtos?.tasks || (descriptor?.tasks || []).map(task => ({ ...task, state: "Ready", stackHighWaterMarkWords: task.stackWords, cpuPercent: 0, runTimeMs: 0, waitObject: "—" }));
-  if (!tasks.length) {
-    body.innerHTML = '<tr class="freertos-empty" id="freertosEmpty"><td colspan="7">已检测到 FreeRTOS · 尚未识别任务创建调用</td></tr>';
-    return;
-  }
-  body.innerHTML = tasks.map(task => {
-    const stackWords = Math.max(1, Number(task.stackWords) || 1);
-    const freeWords = Math.max(0, Number(task.stackHighWaterMarkWords ?? stackWords));
-    const stackPercent = freeWords / stackWords * 100;
-    const taskState = String(task.state || "Ready");
-    const stateClass = taskState.toLowerCase();
-    const current = runtimeRtos?.currentTaskId === task.id || taskState === "Running";
-    return `<tr class="${current ? "current " : ""}${stackPercent < 15 ? "stack-warning" : ""}" title="${escapeHtml(task.entry || task.name || "Task")}">
-      <td class="task-name"><strong>${escapeHtml(task.name || task.id || "Task")}</strong><small>${escapeHtml(task.entry || "")}</small></td>
-      <td><span class="task-state ${escapeHtml(stateClass)}">${escapeHtml(taskState)}</span></td>
-      <td>${escapeHtml(task.priorityLabel || String(task.priority ?? "—"))}</td>
-      <td>${freeWords}/${stackWords} · ${stackPercent.toFixed(0)}%</td>
-      <td>${Number(task.cpuPercent || 0).toFixed(1)}%</td>
-      <td>${Number(task.runTimeMs || 0).toFixed(3)} ms</td>
-      <td>${escapeHtml(task.waitObject || "—")}</td>
-    </tr>`;
-  }).join("");
-}
-
-document.addEventListener("alice:firmware-state", event => updateFreeRtosMonitor(event.detail || null));
-
 document.addEventListener("alice:firmware-built", event => {
   const model = event.detail?.model || {};
   applyFirmwarePinModel(model);
@@ -1335,19 +1306,13 @@ document.addEventListener("alice:firmware-built", event => {
     const alias = output.aliases?.[0];
     return alias ? `${alias}=${output.physicalPin}` : output.physicalPin;
   });
-  const firstI2c = summary.i2cs?.[0];
   const firstAdc = summary.adcs?.[0];
   const firstAdcChannel = firstAdc?.channels?.[0];
-  $("#debugGpioSummary").textContent = outputLabels.length
-    ? outputLabels.join(" · ")
-    : [firstI2c ? `${firstI2c.instance || firstI2c.handle} ${firstI2c.sclPin || "SCL"}/${firstI2c.sdaPin || "SDA"}` : "", firstAdc ? `${firstAdc.instance || firstAdc.handle} ${firstAdcChannel?.pin || "ADC"}` : ""].filter(Boolean).join(" · ") || "代码未驱动 GPIO";
   $("#traceSignalName").textContent = summary.tracePin || "无 GPIO 波形";
-  $("#logicPrimaryChannel").textContent = summary.tracePin ? `${summary.tracePin} / GPIO` : "GPIO output";
   renderTraceChannelOptions(summary.traceChannels || [], summary.tracePins || (summary.tracePin ? [summary.tracePin] : []));
-  $("#gpioWatchLabel").textContent = outputLabels.length ? "GPIO pin state" : (firstAdc ? `${firstAdc.instance || firstAdc.handle} / ${firstAdcChannel?.pin || "analog"}` : "GPIO outputs");
+  $("#gpioWatchLabel").textContent = outputLabels.length ? "GPIO 引脚状态" : (firstAdc ? `${firstAdc.instance || firstAdc.handle} / ${firstAdcChannel?.pin || "analog"}` : "引脚状态");
   renderVirtualUart(summary, { resetLog: true });
   state.firmwareModel = model;
-  updateFreeRtosMonitor(null, model);
 });
 
 function escapeHtml(value) { const div = document.createElement("div"); div.textContent = value; return div.innerHTML; }
@@ -1520,7 +1485,8 @@ const traceChannelCount = $("#traceChannelCount");
 const TRACE_COLORS = ["#107c10", "#0f6cbd", "#8764a5", "#ca5010"];
 
 function traceChannelLabel(channel) {
-  return `${channel.label || channel.pin}${channel.source && channel.source !== "GPIO" ? ` · ${channel.source}` : ""}`;
+  const description = [...new Set([channel.label, channel.source].filter(value => value && value !== channel.pin))].join(" · ");
+  return `${channel.pin}${description ? ` · ${description}` : ""}`;
 }
 
 function selectedTracePins() {
@@ -1530,7 +1496,10 @@ function selectedTracePins() {
 function updateTraceChannelSummary(pins, channels) {
   const selected = Array.isArray(pins) ? pins : [];
   const descriptors = Array.isArray(channels) ? channels : [];
-  const names = selected.map(pin => descriptors.find(channel => channel.pin === pin)?.label || pin);
+  const names = selected.map(pin => {
+    const label = descriptors.find(channel => channel.pin === pin)?.label;
+    return label && label !== pin && label !== "GPIO" ? `${pin} / ${label}` : pin;
+  });
   traceChannelCount.textContent = String(selected.length);
   $("#traceSignalName").textContent = names.length ? names.slice(0, 2).join(" · ") + (names.length > 2 ? ` +${names.length - 2}` : "") : "无 GPIO 波形";
 }
@@ -1544,7 +1513,14 @@ function applyTraceChannelSelection(channels) {
   const next = selectedTracePins();
   window.AliceHalSimulator?.setTracePins?.(next);
   updateTraceChannelSummary(next, channels);
+  document.dispatchEvent(new CustomEvent("alice:trace-selection", { detail: { pins: next, channels } }));
 }
+
+document.addEventListener("alice:trace-selection", event => {
+  const { pins = [], channels = [] } = event.detail || {};
+  $$("input[data-trace-pin]", traceChannelOptions).forEach(input => { input.checked = pins.includes(input.dataset.tracePin); });
+  updateTraceChannelSummary(pins, channels);
+});
 
 function renderTraceChannelOptions(channels, selectedPins) {
   if (!traceChannelOptions) return;
@@ -1638,7 +1614,7 @@ function drawLogic() {
     ctx.shadowBlur = 0;
     ctx.fillStyle = color;
     ctx.font = "10px Segoe UI, sans-serif";
-    ctx.fillText(channel.label || channel.pin, 5, top + 11);
+    ctx.fillText(traceChannelLabel(channel), 5, top + 11);
     ctx.restore();
   });
   requestAnimationFrame(drawLogic);

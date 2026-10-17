@@ -146,12 +146,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px
 .brand > div:last-child { font-size: 15px; letter-spacing: -.5px; }
 .brand strong { font-weight: 650; }
 .brand em { font-style: normal; font-size: 9px; letter-spacing: 1.1px; color: var(--violet-bright); margin-left: 4px; }
-.brand-mark { position: relative; width: 21px; height: 21px; transform: rotate(45deg); border: 1px solid #9271e8; border-radius: 4px; background: linear-gradient(145deg, #8b5cf6 0%, #3e285f 60%, #1e1730 100%); box-shadow: 0 0 16px rgba(139,92,246,.25); }
-.brand-mark::before, .brand-mark::after, .brand-mark span::before, .brand-mark span::after { content: ""; position: absolute; background: #a68af0; border-radius: 1px; }
-.brand-mark::before { width: 1px; height: 5px; left: 5px; top: -5px; box-shadow: 5px 0 #a68af0, 10px 0 #a68af0; }
-.brand-mark::after { width: 1px; height: 5px; left: 5px; bottom: -5px; box-shadow: 5px 0 #a68af0, 10px 0 #a68af0; }
-.brand-mark span::before { height: 1px; width: 5px; top: 5px; left: -5px; box-shadow: 0 5px #a68af0, 0 10px #a68af0; }
-.brand-mark span::after { height: 1px; width: 5px; top: 5px; right: -5px; box-shadow: 0 5px #a68af0, 0 10px #a68af0; }
+.brand-mark { display: block; width: 28px; height: 28px; flex: 0 0 28px; object-fit: contain; }
 .project-crumbs { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding-left: 17px; color: #687082; }
 .project-crumbs > span:first-child { font: 9px "JetBrains Mono"; text-transform: uppercase; letter-spacing: .6px; }
 .project-crumbs svg { width: 12px; height: 12px; }
@@ -530,22 +525,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 1px
 }
 .visio-theme .brand > div:last-child { font-size: 14px; letter-spacing: 0; }
 .visio-theme .brand em { color: rgba(255,255,255,.72); font-size: 8px; }
-.visio-theme .brand-mark {
-  width: 19px;
-  height: 19px;
-  border: 1px solid rgba(255,255,255,.85);
-  border-radius: 1px;
-  background: transparent;
-  box-shadow: none;
-}
-.visio-theme .brand-mark::before,
-.visio-theme .brand-mark::after,
-.visio-theme .brand-mark span::before,
-.visio-theme .brand-mark span::after { background: rgba(255,255,255,.78); box-shadow: none; }
-.visio-theme .brand-mark::before { box-shadow: 5px 0 rgba(255,255,255,.78), 10px 0 rgba(255,255,255,.78); }
-.visio-theme .brand-mark::after { box-shadow: 5px 0 rgba(255,255,255,.78), 10px 0 rgba(255,255,255,.78); }
-.visio-theme .brand-mark span::before { box-shadow: 0 5px rgba(255,255,255,.78), 0 10px rgba(255,255,255,.78); }
-.visio-theme .brand-mark span::after { box-shadow: 0 5px rgba(255,255,255,.78), 0 10px rgba(255,255,255,.78); }
 .visio-theme .project-crumbs {
   justify-content: center;
   height: 34px;
@@ -3712,7 +3691,7 @@ body.visio-theme.app-page-simulation .schematic-console .tick-controls {
   flex: 0 0 154px;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(520px, 1.35fr) minmax(360px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   overflow: hidden;
   border-top: 1px solid #bfc2bc;
   background: #fff;
@@ -3740,26 +3719,10 @@ body.visio-theme.app-page-simulation .schematic-console .tick-controls {
 .visio-theme .build-pane-actions > strong.failed { color: #ef7b85; }
 .visio-theme .build-pane-actions > button:not(.runtime-pane-toggle) { height: 23px; padding: 0 8px; border: 1px solid #555b63; border-radius: 2px; color: #d5d8dc; background: #252a31; font-size: 9px; }
 .visio-theme .simulation-build-monitor .runtime-pane-toggle { border-color: #555b63; color: #d5d8dc; background: #252a31; }
-.visio-theme .simulation-runtime-dock.collapsed { flex-basis: 34px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-.visio-theme .freertos-monitor,
+.visio-theme .simulation-runtime-dock.collapsed { flex-basis: 34px; }
 .visio-theme .simulation-serial-monitor { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
-.visio-theme .freertos-monitor.collapsed .freertos-table-wrap,
 .visio-theme .simulation-serial-monitor.collapsed .simulation-serial-lines,
 .visio-theme .simulation-serial-monitor.collapsed .simulation-serial-form { display: none; }
-@media (min-width: 861px) {
-  .visio-theme .simulation-runtime-dock:has(.freertos-monitor.collapsed):not(:has(.simulation-serial-monitor.collapsed)) {
-    grid-template-columns: 34px minmax(360px, 1fr);
-  }
-  .visio-theme .simulation-runtime-dock:has(.simulation-serial-monitor.collapsed):not(:has(.freertos-monitor.collapsed)) {
-    grid-template-columns: minmax(520px, 1fr) 34px;
-  }
-  .visio-theme .freertos-monitor.collapsed .runtime-pane-head,
-  .visio-theme .simulation-serial-monitor.collapsed .runtime-pane-head { justify-content: center; padding: 0; }
-  .visio-theme .freertos-monitor.collapsed .runtime-pane-head > div:first-child,
-  .visio-theme .simulation-serial-monitor.collapsed .runtime-pane-head > div:first-child,
-  .visio-theme .freertos-monitor.collapsed .rtos-summary > :not(.runtime-pane-toggle),
-  .visio-theme .simulation-serial-monitor.collapsed .serial-pane-actions > :not(.runtime-pane-toggle) { display: none; }
-}
 .visio-theme .runtime-pane-toggle {
   width: 24px;
   min-width: 24px;
@@ -3786,7 +3749,6 @@ body.visio-theme.app-page-simulation .schematic-console .tick-controls {
   white-space: nowrap !important;
   border: 0 !important;
 }
-.visio-theme .freertos-monitor { border-right: 1px solid #c8c8c8; }
 .visio-theme .runtime-pane-head {
   flex: 0 0 34px;
   min-width: 0;
@@ -3803,33 +3765,7 @@ body.visio-theme.app-page-simulation .schematic-console .tick-controls {
 .visio-theme .runtime-pane-head > div:first-child strong { overflow: hidden; color: #242424; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .visio-theme .virtual-uart-select { width: 118px; height: 23px; min-width: 0; border: 1px solid #a8a8a8; border-radius: 2px; padding: 0 20px 0 6px; color: #242424; background: #fff; font: 10px Consolas, "Cascadia Mono", monospace; }
 .visio-theme .virtual-uart-select:disabled { color: #8a8886; background: #f3f2f1; }
-.visio-theme .rtos-summary,
 .visio-theme .serial-pane-actions { min-width: 0; display: flex; align-items: center; gap: 9px; color: #616161; font-size: 10px; white-space: nowrap; }
-.visio-theme .rtos-summary > b { padding: 4px 7px; border-radius: 2px; color: #616161; background: #dededb; font-size: 9px; }
-.visio-theme .rtos-summary > b.running { color: #fff; background: #107c10; }
-.visio-theme .rtos-summary strong { color: #075a9c; font: 700 10px Consolas, "Cascadia Mono", monospace; }
-.visio-theme .freertos-table-wrap { flex: 1; min-height: 0; overflow: auto; background: #fff; }
-.visio-theme .freertos-task-table { width: 100%; border-collapse: collapse; table-layout: fixed; color: #323130; font-size: 10px; }
-.visio-theme .freertos-task-table th {
-  position: sticky; top: 0; z-index: 1; height: 24px; padding: 0 7px; border-bottom: 1px solid #d6d6d6;
-  color: #616161; background: #f7f7f7; font-size: 9px; font-weight: 600; text-align: left;
-}
-.visio-theme .freertos-task-table td { height: 27px; padding: 3px 7px; overflow: hidden; border-bottom: 1px solid #ededed; text-overflow: ellipsis; white-space: nowrap; }
-.visio-theme .freertos-task-table th:nth-child(1) { width: 18%; }
-.visio-theme .freertos-task-table th:nth-child(2) { width: 12%; }
-.visio-theme .freertos-task-table th:nth-child(3) { width: 12%; }
-.visio-theme .freertos-task-table th:nth-child(4) { width: 13%; }
-.visio-theme .freertos-task-table th:nth-child(5) { width: 9%; }
-.visio-theme .freertos-task-table th:nth-child(6) { width: 14%; }
-.visio-theme .freertos-task-table tr.current { background: #e5f1fb; box-shadow: inset 3px 0 #0f6cbd; }
-.visio-theme .freertos-task-table tr.stack-warning { box-shadow: inset -3px 0 #c42b1c; }
-.visio-theme .freertos-task-table td.task-name strong { display: block; overflow: hidden; color: #242424; font-size: 10px; text-overflow: ellipsis; }
-.visio-theme .freertos-task-table td.task-name small { color: #8a8886; font-size: 8px; }
-.visio-theme .task-state { display: inline-block; min-width: 46px; padding: 3px 5px; border-radius: 9px; color: #616161; background: #ededed; text-align: center; }
-.visio-theme .task-state.running { color: #fff; background: #107c10; }
-.visio-theme .task-state.blocked { color: #8a4700; background: #fff4ce; }
-.visio-theme .task-state.fault { color: #a4262c; background: #fde7e9; }
-.visio-theme .freertos-empty td { height: 64px; color: #616161; text-align: center; }
 .visio-theme .simulation-serial-monitor { background: #fff; }
 .visio-theme .serial-pane-actions button {
   height: 23px; padding: 0 7px; border: 1px solid #a8a8a8; border-radius: 2px; color: #323130; background: #fff; font-size: 9px;
@@ -3866,24 +3802,9 @@ body.visio-theme.app-page-simulation .schematic-console .tick-controls {
 .visio-theme .serial-bridge-actions .modal-primary { border-color: #0f6cbd; color: #fff; background: #0f6cbd; }
 .visio-theme .serial-bridge-actions .modal-primary:hover { background: #115ea3; }
 
-@media (max-width: 1180px) {
-  .visio-theme .simulation-runtime-dock { grid-template-columns: minmax(430px, 1.2fr) minmax(310px, 1fr); }
-  .visio-theme .freertos-task-table th:nth-child(6), .visio-theme .freertos-task-table td:nth-child(6),
-  .visio-theme .freertos-task-table th:nth-child(7), .visio-theme .freertos-task-table td:nth-child(7) { display: none; }
-}
-@media (max-width: 860px) {
-  .visio-theme .simulation-runtime-dock { flex-basis: 204px; grid-template-columns: 1fr; grid-template-rows: 102px 102px; }
-  .visio-theme .simulation-runtime-dock.collapsed { flex-basis: 68px; grid-template-rows: 34px 34px; }
-  .visio-theme .simulation-runtime-dock:has(.freertos-monitor.collapsed):not(:has(.simulation-serial-monitor.collapsed)) { grid-template-rows: 34px minmax(0, 1fr); }
-  .visio-theme .simulation-runtime-dock:has(.simulation-serial-monitor.collapsed):not(:has(.freertos-monitor.collapsed)) { grid-template-rows: minmax(0, 1fr) 34px; }
-  .visio-theme .freertos-monitor { border-right: 0; border-bottom: 1px solid #c8c8c8; }
-  .visio-theme .rtos-summary span { display: none; }
-}
 @media (max-height: 780px) and (min-width: 861px) {
   .visio-theme .simulation-runtime-dock { flex-basis: 116px; }
   .visio-theme .runtime-pane-head { flex-basis: 31px; }
-  .visio-theme .freertos-task-table th { height: 22px; }
-  .visio-theme .freertos-task-table td { height: 24px; }
 }
 .visio-theme #simulationSpeedSelect { min-width: 72px; color: #075a9c; font-weight: 700; }
 .visio-theme #simulationSpeedReadout { color: #075a9c; }
@@ -4982,3 +4903,747 @@ body.visio-theme.ribbon-collapsed .topbar > .ribbon { display: none; }
 .visio-theme .catalog-effect .effect-sun-rays { fill: none; stroke: #ffdb83; stroke-width: 3; }
 .visio-theme .effect-alarm .effect-pointer,
 .visio-theme .effect-alarm .effect-gauge-fill { stroke: #f66b52; fill: #f66b52; }
+
+/* --------------------------------------------------------------------------
+   AliceSIM modern workspace polish
+
+   This is intentionally a visual-only layer. Existing IDs, state classes and
+   panel-resize behaviour stay intact; compact ribbon controls share one row
+   so captions never compete with a second row of commands.
+   -------------------------------------------------------------------------- */
+.visio-theme {
+  --bg: #edf3f9;
+  --panel: #ffffff;
+  --panel-2: #f7faff;
+  --panel-3: #e8f0f7;
+  --line: #d7e1eb;
+  --line-soft: #e5edf4;
+  --text: #172335;
+  --muted: #66778c;
+  --muted-2: #40546d;
+  --violet: #536dfe;
+  --violet-bright: #7b8cff;
+  --cyan: #0b9fa2;
+  --green: #16865f;
+  --orange: #c57625;
+  --red: #c84b4b;
+  --modern-shadow: 0 8px 24px rgba(32, 57, 83, .08);
+  --modern-shadow-soft: 0 2px 9px rgba(32, 57, 83, .06);
+  color: var(--text);
+  background: var(--bg);
+}
+
+.visio-theme button:focus-visible,
+.visio-theme input:focus-visible,
+.visio-theme select:focus-visible,
+.visio-theme textarea:focus-visible {
+  outline: 3px solid rgba(83, 109, 254, .27);
+  outline-offset: 1px;
+}
+
+.visio-theme .app-shell {
+  background: linear-gradient(135deg, #f4f8fc 0%, #eaf1f7 100%);
+}
+
+/* Keep the ribbon useful at laptop heights while reclaiming a little canvas. */
+@media (min-width: 721px) {
+  .visio-theme { --top: 140px; }
+  .visio-theme .topbar { grid-template-rows: 36px 32px 72px; }
+  .visio-theme .ribbon { height: 72px; }
+}
+
+.visio-theme .topbar {
+  border: 0;
+  background: rgba(248, 251, 255, .94);
+  box-shadow: 0 5px 18px rgba(27, 49, 74, .12);
+  backdrop-filter: blur(12px);
+}
+
+.visio-theme .office-titlebar {
+  color: #eef5ff;
+  background: linear-gradient(105deg, #17243a 0%, #203653 58%, #2a4160 100%);
+  box-shadow: inset 0 -1px rgba(255,255,255,.08);
+}
+.visio-theme .quick-access,
+.visio-theme .top-actions { border-color: rgba(255,255,255,.10); }
+.visio-theme .quick-access button,
+.visio-theme .icon-button { border-radius: 8px; }
+.visio-theme .quick-access button:hover,
+.visio-theme .icon-button:hover { background: rgba(255,255,255,.13); }
+.visio-theme .brand { border-right-color: rgba(255,255,255,.12); }
+.visio-theme .brand-mark {
+  width: 28px;
+  height: 28px;
+}
+.visio-theme .project-name { border-radius: 7px; }
+.visio-theme .project-name:hover { background: rgba(255,255,255,.14); }
+.visio-theme .chip-badge,
+.visio-theme .engine-state {
+  border-radius: 999px;
+  background: rgba(6, 17, 34, .24);
+}
+.visio-theme .user-avatar { border-radius: 9px; }
+.visio-theme .app-page-switcher { border-color: rgba(192,211,245,.22); border-radius: 8px; background: rgba(6,17,34,.2); }
+.visio-theme .app-page-switcher button { border-radius: 5px; }
+.visio-theme .app-page-switcher button.active { color: #3655ce; background: #eef3ff; }
+
+.visio-theme .tutorials-button {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 6px;
+  height: 28px;
+  margin-right: 8px;
+  padding: 0 9px;
+  border: 1px solid rgba(192, 211, 245, .3);
+  border-radius: 7px;
+  color: #eef5ff;
+  background: rgba(255, 255, 255, .08);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+.visio-theme .tutorials-button svg { width: 15px; height: 15px; }
+.visio-theme .tutorials-button:hover { background: rgba(255, 255, 255, .18); }
+.visio-theme .tutorials-button:focus-visible { outline: 2px solid #b7caff; outline-offset: 2px; }
+@media (max-width: 720px) {
+  .visio-theme .tutorials-button { margin-right: 2px; padding-inline: 7px; }
+  .visio-theme .tutorials-button svg,
+  .visio-theme .tutorials-label-extra { display: none; }
+}
+
+.visio-theme .ribbon-tabs {
+  padding-inline: 8px;
+  gap: 3px;
+  border-bottom: 1px solid var(--line);
+  background: #f7faff;
+}
+.visio-theme .ribbon-tabs button {
+  min-width: 62px;
+  border: 0;
+  border-radius: 8px 8px 0 0;
+  color: #53657a;
+  transition: color .16s ease, background .16s ease;
+}
+.visio-theme .ribbon-tabs button:hover { color: #283c57; background: #eaf1fb; }
+.visio-theme .ribbon-tabs button.active {
+  color: #3553d4;
+  border-bottom-color: transparent;
+  background: #e6edff;
+  box-shadow: inset 0 -2px #536dfe;
+}
+.visio-theme .ribbon-tabs .file-tab {
+  border-radius: 8px 8px 0 0;
+  color: #fff;
+  background: #536dfe;
+}
+.visio-theme .ribbon-tabs .file-tab:hover { background: #435bdc; }
+.visio-theme .ribbon-context { color: #657a98; }
+
+.visio-theme .ribbon {
+  gap: 7px;
+  padding: 5px 9px 4px;
+  color: var(--text);
+  background: #f7faff;
+}
+.visio-theme .ribbon-group {
+  min-width: 0;
+  gap: 4px;
+  padding: 3px 8px 16px;
+  border: 1px solid #e0e8f1;
+  border-radius: 10px;
+  background: rgba(255,255,255,.9);
+  box-shadow: var(--modern-shadow-soft);
+}
+.visio-theme .ribbon-group > small,
+.visio-theme .ribbon-group > span { bottom: 2px; color: #65758c; line-height: 13px; }
+.visio-theme .ribbon-group button { border-radius: 8px; }
+.visio-theme .ribbon-group button:hover { border-color: #c5d2e2; background: #f5f8ff; }
+.visio-theme .ribbon-large,
+.visio-theme .ribbon-medium {
+  width: auto;
+  min-width: 88px;
+  height: 42px;
+  flex-direction: row;
+  gap: 7px;
+  padding: 0 9px;
+  border-radius: 8px;
+}
+.visio-theme .ribbon-large svg,
+.visio-theme .ribbon-medium svg { width: 21px; height: 21px; }
+.visio-theme .ribbon-medium b { font-size: 12px; }
+.visio-theme .ribbon-large.accent {
+  color: #136647;
+  background: #e6f7ef;
+  box-shadow: inset 0 0 0 1px #c0e8d5;
+}
+.visio-theme .ribbon-large.accent:hover { background: #d8f2e5; }
+.visio-theme .ribbon-large.running { background: #ffebeb; box-shadow: inset 0 0 0 1px #f2c5c5; }
+.visio-theme .ribbon-stack { flex-direction: row; align-items: center; gap: 4px; }
+.visio-theme .ribbon-stack button,
+.visio-theme .ribbon-group[data-ui-action-group="file-project"] .ribbon-stack button {
+  height: 42px;
+  min-width: 76px;
+  flex-direction: row;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 9px;
+  border-radius: 7px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.visio-theme .ribbon-group[data-ui-action-group="file-project"] .ribbon-stack { grid-template-columns: repeat(3, auto); }
+.visio-theme .ui-ribbon-glyph { width: 18px; color: #536dfe; font-size: 16px; }
+.visio-theme .ribbon-tile { width: 25px; height: 25px; border-radius: 7px; }
+.visio-theme .device-tile { border-color: #6e5bc8; background: #6e5bc8; }
+.visio-theme .ribbon-checks { height: 42px; flex-direction: row; align-items: center; gap: 14px; color: #4f6279; }
+
+/* Put the palette title beside the scrolling items, leaving enough vertical
+   space for both symbols and labels even with a non-overlay scrollbar. */
+.visio-theme .topbar .ribbon > .ribbon-component-library {
+  grid-template-columns: 80px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
+  background: #fff;
+}
+.visio-theme .topbar .ribbon > .ribbon-component-library .library-head {
+  grid-column: 1;
+  grid-row: 1;
+  height: 100% !important;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  border-top: 0;
+  border-right: 1px solid var(--line-soft);
+  background: #f2f6ff;
+  color: #516681;
+}
+.visio-theme .topbar .ribbon > .ribbon-component-library .library-head button {
+  width: 28px;
+  height: 24px;
+  border-color: #d2dcef;
+  background: #fff;
+}
+.visio-theme .topbar .ribbon > .ribbon-component-library .library-items {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: stretch;
+  background: #fff;
+}
+.visio-theme .topbar .ribbon > .ribbon-component-library .library-items button { border-color: var(--line-soft); background: #fff; }
+.visio-theme .topbar .ribbon > .ribbon-component-library .library-items button:hover { color: #3554cf; background: #eef2ff; }
+
+.visio-theme .activity-bar {
+  border-right: 0;
+  background: #1d2b40;
+  box-shadow: inset -1px 0 rgba(255,255,255,.06);
+}
+.visio-theme .activity-item {
+  width: calc(var(--activity) - 4px);
+  margin: 2px 2px;
+  border-radius: 9px;
+  color: #9cafc7;
+}
+.visio-theme .activity-item:hover { color: #f4f8ff; background: rgba(255,255,255,.09); }
+.visio-theme .activity-item.active {
+  color: #fff;
+  background: linear-gradient(135deg, rgba(100, 128, 255, .96), rgba(83, 109, 254, .76));
+  box-shadow: 0 5px 12px rgba(11, 23, 46, .26);
+}
+.visio-theme .activity-item.active::before { display: none; }
+
+.visio-theme .sidebar {
+  border-right: 1px solid var(--line);
+  background: rgba(255,255,255,.88);
+  box-shadow: 5px 0 18px rgba(32, 57, 83, .06);
+}
+.visio-theme .panel-title {
+  color: #6e7e92;
+  letter-spacing: .11em;
+}
+.visio-theme .panel-title button { border-radius: 7px; color: #71849a; }
+.visio-theme .panel-title button:hover { color: #344b68; background: #edf3fb; }
+.visio-theme .import-card {
+  border: 1px dashed #a9bde0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f3f6ff, #f8fbff);
+  box-shadow: var(--modern-shadow-soft);
+}
+.visio-theme .import-card:hover {
+  border-color: #6681ee;
+  background: #eef3ff;
+  box-shadow: 0 7px 18px rgba(83, 109, 254, .13);
+}
+.visio-theme .import-card strong { text-wrap: balance; line-height: 1.4; }
+.visio-theme .import-icon { border-radius: 10px; background: #e5ebff; color: #536dfe; }
+.visio-theme .tree-row {
+  border-radius: 7px;
+  color: #5a6e86;
+}
+.visio-theme .tree-row:hover { color: #263b57; background: #f0f5fb; }
+.visio-theme .tree-row.selected {
+  color: #294ac5;
+  background: #e7edff;
+  box-shadow: inset 3px 0 #536dfe;
+}
+.visio-theme .tree-row.selected::before { display: none; }
+.visio-theme .outline-section { border-color: var(--line-soft); }
+.visio-theme .outline-section button { border-color: var(--line-soft); border-radius: 7px; color: #6e7e92; background: #fbfdff; }
+.visio-theme .outline-section button:hover { color: #29415f; background: #f1f6fb; }
+.visio-theme .device-summary,
+.visio-theme .spec-grid,
+.visio-theme .component-grid button,
+.visio-theme .analyzer-empty {
+  border-color: var(--line);
+  border-radius: 11px;
+  background: #fbfdff;
+  box-shadow: var(--modern-shadow-soft);
+}
+.visio-theme .device-mini-chip { border-radius: 9px; border-color: #9db2d0; background: #eaf0fa; box-shadow: inset 0 0 0 3px #fff; color: #365276; }
+.visio-theme .spec-grid div { border-color: var(--line-soft); border-radius: 7px; background: #f7faff; }
+.visio-theme .component-search { border-color: #c7d4e2; border-radius: 9px; background: #fff; box-shadow: inset 0 1px 2px rgba(35, 57, 82, .04); }
+.visio-theme .component-search:focus-within { border-color: #7f98ed; box-shadow: 0 0 0 3px rgba(83,109,254,.12); }
+.visio-theme .component-grid button { transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease; }
+.visio-theme .component-grid button:hover { border-color: #8ba2ef; background: #f3f6ff; box-shadow: 0 7px 16px rgba(83,109,254,.12); transform: translateY(-1px); }
+
+.visio-theme .workspace {
+  color: var(--text);
+  background: #eaf1f7;
+}
+.visio-theme .workspace-tabs { border-bottom: 1px solid var(--line); background: #f6f9fc; }
+.visio-theme .work-tab {
+  border-right: 1px solid var(--line-soft);
+  color: #6a7b90;
+  background: transparent;
+}
+.visio-theme .work-tab:hover { color: #2c4360; background: #edf3fb; }
+.visio-theme .work-tab.active { color: #1b2d47; background: #fff; box-shadow: inset 0 -2px #536dfe; }
+.visio-theme .work-tab.active::before { display: none; }
+.visio-theme .code-view,
+.visio-theme .pinout-view,
+.visio-theme .clock-view {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--modern-shadow);
+  overflow: hidden;
+}
+.visio-theme .editor-breadcrumb,
+.visio-theme .config-toolbar,
+.visio-theme .clock-header { border-color: var(--line-soft); background: #f8fbff; }
+.visio-theme .editor-wrap { background: #fff; }
+
+.visio-theme .simulator-panel {
+  border-left: 1px solid var(--line);
+  color: var(--text);
+  background: #eaf1f7;
+}
+.visio-theme .schematic-head {
+  border-color: var(--line);
+  background: #f8fbff;
+}
+.visio-theme .schematic-head strong { color: #1b2f49; }
+.visio-theme .schematic-head span { color: #73859a; }
+.visio-theme .schematic-head-actions > span {
+  border-color: #cbd8e6;
+  border-radius: 7px;
+  color: #536982;
+  background: #fff;
+}
+.visio-theme .schematic-head-actions button { border-radius: 7px; }
+.visio-theme .schematic-head-actions button:hover { color: #294bc4; background: #eaf0ff; }
+.visio-theme .schematic-toolbar {
+  gap: 4px;
+  border-color: var(--line);
+  background: #f3f7fb;
+  box-shadow: inset 0 -1px rgba(255,255,255,.9);
+}
+.visio-theme .schematic-toolbar button,
+.visio-theme .schematic-label-toggle {
+  border-radius: 7px;
+}
+.visio-theme .schematic-toolbar button:hover,
+.visio-theme .schematic-label-toggle:hover { border-color: #b8c9df; background: #fff; }
+.visio-theme .schematic-toolbar button.active,
+.visio-theme .schematic-toolbar button[aria-pressed="true"] {
+  border-color: #91a6ec;
+  color: #3455d2;
+  background: #e5ebff;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.8);
+}
+.visio-theme .schematic-viewport { border-color: var(--line); background: #fafdff; }
+.visio-theme .schematic-cursor-status {
+  border-color: var(--line);
+  border-radius: 0 8px 0 0;
+  color: #5f738c;
+  background: rgba(255,255,255,.91);
+}
+
+.visio-theme .simulation-time-observer {
+  color: var(--text);
+  background: #eaf1f7;
+  border-top-color: var(--line);
+}
+.visio-theme .time-observer-head,
+.visio-theme .simulation-time-observer > .schematic-console,
+.visio-theme .simulation-time-observer .schematic-timeline,
+.visio-theme .simulation-time-observer .envelope-dock {
+  border-color: var(--line);
+  background: #fff;
+  box-shadow: var(--modern-shadow-soft);
+}
+.visio-theme .time-observer-head { border-radius: 10px 10px 0 0; }
+.visio-theme .time-observer-head span { color: #536dfe; }
+.visio-theme .time-observer-head strong { color: #304661; }
+.visio-theme .time-observer-actions > b { border-radius: 999px; color: #47617f; background: #edf3fb; }
+.visio-theme .power-calculation-toggle { color: #60748b; }
+.visio-theme .power-calculation-toggle input { accent-color: #536dfe; }
+.visio-theme .observer-pane-toggle { border-radius: 7px; color: #5e7592; }
+.visio-theme .observer-pane-toggle:hover { border-color: #b7c8df; color: #3455d2; background: #edf2ff; }
+.visio-theme .schematic-console { border-radius: 9px; }
+.visio-theme .schematic-timeline { border-radius: 9px; }
+.visio-theme .signal-head { color: #304661; }
+.visio-theme .signal-head b { color: #70839a; }
+.visio-theme .trace-channel-picker > button { border-color: #c9d7e6; border-radius: 7px; color: #4c6683; background: #f7faff; }
+.visio-theme .trace-channel-picker > button:hover { border-color: #8da5ea; color: #3554cf; background: #eef2ff; }
+.visio-theme #logicCanvas { border-color: var(--line); background: #f8fbff; }
+.visio-theme .envelope-dock { border-radius: 10px; overflow: hidden; }
+.visio-theme .envelope-dock .envelope-window { border-color: var(--line); background: #fff; }
+.visio-theme .envelope-dock .envelope-transport,
+.visio-theme .envelope-dock .envelope-editor-toolbar { border-color: var(--line-soft); background: #f8fbff; }
+.visio-theme .envelope-dock button { border-radius: 7px; }
+.visio-theme .envelope-dock button:hover { border-color: #98abe6; background: #eef2ff; }
+.visio-theme .envelope-dock .envelope-play { border-color: #536dfe; color: #fff; background: #536dfe; }
+.visio-theme .envelope-dock .envelope-play:hover { border-color: #435bdc; color: #fff; background: #435bdc; }
+
+.visio-theme .simulation-runtime-dock { border-color: var(--line); background: #fff; box-shadow: var(--modern-shadow-soft); }
+.visio-theme .runtime-pane-head { border-color: var(--line); background: #f4f8fc; }
+.visio-theme .runtime-pane-toggle { border-color: #c3d1e2; border-radius: 7px; color: #536c8b; }
+.visio-theme .simulation-runtime-dock.collapsed .runtime-pane-head { justify-content: space-between; padding: 0 8px 0 11px; }
+.visio-theme .simulation-runtime-dock.collapsed .runtime-pane-head > div:first-child { display: flex; }
+.visio-theme .simulation-serial-monitor { background: #fff; }
+.visio-theme .simulation-build-monitor { border-color: var(--line); border-radius: 10px 10px 0 0; overflow: hidden; box-shadow: var(--modern-shadow-soft); }
+.visio-theme .simulation-build-monitor .runtime-pane-head { background: #1e2b3d; }
+.visio-theme .simulation-build-monitor .runtime-pane-head > div:first-child span { color: #94b6ff; }
+.visio-theme .simulation-build-monitor .build-pane-actions > strong { color: #b3c3d9; }
+.visio-theme .simulation-build-monitor .build-pane-actions > strong.building { color: #8ecbff; }
+.visio-theme .simulation-build-monitor .build-pane-actions > strong.ready { color: #7bd5ac; }
+.visio-theme .simulation-build-monitor .build-pane-actions > strong.failed { color: #ff9ca8; }
+.visio-theme .simulation-build-monitor .runtime-pane-toggle { border-radius: 7px; }
+.visio-theme .simulation-build-output { background: #111a28; color: #dce8f7; font-size: 12px; line-height: 19px; }
+.visio-theme .simulation-build-output .prompt,
+.visio-theme .simulation-build-output .terminal-line.success { color: #7bd5ac; }
+.visio-theme .simulation-build-output .path,
+.visio-theme .simulation-build-output .terminal-line.info { color: #8ecbff; }
+.visio-theme .simulation-build-output .muted { color: #a1b3ca; }
+.visio-theme .simulation-build-output .terminal-line.warn { color: #f0c27f; }
+.visio-theme .simulation-build-output .terminal-line.command { color: #c6b3ff; }
+.visio-theme .simulation-build-output .terminal-line.error { color: #ff9ca8; }
+.visio-theme .simulation-build-output .cursor-block { background: #c4d3e8; }
+.visio-theme .serial-pane-actions button,
+.visio-theme .simulation-serial-form button { border-radius: 7px; }
+
+@media (min-width: 1101px) {
+  body.visio-theme.app-page-simulation .simulation-time-observer > .schematic-console .tick-controls {
+    grid-template-columns: 6px max-content max-content max-content max-content max-content;
+    justify-content: start;
+    column-gap: 12px;
+  }
+}
+
+@media (max-width: 860px) {
+  /* Keep serial controls reachable and allow short screens to scroll to
+     the envelope editor. */
+  .visio-theme .simulator-panel { overflow-y: auto; }
+  .visio-theme .simulation-runtime-dock.collapsed { grid-template-columns: minmax(0, 1fr); }
+  .visio-theme .simulation-runtime-dock .runtime-pane-head { gap: 6px; }
+  .visio-theme .simulation-runtime-dock .serial-pane-actions { flex-shrink: 0; gap: 5px; }
+  .visio-theme .simulation-runtime-dock .serial-pane-actions > span { display: none; }
+  .visio-theme .simulation-runtime-dock .virtual-uart-select { width: 108px; }
+}
+
+.visio-theme .statusbar {
+  border-top-color: var(--line);
+  color: #64778f;
+  background: rgba(249,252,255,.96);
+  box-shadow: 0 -2px 12px rgba(32,57,83,.05);
+}
+.visio-theme .status-left span:hover,
+.visio-theme .status-right span:hover,
+.visio-theme .status-center button:hover { color: #29415f; background: #eaf1fb; }
+.visio-theme .status-center { border-color: #c8d6e5; }
+.visio-theme .status-center button { border-color: #c8d6e5; border-radius: 7px; color: #48627f; }
+
+.visio-theme .modal {
+  border-color: #d4e0eb;
+  border-radius: 14px;
+  box-shadow: 0 20px 55px rgba(24, 43, 68, .22);
+}
+.visio-theme .modal-primary,
+.visio-theme .serial-bridge-actions .modal-primary { border-radius: 8px; background: #536dfe; }
+.visio-theme .modal-primary:hover,
+.visio-theme .serial-bridge-actions .modal-primary:hover { background: #435bdc; }
+
+/* Do not let modern desktop spacing leak into the compact phone layout. */
+@media (max-width: 720px) {
+  .visio-theme .topbar { box-shadow: 0 3px 12px rgba(27,49,74,.16); }
+  .visio-theme .ribbon-tabs { padding-inline: 5px; }
+  .visio-theme .ribbon { padding-inline: 6px; }
+  .visio-theme .ribbon-group { border-radius: 8px; box-shadow: none; }
+  .visio-theme .sidebar { box-shadow: 9px 0 24px rgba(22,42,67,.18); }
+}
+
+/* One simulation workbench: the circuit keeps the space, a persistent
+   transport controls the run, and one selected tool occupies the lower dock. */
+body.visio-theme.sim-workbench-ready .simulator-panel { overflow: hidden; container-type: inline-size; }
+body.visio-theme.sim-workbench-ready .sim-tool-dock [hidden] { display: none !important; }
+body.visio-theme.sim-workbench-ready .sim-controlbar {
+  position: relative;
+  z-index: 45;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: auto;
+  min-height: 49px;
+  padding: 7px 12px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: #fff;
+}
+.visio-theme .sim-transport,
+.visio-theme .sim-compact-status { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.visio-theme .sim-transport button,
+.visio-theme .sim-tools-nav > button,
+.visio-theme .sim-settings > summary {
+  min-height: 32px;
+  padding: 0 11px;
+  border: 1px solid #d5dfeb;
+  border-radius: 7px;
+  color: #445d7d;
+  background: #fff;
+  font: 500 12px/1.2 "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.visio-theme .sim-transport button:hover,
+.visio-theme .sim-tools-nav > button:hover { border-color: #91a6ec; color: #3655ce; background: #f0f4ff; }
+.visio-theme .sim-transport .sim-run-button { min-width: 84px; color: #fff; border-color: #536dfe; background: #536dfe; font-weight: 600; }
+.visio-theme .sim-transport .sim-run-button:hover { color: #fff; background: #435bdc; }
+.visio-theme .sim-transport .sim-run-button.running { border-color: #e5b2b9; color: #a63045; background: #fff0f2; }
+.visio-theme .sim-transport button:disabled { opacity: .55; cursor: wait; }
+.visio-theme .sim-compact-status { gap: 8px; margin-right: auto; }
+.visio-theme .sim-compact-status > i { width: 6px; height: 6px; border-radius: 50%; background: #9baaba; }
+.visio-theme .sim-compact-status > i.active { background: #16865f; }
+.visio-theme .sim-compact-status #mcuState { border: 0; color: #60748d; background: transparent; font: 11px Consolas, monospace; }
+.visio-theme .sim-compact-status #circuitTime { color: #415878; font: 11px Consolas, monospace; font-variant-numeric: tabular-nums; }
+.visio-theme .sim-speed-control { display: flex; align-items: center; gap: 7px; color: #66778c; white-space: nowrap; font-size: 11px; }
+.visio-theme .sim-controlbar select { height: 30px; padding: 0 20px 0 7px; border: 1px solid #d1ddeb; border-radius: 6px; color: #3a5270; background: #f8faff; font: 11px Consolas, sans-serif; }
+.visio-theme .sim-settings { position: relative; flex: 0 0 auto; }
+.visio-theme .sim-settings > summary { display: flex; align-items: center; gap: 7px; list-style: none; }
+.visio-theme .sim-settings > summary::after { content: "⌄"; color: #7f91a8; }
+.visio-theme .sim-settings > summary::-webkit-details-marker { display: none; }
+.visio-theme .sim-settings[open] > summary { border-color: #9aaef0; color: #3554cf; background: #eef2ff; }
+.visio-theme .sim-settings > summary:focus-visible { outline: 3px solid #cbd5ff; outline-offset: 1px; }
+.visio-theme .sim-settings-popover {
+  position: absolute;
+  z-index: 70;
+  bottom: calc(100% + 10px);
+  right: 0;
+  width: 268px;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #d6e0ef;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 10px 35px #1931512b;
+}
+.visio-theme .sim-settings-popover > label { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #526984; font-size: 12px; }
+.visio-theme .sim-settings-popover .power-calculation-toggle { height: 32px; border: 0; padding: 0; }
+.visio-theme .sim-settings-popover .power-calculation-toggle span { display: inline; margin-right: auto; }
+.visio-theme .sim-settings-popover .tick-readout { display: grid; grid-template-columns: 1fr 1fr; width: auto; height: auto; min-height: 48px; gap: 6px; padding-top: 8px; border: 0; border-top: 1px solid var(--line-soft); }
+.visio-theme .sim-settings-popover .tick-readout span { border: 0; font: 10px Consolas, monospace; }
+.visio-theme .sim-settings-popover #simHint { margin: 0; padding-top: 9px; border-top: 1px solid var(--line-soft); color: #6b7e96; font: 11px/1.6 "Segoe UI", "Microsoft YaHei UI", sans-serif; }
+
+body.visio-theme.sim-workbench-ready .sim-tool-dock {
+  --sim-tool-height: 280px;
+  flex: 0 0 auto;
+  min-height: 0;
+  position: relative;
+  background: #fff;
+  border-top: 1px solid var(--line);
+}
+.visio-theme .sim-tools-nav { display: flex; align-items: center; gap: 7px; min-height: 46px; padding: 5px 10px; background: #f5f8fd; border-bottom: 1px solid var(--line); }
+.visio-theme .sim-tool-tabs { display: flex; align-items: center; min-width: 0; overflow-x: auto; scrollbar-width: thin; gap: 3px; margin-right: auto; }
+.visio-theme .sim-tool-tab { position: relative; flex: 0 0 auto; min-height: 33px; padding: 0 13px; border-radius: 7px; color: #647891; font: 500 12px "Segoe UI", "Microsoft YaHei UI", sans-serif; white-space: nowrap; }
+.visio-theme .sim-tool-tab:hover { color: #3554cf; background: #eaf0fc; }
+.visio-theme .sim-tool-tab[aria-selected="true"] { color: #3554cf; background: #e4ebff; font-weight: 600; }
+.visio-theme .sim-tool-tab.has-error::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; background: #d64559; }
+.visio-theme .sim-tools-nav > .sim-tools-collapse { flex: 0 0 auto; border-color: transparent; background: transparent; color: #677f9c; font-size: 11px; }
+.visio-theme .sim-tools-nav > .sim-tools-compare { font-size: 11px; }
+.visio-theme .sim-tools-compare[aria-pressed="true"] { border-color: #a6b6ee; color: #3554cf; background: #eaf0ff; }
+.visio-theme .sim-tools-resizer { position: absolute; top: -4px; left: 0; right: 0; z-index: 48; height: 8px; cursor: row-resize; touch-action: none; }
+.visio-theme .sim-tools-resizer::after { content: ""; position: absolute; left: calc(50% - 22px); top: 3px; width: 44px; height: 3px; border-radius: 2px; background: #c6d3e5; }
+.visio-theme .sim-tools-resizer:hover::after,
+.visio-theme .sim-tools-resizer:focus-visible::after { background: #536dfe; }
+.visio-theme .sim-tool-dock.collapsed .sim-tools-resizer { display: none; }
+.visio-theme .sim-tool-content { height: var(--sim-tool-height); min-height: 0; overflow: visible; }
+
+body.visio-theme.sim-workbench-ready .sim-tool-content .simulation-runtime-dock {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  border: 0;
+  box-shadow: none;
+}
+body.visio-theme.sim-workbench-ready .sim-tool-content .simulation-runtime-dock > section { flex: 1 1 100%; border: 0; }
+body.visio-theme.sim-workbench-ready .sim-tool-content .simulation-build-monitor { height: 100%; border-radius: 0; border: 0; box-shadow: none; }
+body.visio-theme.sim-workbench-ready .sim-tool-content .simulation-time-observer {
+  height: 100%;
+  min-height: 0;
+  flex: none !important;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+  overflow: visible;
+  border: 0;
+}
+body.visio-theme.sim-workbench-ready .sim-tool-content .simulation-time-observer > .time-observer-head,
+body.visio-theme.sim-workbench-ready .sim-tool-content .simulation-time-observer > .time-observer-resizer,
+body.visio-theme.sim-workbench-ready .sim-tool-content .observer-pane-toggle,
+body.visio-theme.sim-workbench-ready .sim-tool-content .runtime-pane-toggle { display: none; }
+body.visio-theme.sim-workbench-ready .sim-tool-content .runtime-pane-head { justify-content: space-between; padding: 0 12px; }
+body.visio-theme.sim-workbench-ready .sim-tool-content .runtime-pane-head > div:first-child { display: flex; }
+body.visio-theme.sim-workbench-ready .sim-tool-content .schematic-timeline,
+body.visio-theme.sim-workbench-ready .sim-tool-content .envelope-dock {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  align-self: stretch;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+body.visio-theme.sim-workbench-ready .sim-tool-content .schematic-timeline { padding: 9px 12px; }
+body.visio-theme.sim-workbench-ready .sim-tool-content .trace-channel-menu { z-index: 65; }
+body.visio-theme.sim-workbench-ready .sim-tool-content .envelope-workspace { grid-template-columns: 210px minmax(0, 1fr); }
+body.visio-theme.sim-workbench-ready .sim-tool-dock.comparing .simulation-time-observer { grid-template-columns: minmax(260px, 34%) minmax(0, 1fr) !important; }
+body.visio-theme.sim-workbench-ready .sim-tool-dock.comparing .envelope-dock { grid-column: 2 !important; border-left: 1px solid var(--line); }
+
+@container (max-width: 700px) {
+  body.visio-theme.sim-workbench-ready .sim-controlbar { flex-wrap: wrap; gap: 6px 10px; padding: 6px 8px; }
+  .visio-theme .sim-transport { gap: 5px; }
+  .visio-theme .sim-transport button { padding: 0 9px; }
+  .visio-theme .sim-compact-status { margin-left: auto; margin-right: 0; }
+  .visio-theme .sim-speed-control { margin-right: auto; }
+  .visio-theme .sim-tools-nav { flex-wrap: wrap; gap: 4px; padding: 5px 7px; }
+  .visio-theme .sim-tool-tabs { flex: 1 1 100%; margin-right: 0; }
+  .visio-theme .sim-tool-tab { padding-inline: 10px; }
+  .visio-theme .sim-tools-nav > .sim-tools-collapse { margin-left: auto; }
+  body.visio-theme.sim-workbench-ready .sim-tool-dock.comparing .simulation-time-observer { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: 100px minmax(0, 1fr) !important; }
+  body.visio-theme.sim-workbench-ready .sim-tool-dock.comparing .envelope-dock { grid-column: 1 !important; grid-row: 2 !important; border-left: 0; border-top: 1px solid var(--line); }
+  body.visio-theme.sim-workbench-ready .sim-tool-content .envelope-workspace { grid-template-columns: 160px minmax(0, 1fr); }
+}
+@container (max-width: 420px) {
+  .visio-theme .sim-compact-status #circuitTime { display: none; }
+}
+
+/* Task sidebars share live project and simulator state with the main tools. */
+.visio-theme .sidebar { background: #f8fafc; }
+.visio-theme .tool-sidebar.active { animation: none; }
+.visio-theme .tool-sidebar > .panel-title {
+  position: sticky; top: 0; z-index: 1; min-height: 43px;
+  border-bottom: 1px solid #e2e8f0; background: #f8fafc;
+  color: #34465e; font-size: 12px; font-weight: 650; letter-spacing: .02em;
+}
+.visio-theme .side-count,
+.visio-theme .side-status { margin-left: auto; padding: 3px 7px; border-radius: 5px; color: #53647b; background: #eaf0f7; font-size: 10px; white-space: nowrap; }
+.visio-theme .side-status[data-state="running"] { color: #137044; background: #e0f3e9; }
+.visio-theme .side-status[data-state="busy"] { color: #735615; background: #fff0c9; }
+.visio-theme .side-status[data-state="error"] { color: #9a3636; background: #fce8e8; }
+.visio-theme .side-tool-body { display: grid; align-content: start; gap: 12px; padding: 12px 10px 20px; min-width: 0; }
+.visio-theme .side-tool-body > * { min-width: 0; }
+.visio-theme .side-device-card { display: grid; gap: 6px; padding: 15px 12px; border: 1px solid #dce4ef; border-radius: 10px; background: #fff; }
+.visio-theme .side-kicker { color: #6d7e93; font-size: 10px; }
+.visio-theme .side-device-card strong { color: #253950; font: 600 14px "Inter", sans-serif; overflow-wrap: anywhere; }
+.visio-theme .side-device-card > span:not(.side-kicker) { color: #52657c; font-size: 11px; }
+.visio-theme .side-device-card small { color: #6a7b8e; font-size: 10px; overflow-wrap: anywhere; }
+.visio-theme .side-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.visio-theme .side-metrics > div { display: grid; gap: 5px; padding: 10px; border-radius: 8px; background: #edf2f9; }
+.visio-theme .side-metrics strong { color: #304862; font-size: 14px; font-variant-numeric: tabular-nums; }
+.visio-theme .side-metrics span { color: #62748a; font-size: 10px; }
+.visio-theme .side-action-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.visio-theme .side-action-row button { min-height: 36px; padding: 6px; border: 1px solid #d6e0ee; border-radius: 7px; color: #425a75; background: #fff; font-size: 11px; }
+.visio-theme .side-action-row button:hover { color: #344dcc; border-color: #93a6e9; background: #f1f4ff; }
+.visio-theme .side-primary-action { min-height: 39px; border-radius: 8px; background: #536dfe; color: #fff; font-size: 12px; font-weight: 600; }
+.visio-theme .side-primary-action:hover { background: #435bdc; }
+.visio-theme .side-tool-body button:disabled { cursor: default; opacity: .5; }
+.visio-theme .side-search { display: block; }
+.visio-theme .side-search input { width: 100%; min-width: 0; height: 36px; box-sizing: border-box; padding: 0 10px; border: 1px solid #cbd7e6; border-radius: 8px; color: #30435c; background: #fff; font-size: 12px; }
+.visio-theme .side-search input:focus { outline: 2px solid #9cacf7; outline-offset: 1px; }
+.visio-theme .side-section-title { display: flex; justify-content: space-between; align-items: baseline; gap: 5px; color: #43556e; font-size: 11px; font-weight: 600; }
+.visio-theme .side-section-title small { color: #6e7f93; font-size: 9px; font-weight: 400; }
+.visio-theme .side-note,
+.visio-theme .side-empty { margin: 0; color: #66788e; font-size: 11px; line-height: 1.65; }
+.visio-theme .side-note:empty { display: none; }
+.visio-theme .side-empty { padding: 14px 10px; border: 1px dashed #d1dceb; border-radius: 8px; background: #fff; }
+.visio-theme .side-pin-list,
+.visio-theme .side-trace-list,
+.visio-theme .side-component-list,
+.visio-theme .side-diagnostic-list { display: grid; align-content: start; gap: 6px; }
+.visio-theme .side-pin-row { display: flex; align-items: center; gap: 9px; min-height: 48px; padding: 8px; border: 1px solid #e0e7f0; border-radius: 8px; background: #fff; text-align: left; }
+.visio-theme .side-pin-row:hover { background: #eef3ff; border-color: #a4b5ee; }
+.visio-theme .side-pin-name { flex: 0 0 41px; padding: 6px 0; border-radius: 5px; color: #35539e; background: #edf2ff; text-align: center; font: 600 11px Consolas, monospace; }
+.visio-theme .side-pin-copy { display: grid; gap: 3px; min-width: 0; }
+.visio-theme .side-pin-copy strong { color: #364c64; font-size: 11px; overflow-wrap: anywhere; }
+.visio-theme .side-pin-copy small { color: #6b7d92; font-size: 10px; overflow-wrap: anywhere; }
+.visio-theme .side-text-action { min-height: 32px; color: #4760bb; text-align: left; font-size: 11px; }
+.visio-theme .side-text-action:hover { color: #253e9b; text-decoration: underline; }
+.visio-theme .side-pin-target { outline: 2px solid #798ce6; outline-offset: -2px; background: #eef2ff !important; }
+.visio-theme .side-link-card { display: grid; gap: 5px; padding: 11px 12px; border: 1px solid #dae3f0; border-radius: 8px; background: #fff; text-align: left; }
+.visio-theme .side-link-card:hover { border-color: #9daee3; background: #f2f5ff; }
+.visio-theme .side-link-card > span { color: #354b67; font-size: 12px; font-weight: 600; }
+.visio-theme .side-link-card small { color: #647891; font-size: 10px; overflow-wrap: anywhere; }
+.visio-theme .side-readouts { display: grid; gap: 9px; margin: 0; padding: 11px; border-radius: 8px; background: #edf2f9; }
+.visio-theme .side-readouts div { display: grid; gap: 4px; }
+.visio-theme .side-readouts dt { color: #60758e; font-size: 10px; }
+.visio-theme .side-readouts dd { margin: 0; color: #2f4762; font: 12px/1.5 Consolas, monospace; overflow-wrap: anywhere; }
+.visio-theme .side-diagnostic { display: grid; gap: 5px; padding: 10px; border: 1px solid #dce5f0; border-left: 3px solid #72a58b; border-radius: 6px; color: #425870; background: #fff; text-align: left; }
+.visio-theme .side-diagnostic.error { border-left-color: #d86565; }
+.visio-theme .side-diagnostic.warn { border-left-color: #c49a40; }
+.visio-theme .side-diagnostic small { font-size: 10px; color: #66798e; }
+.visio-theme .side-diagnostic span { font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.visio-theme .side-trace-row { display: flex; align-items: center; gap: 9px; min-height: 43px; padding: 7px 10px; border: 1px solid #dfe6f0; border-radius: 7px; background: #fff; cursor: pointer; }
+.visio-theme .side-trace-row:has(input:checked) { border-color: #a9b9ee; background: #f0f4ff; }
+.visio-theme .side-trace-row input { accent-color: #536dfe; }
+.visio-theme .side-trace-row span { display: grid; gap: 3px; min-width: 0; }
+.visio-theme .side-trace-row strong { color: #3a5270; font-size: 11px; overflow-wrap: anywhere; }
+.visio-theme .side-trace-row small { color: #6b7e94; font-size: 10px; }
+.visio-theme .side-category { display: flex; align-items: center; gap: 8px; }
+.visio-theme .side-category select { flex: 1; min-width: 0; height: 32px; padding: 0 7px; border: 1px solid #d5dfed; border-radius: 6px; color: #425b77; background: #fff; font-size: 11px; }
+.visio-theme .side-category > small { color: #6b7d91; font-size: 10px; white-space: nowrap; }
+.visio-theme .side-component-card { display: flex; align-items: center; gap: 9px; min-height: 58px; padding: 8px 9px; border: 1px solid #dfe6ef; border-radius: 8px; background: #fff; text-align: left; }
+.visio-theme .side-component-card:hover { border-color: #9caee8; background: #f0f4ff; }
+.visio-theme .side-component-icon { flex: 0 0 38px; display: grid; place-items: center; height: 38px; color: #42657c; }
+.visio-theme .side-component-icon > *,
+.visio-theme .side-component-icon svg,
+.visio-theme .side-component-icon img { max-width: 38px; max-height: 34px; width: 38px; height: 32px; object-fit: contain; }
+.visio-theme .side-component-copy { display: grid; gap: 5px; min-width: 0; }
+.visio-theme .side-component-copy strong { color: #344b65; font-size: 12px; overflow-wrap: anywhere; }
+.visio-theme .side-component-copy small { color: #6a7f97; font-size: 10px; }
+.visio-theme .side-component-add { margin-left: auto; color: #5b72c8; font-size: 19px; }
+.visio-theme .tool-sidebar button:focus-visible { outline: 2px solid #7289ea; outline-offset: -2px; }
+/* The sound control contains a short label instead of a square tool icon. */
+#peripheralSoundToggle {
+  width: auto;
+  min-width: 68px;
+  flex-shrink: 0;
+  padding-inline: 10px;
+  white-space: nowrap;
+  font-size: 11px;
+}

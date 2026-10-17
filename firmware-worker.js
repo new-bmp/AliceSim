@@ -2,12 +2,62 @@
 (function () {
   "use strict";
 
-  importScripts("./firmware-runtime.js?v=20260827.6");
+  importScripts("./firmware-runtime.js?v=20261001.1");
+  importScripts("./peripheral-bus-devices.js?v=20261017.1");
+  importScripts("./ds18b20-device.js?v=20261017.1");
+  importScripts("./peripheral-devices.js?v=20261017.1");
 
   var runtime = null;
   var model = null;
   var inputs = { gpio: Object.create(null), adc: Object.create(null), i2c: [], spi: [], peripherals: [] };
   var gpioOutputs = Object.create(null);
+  var busDevices = Object.create(null);
+
+  function syncBusDevices() {
+    var retained = Object.create(null);
+    (inputs.i2c || []).concat(inputs.spi || [], inputs.peripherals || []).forEach(function (target) {
+      if (!target || !(target.type === "ds18b20" || self.AlicePeripheralBusDevices.supports(target.type))) return;
+      var properties = target.properties || target.state && target.state.properties || {};
+      var key = String(target.componentId), record = busDevices[key];
+      if (!record || record.type !== target.type) {
+        record = { type: target.type, device: self.AlicePeripheralDevices.createGeneric(target.type, { properties: properties, address: target.address }), properties: clone(properties) };
+      } else {
+        var changes = {}, changed = false;
+        Object.keys(properties).forEach(function (name) {
+          if (record.properties[name] !== properties[name]) { changes[name] = properties[name]; changed = true; }
+        });
+        if (changed) record.device.setProperties(changes);
+        record.properties = clone(properties);
+      }
+      record.target = target;
+      var connection = Object.assign({}, target.connection || {});
+      if (target.type === "w25qxx") connection.selected = outputLevel(target.csPin, target.selected ? 0 : 1) === 0;
+      if (target.type === "pca9685" && target.oePin) connection.outputEnabled = outputLevel(target.oePin, connection.outputEnabled === false ? 1 : 0) === 0;
+      record.device.setConnection(connection);
+      if (target.type === "pcf8574") {
+        var mask = connection.externalInputMask == null ? 255 : connection.externalInputMask;
+        (target.portPins || []).forEach(function (physical, index) { if (physical && outputLevel(physical, target.portMcuLevels && target.portMcuLevels[physical]) === 0) mask &= ~(1 << index); });
+        record.device.setPortInputs(mask);
+      }
+      retained[key] = record;
+    });
+    busDevices = retained;
+  }
+
+  function busDevice(target) { return busDevices[String(target.componentId)] && busDevices[String(target.componentId)].device; }
+
+  function updateBusGpio(pin, value) {
+    Object.keys(busDevices).forEach(function (key) {
+      var record = busDevices[key], target = record.target;
+      if (record.type === "w25qxx" && target.csPin === pin) record.device.setConnection(Object.assign({}, record.device.getState().connection, { selected: value === 0 }));
+      if (record.type === "pca9685" && target.oePin === pin) record.device.setConnection(Object.assign({}, record.device.getState().connection, {outputEnabled: value === 0}));
+      if (record.type === "pcf8574" && Array.isArray(target.portPins)) {
+        var mask = target.connection && target.connection.externalInputMask != null ? target.connection.externalInputMask : 255;
+        target.portPins.forEach(function (physical, index) { if (physical && outputLevel(physical, target.portMcuLevels && target.portMcuLevels[physical]) === 0) mask &= ~(1 << index); });
+        record.device.setPortInputs(mask);
+      }
+    });
+  }
 
   function clone(value) {
     if (value == null || typeof value !== "object") return value;
@@ -51,12 +101,15 @@
 
   function i2cResponse(event) {
     var reference = event && (event.instance || event.i2c || event.handle);
-    var address = normalizedI2cAddress(event && (event.deviceAddress != null ? event.deviceAddress : event.address));
+    var address = event.address7Bit != null ? Number(event.address7Bit) : event.deviceAddress != null ? Number(event.deviceAddress) >> 1 : normalizedI2cAddress(event.address);
     var targets = (Array.isArray(inputs.i2c) ? inputs.i2c : []).filter(function (target) {
       return target && target.ready && sameReference(target, reference)
         && (address == null || normalizedI2cAddress(target.address) === address);
     });
-    return { accepted: targets.length > 0, targetCount: targets.length, targets: clone(targets), address: address };
+    if (targets.length !== 1) return { accepted: false, targetCount: targets.length, reason: targets.length ? "i2c-address-collision" : "no-i2c-target" };
+    var device = busDevice(targets[0]);
+    var response = device ? device.transmit(Object.assign({}, event, { address7Bit: address })) : { accepted: true };
+    return Object.assign({}, response, { targetCount: response.accepted ? 1 : 0, targets: [{componentId: targets[0].componentId}], address: address });
   }
 
   function readBytesForTarget(target) {
@@ -68,13 +121,16 @@
 
   function i2cReadResponse(event) {
     var reference = event && (event.instance || event.i2c || event.handle);
-    var address = normalizedI2cAddress(event && (event.deviceAddress != null ? event.deviceAddress : event.address));
+    var address = event.address7Bit != null ? Number(event.address7Bit) : event.deviceAddress != null ? Number(event.deviceAddress) >> 1 : normalizedI2cAddress(event.address);
     var targets = (Array.isArray(inputs.i2c) ? inputs.i2c : []).filter(function (target) {
       return target && target.ready && sameReference(target, reference)
-        && (address == null || normalizedI2cAddress(target.address) === address)
-        && readBytesForTarget(target) !== undefined;
+        && (address == null || normalizedI2cAddress(target.address) === address);
     });
+    if (targets.length !== 1) return { accepted: false, targetCount: targets.length, reason: targets.length ? "i2c-address-collision" : "no-readable-i2c-target" };
     var selected = targets[0];
+    var device = busDevice(selected);
+    if (device) return Object.assign({}, device.receive(Object.assign({}, event, { address7Bit: address })), { targetCount: 1, targets: [{componentId: selected.componentId}], address: address });
+    if (readBytesForTarget(selected) === undefined) selected = null;
     return {
       accepted: Boolean(selected),
       targetCount: targets.length,
@@ -102,7 +158,11 @@
       copy.dataMode = outputLevel(target.dcPin, target.dataMode ? 1 : 0) === 1;
       return copy;
     });
-    return { accepted: targets.length > 0, targetCount: targets.length, targets: targets };
+    var accepted = targets.filter(function (target) {
+      var device = busDevice(target);
+      return !device || device.transmit(event).accepted;
+    });
+    return { accepted: accepted.length > 0, targetCount: accepted.length, targets: accepted, reason: accepted.length ? undefined : "no-spi-target" };
   }
 
   function spiReadResponse(event) {
@@ -110,9 +170,13 @@
     var targets = (Array.isArray(inputs.spi) ? inputs.spi : []).filter(function (target) {
       return target && target.ready && sameReference(target, reference)
         && outputLevel(target.csPin, target.selected ? 0 : 1) === 0
-        && readBytesForTarget(target) !== undefined;
+        && (busDevice(target) || readBytesForTarget(target) !== undefined);
     });
+    if (targets.length !== 1) return { accepted: false, targetCount: targets.length, reason: targets.length ? "spi-bus-contention" : "no-readable-spi-target" };
     var selected = targets[0];
+    var device = busDevice(selected);
+    if (device) return Object.assign({}, device.receive(event), { targetCount: 1, targets: [{componentId: selected.componentId}] });
+    if (readBytesForTarget(selected) === undefined) selected = null;
     return {
       accepted: Boolean(selected),
       targetCount: targets.length,
@@ -176,6 +240,17 @@
     var matches = candidates.filter(function (target) {
       return target && target.ready && peripheralMatches(target, event, candidates);
     });
+    if (type === "ds18b20") {
+      if (!event.dataPin || matches.length !== 1) return { accepted: false, targetCount: matches.length, result: null, targets: [], reason: matches.length > 1 ? "onewire-bus-collision" : "no-onewire-target" };
+      var sensor = busDevice(matches[0]);
+      var response = sensor ? sensor.apply(event.action, event) : {accepted: false, result: null};
+      return Object.assign({}, response, {targetCount: response.accepted ? 1 : 0,
+        targets: response.accepted ? [{componentId: matches[0].componentId, type: type, result: response.result}] : []});
+    }
+    if (type === "ws2812" && event.action === "pwm-frame") matches = matches.filter(function (target) {
+      var strip = self.AlicePeripheralDevices.createWS2812({properties: target.state && target.state.properties || {}, connection: target.connection});
+      return strip.transmitPwm(event.pulses, event.period, event.frequencyHz) > 0;
+    });
     var targets = matches.map(function (target) {
       return { componentId: target.componentId, type: target.type, result: peripheralResult(target, event) };
     });
@@ -189,6 +264,7 @@
       onGpio: function (event) {
         var pin = String(event && (event.pin || event.physicalPin) || "").toUpperCase();
         if (pin) gpioOutputs[pin] = event && event.value ? 1 : 0;
+        if (pin) updateBusGpio(pin, gpioOutputs[pin]);
         emit("gpio", event);
       },
       onGpioRead: function (event) {
@@ -196,6 +272,23 @@
         var value = Object.prototype.hasOwnProperty.call(gpioOutputs, pin)
           ? gpioOutputs[pin]
           : (Object.prototype.hasOwnProperty.call(inputs.gpio, pin) ? inputs.gpio[pin] : null);
+        Object.keys(busDevices).forEach(function (key) {
+          var record = busDevices[key], target = record.target;
+          if (record.type === "pca9685" && Array.isArray(target.channelPins)) {
+            var channelIndex = target.channelPins.indexOf(pin);
+            if (channelIndex >= 0) {
+              record.device.setTime(event.timeMs == null ? event.time : event.timeMs);
+              var pwmState = record.device.getState();
+              if (pwmState.ready) value = pwmState.channels[channelIndex].level;
+            }
+          }
+          if (record.type !== "pcf8574" || !Array.isArray(target.portPins)) return;
+          var index = target.portPins.indexOf(pin), state = record.device.getState();
+          if (index >= 0 && state.ready) value = state.pinMask & (1 << index) ? 1 : 0;
+          if (target.connection && target.connection.signalPin === pin) {
+            value = state.interruptActive ? 0 : outputLevel(pin, target.interruptReleaseLevel == null ? null : target.interruptReleaseLevel);
+          }
+        });
         var result = Object.assign({}, event, { value: value, connected: value != null });
         emit("gpio-read", result);
         return result;
@@ -242,18 +335,22 @@
     try {
       if (request.command === "init") {
         gpioOutputs = Object.create(null);
+        busDevices = Object.create(null);
+        inputs = {gpio: {}, adc: {}, i2c: [], spi: [], peripherals: []};
         runtime = create(request.model);
         result(id, runtime.getState());
         return;
       }
       if (request.command === "sync") {
         inputs = request.inputs && typeof request.inputs === "object" ? request.inputs : inputs;
+        syncBusDevices();
         if (runtime && typeof runtime.syncGpioInputs === "function") runtime.syncGpioInputs(inputs.gpio);
         result(id, true);
         return;
       }
       if (request.command === "step") {
         inputs = request.inputs && typeof request.inputs === "object" ? request.inputs : inputs;
+        syncBusDevices();
         if (runtime && typeof runtime.syncGpioInputs === "function") runtime.syncGpioInputs(inputs.gpio);
         result(id, runtime.step(Math.max(0, Number(request.deltaMs) || 0)));
         return;

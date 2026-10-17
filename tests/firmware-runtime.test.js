@@ -13,6 +13,23 @@ const eq = (left, right) => ({ type: "eq", left, right });
 const halCall = (operation, returnKind = "status") => ({ type: "halCall", operation, returnKind });
 const inlineCall = operations => ({ type: "inlineCall", operations });
 
+test("HAL transfers read string literal pointers passed through C helper parameters", () => {
+  const sent = [];
+  const runtime = AliceFirmwareRuntime.create({
+    variables: {},
+    program: { operations: [
+      {op: "assign", target: "text", cType: "char*", value: {kind: "string", value: "READY\r\n"}},
+      {op: "uartTransmit", instance: "USART2", buffer: "text", length: {kind: "stringLength", value: variable("text")}}
+    ] }
+  }, {onUartTx: event => sent.push(event)});
+  runtime.start();
+  const state = runtime.step(0);
+  assert.equal(state.error, null);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].bytes, [82, 69, 65, 68, 89, 13, 10]);
+  assert.equal(sent[0].text, "READY\r\n");
+});
+
 function screenshotModel() {
   return {
     constants: {

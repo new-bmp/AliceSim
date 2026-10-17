@@ -18,7 +18,7 @@
 <body class="visio-theme">
 <header><h1>元件效果检查</h1><p>独立测试页：用同一套设备模型与绘图代码检查状态变化，不会改动工程。</p><button id="change">切换输入 A / B</button> <button id="power">断电</button><span id="result"></span></header>
 <main id="gallery"></main>
-<script src="../../peripheral-catalog.js"></script><script src="../../peripheral-devices.js"></script><script src="../../peripheral-visuals.js"></script>
+<script src="../../peripheral-catalog.js"></script><script src="../../peripheral-bus-devices.js"></script><script src="../../ds18b20-device.js"></script><script src="../../peripheral-devices.js"></script><script src="../../peripheral-visuals.js"></script>
 <script>
   const D = AlicePeripheralDevices, V = AlicePeripheralVisuals;
   const connection = { powered:true, vccConnected:true, gndConnected:true, vccLevel:5, gndLevel:0, bindingValid:true, clkConnected:true, dioConnected:true, dataConnected:true, pwmConnected:true, signalConnected:true };

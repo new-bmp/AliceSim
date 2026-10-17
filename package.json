@@ -5,6 +5,9 @@
   "description": "Cross-platform STM32 firmware and circuit simulator",
   "scripts": {
     "test": "node --test tests/*.test.js",
+    "tutorials:sync": "node scripts/sync-tutorial-examples.mjs",
+    "tutorials:check": "node scripts/sync-tutorial-examples.mjs --verify-only",
+    "icons:build": "node scripts/build-icons.mjs",
     "web:build": "node scripts/build-web.mjs",
     "sidecar:build": "node scripts/build-sidecar.mjs",
     "desktop:dev": "tauri dev",

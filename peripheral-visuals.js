@@ -96,7 +96,7 @@
     }
     if (type === "buzzer") f.active = Boolean(powered && state.active);
     if (type === "potentiometer") f.angle = bound(p.percent, 0, 100) * 2.7 - 135;
-    if (type === "rotaryEncoder") f.angle = (num(p.position) % 20) * 18;
+    if (type === "rotaryEncoder") f.angle = (num(component.encoderPhase ? component.encoderPhase.position : p.position) % 20) * 18;
     f.pressed = Boolean(num(p.pressed));
     if (type === "joystick") { f.x = 25 + bound(p.xPercent, 0, 100) / 2; f.y = 12 + bound(p.yPercent, 0, 100) * .4; }
     if (type === "relay") f.active = Boolean(powered && state.energized);
@@ -104,9 +104,12 @@
     if (type === "hcsr04") f.distance = 44 + (bound(state.distanceCm, 2, 400) - 2) / 398 * 49;
     if (type === "pir") f.motion = Boolean(powered && num(p.motion));
     if (type === "mpu6050") { f.tilt = bound(p.accelX, -1, 1) * 45; f.vector = bound(p.gyroZ, -2000, 2000) / 2000 * 26; }
-    if (type === "pcf8574") f.mask = powered ? num(p.inputMask) & 255 : 0;
-    if (type === "pca9685") f.duty = powered ? bound(p.channel0, 0, 4095) / 4095 : 0;
-    if (type === "ds3231") { var date = new Date(num(p.unixTime) * 1000); f.hour = date.getUTCHours() * 30 + date.getUTCMinutes() / 2; f.minute = date.getUTCMinutes() * 6; f.second = date.getUTCSeconds() * 6; }
+    if (type === "pcf8574") f.mask = powered ? num(state.pinMask == null ? p.inputMask : state.pinMask) & 255 : 0;
+    if (type === "pca9685") {
+      var channel = Array.isArray(state.channels) ? state.channels[0] : null;
+      f.duty = powered ? (channel ? (channel.active ? bound(channel.dutyCycle, 0, 1) : 0) : bound(p.channel0, 0, 4095) / 4096) : 0;
+    }
+    if (type === "ds3231") { var date = new Date(num(state.unixTime == null ? p.unixTime : state.unixTime) * 1000); f.hour = date.getUTCHours() * 30 + date.getUTCMinutes() / 2; f.minute = date.getUTCMinutes() * 6; f.second = date.getUTCSeconds() * 6; }
     f.temperature = (bound(state.temperatureC == null ? p.temperatureC : state.temperatureC, -55, 125) + 55) / 180;
     f.humidity = bound(state.humidityPercent == null ? p.humidityPercent : state.humidityPercent, 0, 100) / 100;
     f.light = Math.log10(1 + bound(p.lux, 0, 65535)) / Math.log10(65536);

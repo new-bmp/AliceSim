@@ -1,12 +1,18 @@
 #include "alicesim_ina219.h"
 
 HAL_StatusTypeDef AliceSIM_INA219_Init(AliceSIM_INA219 *device, I2C_HandleTypeDef *i2c, uint16_t address, uint32_t timeout_ms, uint32_t current_lsb_ua) {
+  uint32_t calibration = 0U;
+  HAL_StatusTypeDef status = HAL_ERROR;
   if (device == NULL || i2c == NULL || current_lsb_ua == 0U) return HAL_ERROR;
+  calibration = (40960000U / ALICESIM_INA219_DEFAULT_SHUNT_MILLIOHMS) / current_lsb_ua;
+  if (calibration == 0U || calibration > 65535U) return HAL_ERROR;
   device->i2c = i2c;
   device->address = address == 0U ? ALICESIM_INA219_DEFAULT_ADDRESS : address;
   device->timeout_ms = timeout_ms == 0U ? 100U : timeout_ms;
   device->current_lsb_ua = current_lsb_ua;
-  return AliceSIM_INA219_WriteRegister(device, 0x00U, 0x399FU);
+  status = AliceSIM_INA219_WriteRegister(device, 0x00U, 0x399FU);
+  if (status != HAL_OK) return status;
+  return AliceSIM_INA219_WriteRegister(device, 0x05U, (uint16_t)calibration);
 }
 
 HAL_StatusTypeDef AliceSIM_INA219_ReadRegister(AliceSIM_INA219 *device, uint8_t reg, uint16_t *value) {

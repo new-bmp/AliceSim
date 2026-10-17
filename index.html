@@ -3,17 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#080b12" />
+    <meta name="theme-color" content="#1d2b40" />
     <meta name="application-name" content="AliceSIM" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>AliceSIM — STM32 Web Simulator</title>
     <link rel="manifest" href="./manifest.webmanifest" />
-    <link rel="icon" href="./assets/alicesim-app-icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="./assets/pwa/v2/32x32.png" sizes="32x32" type="image/png" />
+    <link rel="icon" href="./assets/alicesim-app-icon-v2.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./assets/pwa/v2/apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="./styles.css?v=20260919.1" />
+    <link rel="stylesheet" href="./styles.css?v=20261013.1" />
   </head>
   <body class="visio-theme app-page-code">
     <div class="boot-screen" id="bootScreen">
@@ -31,7 +33,7 @@
           <button title="重做"><svg viewBox="0 0 24 24"><path d="m15 7 5 5-5 5"/><path d="M19 12h-8a6 6 0 0 0-6 6"/></svg></button>
         </div>
         <div class="brand" aria-label="AliceSIM">
-          <div class="brand-mark"><span></span></div>
+          <img class="brand-mark" src="./assets/alicesim-app-icon-v2.svg" width="28" height="28" alt="" />
           <div><strong>Alice</strong><em>SIM</em></div>
         </div>
 
@@ -47,6 +49,10 @@
             <button class="active" type="button" role="tab" aria-selected="true" data-app-page="code">代码页</button>
             <button type="button" role="tab" aria-selected="false" data-app-page="simulation">仿真页</button>
           </div>
+          <a class="tutorials-button" id="tutorialsButton" href="./tutorials/" target="_blank" rel="noopener" aria-label="教程与例程" title="打开教程与例程">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5C9 3 5 3 2 4v15c3-1 7-1 10 1 3-2 7-2 10-1V4c-3-1-7-1-10 1Zm0 0v15"/></svg>
+            <span>教程<span class="tutorials-label-extra">与例程</span></span>
+          </a>
           <div class="engine-state" id="engineState"><i></i><span>ENGINE READY</span></div>
           <button class="icon-button" title="全局搜索" data-tooltip="搜索  ⌘K">
             <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
@@ -105,16 +111,16 @@
           <button class="activity-item active" data-view="project" data-tooltip="项目资源" aria-controls="sidebar" aria-expanded="false">
             <svg viewBox="0 0 24 24"><path d="M3 5.5A2.5 2.5 0 0 1 5.5 3h4l2 2H18.5A2.5 2.5 0 0 1 21 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5Z"/></svg>
           </button>
-          <button class="activity-item" data-view="device" data-tooltip="器件与引脚" aria-controls="sidebar" aria-expanded="false">
+          <button class="activity-item" data-view="device" data-tooltip="器件与引脚" aria-label="器件与引脚" aria-controls="sidebar" aria-expanded="false">
             <svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3M10 10h4v4h-4z"/></svg>
           </button>
-          <button class="activity-item" data-view="debug" data-tooltip="调试与运行" aria-controls="sidebar" aria-expanded="false">
+          <button class="activity-item" data-view="debug" data-tooltip="运行诊断" aria-label="运行诊断" aria-controls="sidebar" aria-expanded="false">
             <svg viewBox="0 0 24 24"><path d="M8 8h8v8a4 4 0 0 1-8 0Z"/><path d="M6 12H3M21 12h-3M6.3 17 4 19M20 19l-2.3-2M9 4l1.3 2M15 4l-1.3 2M9 11h.01M15 11h.01"/></svg>
           </button>
-          <button class="activity-item" data-view="analyzer" data-tooltip="逻辑分析仪" aria-controls="sidebar" aria-expanded="false">
+          <button class="activity-item" data-view="analyzer" data-tooltip="信号观测" aria-label="信号观测" aria-controls="sidebar" aria-expanded="false">
             <svg viewBox="0 0 24 24"><path d="M3 18h18M4 15l4-5 4 3 4-8 4 5"/></svg>
           </button>
-          <button class="activity-item" data-view="packages" data-tooltip="组件库" aria-controls="sidebar" aria-expanded="false">
+          <button class="activity-item" data-view="packages" data-tooltip="元件库" aria-label="元件库" aria-controls="sidebar" aria-expanded="false">
             <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg>
           </button>
         </div>
@@ -165,40 +171,54 @@
           </div>
         </section>
 
-        <section class="side-view" data-panel="device">
-          <div class="panel-title"><span>DEVICE</span><button>···</button></div>
-          <div class="device-summary">
-            <div class="device-mini-chip">ST</div>
-            <div><strong>STM32F103C8T6</strong><span>ARM Cortex-M3 · LQFP48</span></div>
-          </div>
-          <div class="spec-grid"><div><strong>72</strong><span>MHz</span></div><div><strong>64</strong><span>KB Flash</span></div><div><strong>20</strong><span>KB RAM</span></div></div>
-          <div class="side-heading">CONFIGURED PERIPHERALS</div>
-          <div class="peripheral-list">
-            <button><i class="cyan"></i><span>SYS</span><small>Serial Wire</small></button>
-            <button><i class="purple"></i><span>RCC</span><small>Crystal / Ceramic</small></button>
-            <button><i class="green"></i><span>GPIO</span><small id="debugGpioSummary">等待工程模型</small></button>
-            <button><i class="orange"></i><span id="debugUartName">UART</span><small id="debugUartSummary">等待工程模型</small></button>
+        <section class="side-view tool-sidebar" data-panel="device">
+          <div class="panel-title"><span>器件与引脚</span><span class="side-count" id="sidePinCount">0</span></div>
+          <div class="side-tool-body">
+            <div class="side-device-card"><span class="side-kicker">当前器件</span><strong id="sideDeviceName">等待工程</strong><span id="sideDevicePackage">—</span><small id="sideDeviceSource">导入 IOC 后查看配置</small></div>
+            <div class="side-metrics"><div><strong id="sideDeviceClock">—</strong><span>IOC 系统时钟</span></div><div><strong id="sidePeripheralCount">0</strong><span>外设配置组</span></div></div>
+            <div class="side-action-row"><button type="button" data-side-ioc="pins">引脚配置 ↗</button><button type="button" data-side-ioc="clocks">时钟树 ↗</button></div>
+            <label class="side-search"><span class="sr-only">搜索配置引脚</span><input id="sidePinSearch" type="search" placeholder="引脚、信号或别名" /></label>
+            <div class="side-section-title">已配置引脚 <small>来自当前工程</small></div>
+            <div class="side-pin-list" id="sidePinList"></div>
+            <button class="side-text-action" type="button" data-side-ioc="peripherals">查看完整外设配置 ↗</button>
           </div>
         </section>
 
-        <section class="side-view" data-panel="debug">
-          <div class="panel-title"><span>RUN & DEBUG</span><button>···</button></div>
-          <button class="launch-button" id="sideLaunch"><svg viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"/></svg>Launch Alice Virtual MCU</button>
-          <div class="debug-block"><h4>BREAKPOINTS</h4><label><input type="checkbox" checked /> main.c <small>20</small></label><label><input type="checkbox" /> main.c <small>24</small></label></div>
-          <div class="debug-block"><h4>WATCH</h4><div class="watch-row"><span>uwTick</span><b id="tickWatch">0</b></div><div class="watch-row"><span id="gpioWatchLabel">GPIO outputs</span><b id="gpioWatch">—</b></div></div>
-          <div class="debug-block"><h4>CALL STACK</h4><div class="stack-row active">main() <small>main.c:20</small></div><div class="stack-row">Reset_Handler() <small>startup:74</small></div></div>
+        <section class="side-view tool-sidebar" data-panel="debug">
+          <div class="panel-title"><span>运行诊断</span><span class="side-status" id="sideRuntimeStatus" role="status">未运行</span></div>
+          <div class="side-tool-body">
+            <button class="side-primary-action" type="button" id="sideLaunch">启动仿真</button>
+            <div class="side-action-row"><button type="button" id="sideBuild">构建工程</button><button type="button" id="sideReset">复位 MCU</button></div>
+            <button class="side-link-card" type="button" data-side-tool="build"><span>编译与运行日志</span><small>查看完整诊断 ↗</small></button>
+            <div class="side-section-title">运行监测</div>
+            <dl class="side-readouts"><div><dt>仿真时间 / ms</dt><dd id="tickWatch">0</dd></div><div><dt id="gpioWatchLabel">引脚状态</dt><dd id="gpioWatch">—</dd></div></dl>
+            <div class="side-section-title">最近消息 <small>最多 8 条</small></div>
+            <div id="sideDiagnosticList" class="side-diagnostic-list"><p class="side-empty">构建或运行后显示错误和提醒。</p></div>
+          </div>
         </section>
 
-        <section class="side-view" data-panel="analyzer">
-          <div class="panel-title"><span>ANALYZER</span><button>＋</button></div>
-          <div class="analyzer-empty"><svg viewBox="0 0 24 24"><path d="M3 18h18M4 15l4-5 4 3 4-8 4 5"/></svg><strong>4 virtual channels</strong><p>Signals are sampled from the running simulator.</p></div>
-          <div class="channel-checks"><label><input type="checkbox" checked><i class="green"></i><span id="logicPrimaryChannel">GPIO output</span></label><label><input type="checkbox" checked><i class="cyan"></i><span id="logicTxChannel">UART_TX</span></label><label><input type="checkbox"><i class="purple"></i><span id="logicRxChannel">UART_RX</span></label></div>
+        <section class="side-view tool-sidebar" data-panel="analyzer">
+          <div class="panel-title"><span>信号观测</span><span class="side-count" id="sideTraceCount">0 / 4</span></div>
+          <div class="side-tool-body">
+            <button class="side-link-card" type="button" data-side-tool="logic"><span>逻辑分析仪</span><small>展开实时波形 ↗</small></button>
+            <div class="side-section-title">采样引脚 <small>最多同时 4 路</small></div>
+            <div id="sideTraceChannels" class="side-trace-list"></div>
+            <p id="sideTraceNotice" class="side-note" role="status"></p>
+            <div class="side-section-title">更多观测工具</div>
+            <button class="side-link-card" type="button" data-side-tool="serial"><span>虚拟串口</span><small id="sideUartSummary">构建后查看 UART 配置 ↗</small></button>
+            <button class="side-link-card" type="button" data-side-tool="envelope"><span>传感器包络</span><small>编辑随时间变化的输入 ↗</small></button>
+          </div>
         </section>
 
-        <section class="side-view" data-panel="packages">
-          <div class="panel-title"><span>COMPONENTS</span><button>↻</button></div>
-          <div class="component-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input placeholder="搜索虚拟器件" /></div>
-          <div class="component-grid"><button><span>💡</span><strong>LED</strong><small>Digital</small></button><button><span>🔘</span><strong>Button</strong><small>Input</small></button><button><span>🖥️</span><strong>OLED</strong><small>I²C</small></button><button><span>🎚️</span><strong>Pot</strong><small>Analog</small></button></div>
+        <section class="side-view tool-sidebar" data-panel="packages">
+          <div class="panel-title"><span>元件库</span><button id="sideLibraryManage" type="button" title="管理元件库" aria-label="管理元件库">⚙</button></div>
+          <div class="side-tool-body">
+            <label class="side-search"><span class="sr-only">搜索元件</span><input id="sideComponentSearch" type="search" placeholder="名称、型号或接口" /></label>
+            <label class="side-category"><span class="sr-only">元件分类</span><select id="sideComponentCategory"><option value="all">全部元件</option><option value="basic">基础与电源</option><option value="input">输入与传感器</option><option value="display">显示与输出</option><option value="bus">通信与扩展</option></select><small id="sideComponentCount">0 项</small></label>
+            <p class="side-note">点击添加到画布，再拖动到目标位置。</p>
+            <div class="side-component-list" id="sideComponentList"></div>
+            <button class="side-text-action" type="button" id="sideImportDatasheet">从数据手册导入器件 ↗</button>
+          </div>
         </section>
       </aside>
 
@@ -316,6 +336,7 @@
             <input id="showComponentLabels" type="checkbox" checked />
             <span>标签</span>
           </label>
+          <button id="peripheralSoundToggle" type="button" aria-pressed="false" title="开启或关闭蜂鸣器声音">声音：关</button>
           <span class="toolbar-separator"></span>
           <button id="saveCircuitButton" title="单独另存电路 (Ctrl+Alt+S)"><svg viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5Z"/><path d="M8 3v6h8V3M8 21v-8h8v8"/><path d="M10 16h4"/></svg></button>
           <button id="openCircuitButton" title="打开电路 (Ctrl+Alt+O)"><svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3Z"/><path d="M8 14h8M12 11v6"/></svg></button>
@@ -365,18 +386,6 @@
         </div>
 
         <div class="simulation-runtime-dock" id="simulationRuntimeDock">
-          <section class="freertos-monitor" id="freertosMonitor" aria-label="FreeRTOS 任务调试器">
-            <header class="runtime-pane-head">
-              <div><span>MIDDLEWARE</span><strong>FreeRTOS 任务</strong></div>
-              <div class="rtos-summary"><b id="freertosSchedulerState">BARE METAL</b><span>Tick <strong id="freertosTick">0</strong></span><span>Heap <strong id="freertosHeap">—</strong></span><button class="runtime-pane-toggle" id="freertosPaneToggle" type="button" aria-controls="freertosMonitor" aria-expanded="true" title="折叠 FreeRTOS 面板"><span aria-hidden="true">⌃</span><span class="sr-only">折叠 FreeRTOS 面板</span></button></div>
-            </header>
-            <div class="freertos-table-wrap">
-              <table class="freertos-task-table">
-                <thead><tr><th>任务</th><th>状态</th><th>优先级</th><th>栈余量</th><th>CPU</th><th>运行时间</th><th>等待对象</th></tr></thead>
-                <tbody id="freertosTaskBody"><tr class="freertos-empty" id="freertosEmpty"><td colspan="7">Bare Metal · 未检测到 FreeRTOS</td></tr></tbody>
-              </table>
-            </div>
-          </section>
           <section class="simulation-serial-monitor" id="simulationSerialMonitor" aria-label="仿真串口终端">
             <header class="runtime-pane-head">
               <div><span>SERIAL</span><select id="virtualUartSelect" class="virtual-uart-select" aria-label="虚拟 UART 端口"><option value="">构建后选择 UART</option></select><strong id="simulationSerialPort">等待构建</strong></div>
@@ -470,27 +479,32 @@
     <div class="toast-stack" id="toastStack"></div>
     <div class="drop-overlay" id="dropOverlay"><div><svg viewBox="0 0 24 24"><path d="M12 3v12M7 8l5-5 5 5M5 14v5h14v-5"/></svg><strong>释放以导入 IOC</strong><span>完整工程请使用“打开工程”选择文件夹</span></div></div>
 
-    <script src="./platform-runtime.js?v=20260826.1"></script>
+    <script src="./platform-runtime.js?v=20261003.1"></script>
     <script src="./clock-tree.js?v=20260802.1"></script>
-    <script src="./envelope-automation.js?v=20260825.3"></script>
-    <script src="./app.js?v=20260827.6"></script>
+    <script src="./envelope-automation.js?v=20261001.3"></script>
+    <script src="./app.js?v=20261007.1"></script>
     <script src="./datasheet-import.js?v=20260807.1"></script>
     <script src="./oled-device.js?v=20260731.6"></script>
     <script src="./spi-display-device.js?v=20260802.1"></script>
     <script src="./light-sensor-device.js?v=20260731.6"></script>
     <script src="./libdriver-registry.js?v=20260731.1"></script>
     <script src="./peripheral-catalog.js?v=20260801.3"></script>
-    <script src="./peripheral-devices.js?v=20260919.1"></script>
+    <script src="./peripheral-bus-devices.js?v=20261017.1"></script>
+    <script src="./ds18b20-device.js?v=20261017.1"></script>
+    <script src="./peripheral-devices.js?v=20261017.1"></script>
+    <script src="./peripheral-audio.js?v=20261017.1"></script>
     <script src="./peripheral-visuals.js?v=20260919.1"></script>
     <script src="./simulation-accel.js?v=20260819.2"></script>
     <script src="./schematic.js?v=20260919.1"></script>
     <script src="./alice-drivers.js?v=20260731.9"></script>
-    <script src="./ui-actions.js?v=20260826.1"></script>
+    <script src="./ui-actions.js?v=20261006.2"></script>
     <script src="./panel-resize.js?v=20260825.4"></script>
     <script src="./ioc-viewer.js?v=20260802.2"></script>
     <script src="./project-folder.js?v=20260825.8"></script>
-    <script src="./firmware-runtime.js?v=20260827.6"></script>
-    <script src="./hal-simulator.js?v=20260827.6"></script>
+    <script src="./firmware-runtime.js?v=20261001.1"></script>
+    <script src="./hal-simulator.js?v=20261001.1"></script>
     <script src="./serial-device-bridge.js?v=20260802.1"></script>
+    <script src="./simulation-workbench.js?v=20261007.1"></script>
+    <script src="./sidebar-tools.js?v=20261006.2"></script>
   </body>
 </html>

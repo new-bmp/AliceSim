@@ -528,6 +528,12 @@ def _mask_inactive_preprocessor(
     cleaned = _strip_comments(source)
     characters = list(cleaned)
     inherited: dict[str, _Macro] = dict(macros or {})
+    # Each project file is scanned once independently. Its conventional header
+    # guard may already be in the shared macro table from macro collection;
+    # treating that as a previous include would hide every type in the header.
+    own_guard = re.match(r"\s*#[ \t]*ifndef[ \t]+([A-Za-z_]\w*)[ \t]*\r?\n[ \t]*#[ \t]*define[ \t]+\1[ \t]*(?:\r?\n|$)", cleaned)
+    if own_guard:
+        inherited.pop(own_guard.group(1), None)
     local = dict(inherited)
     stack: list[dict[str, bool]] = []
 
@@ -1437,23 +1443,13 @@ def _tokens_text(tokens: Sequence[_Token]) -> str:
     return " ".join(token.value for token in tokens)
 
 
-def _strip_leading_c_casts(tokens: Sequence[_Token]) -> list[_Token]:
+def _strip_leading_c_casts(tokens: Sequence[_Token], known_types=()) -> list[_Token]:
     output = list(tokens)
-    type_names = {
-        "bool", "char", "const", "double", "enum", "float", "int", "long", "short", "signed",
-        "size_t", "struct", "union", "unsigned", "void", "volatile", "_Bool",
-    }
     while len(output) >= 4 and output[0].value == "(":
         close = _matching(output, 0, "(", ")")
         if close is None or close >= len(output) - 1:
             break
-        cast_tokens = output[1:close]
-        identifiers = [token.value for token in cast_tokens if token.kind == "identifier"]
-        is_type = bool(identifiers) and all(
-            name in type_names or name.endswith("_t") or name.endswith("TypeDef")
-            for name in identifiers
-        ) and all(token.kind == "identifier" or token.value == "*" for token in cast_tokens)
-        if not is_type:
+        if _sizeof_type_name(output[1:close], known_types) is None:
             break
         output = _strip_wrapping_parentheses(output[close + 1 :])
     return output
@@ -1467,7 +1463,7 @@ _SIZEOF_BUILTIN_TYPES = {
 }
 
 
-def _sizeof_type_name(tokens: Sequence[_Token]) -> str | None:
+def _sizeof_type_name(tokens: Sequence[_Token], known_types=()) -> str | None:
     """Return a canonical type spelling for ``sizeof(type)`` operands.
 
     A typedef name is lexically indistinguishable from a variable name, so we
@@ -1483,7 +1479,8 @@ def _sizeof_type_name(tokens: Sequence[_Token]) -> str | None:
     if any(token.kind not in {"identifier", "operator"} for token in cleaned):
         return None
     text = _tokens_text(cleaned).replace(" *", "*").strip()
-    identifiers = [token.value for token in cleaned if token.kind == "identifier"]
+    identifiers = [token.value for token in cleaned if token.kind == "identifier"
+                   and token.value not in {"const", "volatile", "restrict", "__restrict", "__restrict__"}]
     if not identifiers:
         return None
     lowered = [value.casefold() for value in identifiers]
@@ -1492,12 +1489,43 @@ def _sizeof_type_name(tokens: Sequence[_Token]) -> str | None:
         if len(identifiers) >= 2 and all(token.value in {"*"} or token.kind == "identifier" for token in cleaned):
             return text
         return None
-    if all(value in _SIZEOF_BUILTIN_TYPES or value.endswith("_t") or value.endswith("typedef") for value in lowered):
+    if all(value in _SIZEOF_BUILTIN_TYPES or value.endswith("_t") or value.endswith("typedef") or original in known_types
+           for original, value in zip(identifiers, lowered)):
         # A bare identifier such as ``foo_t`` is accepted as a typedef-sized
         # object; unknown typedefs use the runtime's deterministic word size.
         if all(token.kind == "identifier" or token.value == "*" for token in cleaned):
             return text
     return None
+
+
+def _unary_operator_positions(tokens: Sequence[_Token], known_types=()) -> set[int]:
+    """Distinguish prefix operators from binary ones, including after casts."""
+    positions = set()
+    parentheses = []
+    expects_operand = True
+    for index, token in enumerate(tokens):
+        value = token.value
+        if value == "(":
+            close = _matching(tokens, index, "(", ")")
+            is_cast = (expects_operand and (index == 0 or tokens[index - 1].value != "sizeof")
+                       and close is not None
+                       and _sizeof_type_name(tokens[index + 1:close], known_types) is not None)
+            parentheses.append(is_cast)
+            expects_operand = True
+        elif value == ")":
+            expects_operand = parentheses.pop() if parentheses else False
+        elif value in {"+", "-", "*", "&", "!", "~", "++", "--"}:
+            if expects_operand:
+                positions.add(index)
+            elif value not in {"++", "--"}:
+                expects_operand = True
+        elif value in {"]", "}"}:
+            expects_operand = False
+        elif value == "sizeof":
+            expects_operand = True
+        else:
+            expects_operand = token.kind == "operator"
+    return positions
 
 
 def _postfix_array_model(tokens: Sequence[_Token], resolve_integer, call_resolver=None) -> dict | None:
@@ -1680,6 +1708,22 @@ def _decode_c_string_literal(text: str) -> list[int] | None:
     return output
 
 
+def _mask_function_bodies(source: str) -> str:
+    tokens = _lex_c(source)
+    chars = list(source)
+    index = 0
+    while index < len(tokens):
+        if tokens[index].value == "{" and index and tokens[index - 1].value == ")":
+            close = _matching(tokens, index, "{", "}")
+            if close is not None:
+                for position in range(tokens[index].start, tokens[close].start + 1):
+                    if chars[position] not in "\r\n":
+                        chars[position] = " "
+                index = close
+        index += 1
+    return "".join(chars)
+
+
 def _parse_initial_variables(
     records: Sequence[_ProjectFile], macros: Mapping[str, _Macro]
 ) -> dict[str, object]:
@@ -1743,7 +1787,7 @@ def _parse_initial_variables(
         if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES):
             continue
         cleaned = _mask_inactive_preprocessor(record.content, macros)
-        for match in declaration_pattern.finditer(cleaned):
+        for match in declaration_pattern.finditer(_mask_function_bodies(cleaned)):
             name = match.group("name")
             floating = "float" in match.group("type") or "double" in match.group("type")
             size_text = match.group("size")
@@ -1813,6 +1857,149 @@ def _parse_variable_types(
             pointer = (match.group("pointer") or "").replace(" ", "")
             variable_types[match.group("name")] = re.sub(r"\s+", " ", match.group("type").strip().lower()) + pointer
     return variable_types
+
+
+_C_QUALIFIERS = {"const", "volatile", "restrict", "__restrict", "__restrict__", "static", "extern", "register", "inline"}
+
+
+def _declarators(tokens: Sequence[_Token], known_types=()) -> list[dict] | None:
+    """Parse ordinary scalar, pointer and fixed-array declarators in one place."""
+    cursor = 0
+    base: list[str] = []
+    while cursor < len(tokens):
+        value = tokens[cursor].value
+        if value in {"struct", "union", "enum"} and cursor + 1 < len(tokens):
+            base.extend([value, tokens[cursor + 1].value])
+            cursor += 2
+        elif (value in _C_QUALIFIERS or value.lower() in _SIZEOF_BUILTIN_TYPES
+              or value in known_types or value == "GPIO_PinState" or value.endswith(("_t", "TypeDef"))):
+            base.append(value)
+            cursor += 1
+        else:
+            break
+    if not base or all(value in _C_QUALIFIERS for value in base):
+        return None
+    declarations = []
+    for part in _split_arguments(tokens[cursor:]):
+        position = 0
+        pointer = ""
+        while position < len(part) and (part[position].value == "*" or part[position].value in _C_QUALIFIERS):
+            if part[position].value == "*":
+                pointer += "*"
+            position += 1
+        if position >= len(part) or part[position].kind != "identifier":
+            return None
+        name = part[position]
+        position += 1
+        size = None
+        if position < len(part) and part[position].value == "[":
+            close = _matching(part, position, "[", "]")
+            if close is None:
+                return None
+            size = list(part[position + 1:close])
+            position = close + 1
+        if position < len(part) and part[position].value != "=":
+            return None
+        declarations.append({
+            "name": name, "cType": " ".join(value for value in base if value not in _C_QUALIFIERS) + pointer,
+            "size": size, "initializer": list(part[position + 1:]) if position < len(part) else None,
+            "static": "static" in base,
+        })
+    return declarations or None
+
+
+def _collect_c_types(records: Sequence[_ProjectFile], macros: Mapping[str, _Macro]) -> dict[str, dict]:
+    types: dict[str, dict] = {}
+    resolve, _ = _make_integer_resolver(macros)
+    sources = [_mask_inactive_preprocessor(record.content, macros) for record in records
+               if record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES)]
+
+    def collect_aliases(source):
+        for match in re.finditer(r"\btypedef\s+([^;{}]+);", source):
+            declarations = _declarators(_lex_c(match.group(1)), types)
+            if declarations and len(declarations) == 1 and declarations[0]["size"] is None:
+                item = declarations[0]
+                types[item["name"].value] = {"target": item["cType"]}
+
+    # Struct members may use aliases from this file or an included header.
+    # Collect those before resolving field layouts, then revisit aliases of
+    # the newly collected structs.
+    for source in sources:
+        collect_aliases(source)
+    for source in sources:
+        for match in re.finditer(r"\b(typedef\s+)?struct\s*([A-Za-z_]\w*)?\s*\{([^{}]*)\}\s*([A-Za-z_]\w*)?\s*;", source):
+            typedef, tag, body, alias = match.groups()
+            fields = []
+            for field in body.split(";"):
+                if not field.strip():
+                    continue
+                declarations = _declarators(_lex_c(field), types)
+                if declarations is None:
+                    fields = []
+                    break
+                for declaration in declarations:
+                    item = {"name": declaration["name"].value, "cType": declaration["cType"]}
+                    if declaration["size"] is not None:
+                        length = resolve(_tokens_text(declaration["size"]))
+                        if length is None or not 0 <= length <= 65536:
+                            fields = []
+                            break
+                        item["length"] = length
+                    fields.append(item)
+            if fields:
+                descriptor = {"fields": fields}
+                if tag:
+                    types["struct " + tag] = descriptor
+                if typedef and alias:
+                    types[alias] = descriptor
+        collect_aliases(source)
+    return types
+
+
+def _global_declarations(records, macros, types):
+    for record in records:
+        if not record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES):
+            continue
+        tokens = _lex_c(record.content, macros)
+        start = index = 0
+        while index < len(tokens):
+            if tokens[index].value == "{":
+                close = _matching(tokens, index, "{", "}")
+                if close is None:
+                    break
+                if index > 0 and tokens[index - 1].value == ")":
+                    start = close + 1
+                index = close + 1
+                continue
+            if tokens[index].value == ";":
+                declarations = _declarators(tokens[start:index], types)
+                if declarations:
+                    yield from declarations
+                start = index + 1
+            index += 1
+
+
+def _initializer_model(tokens, c_type, size_tokens, resolve_integer, call_resolver=None):
+    """Preserve aggregate boundaries while lowering C initializer values."""
+    def values(parts):
+        return [values(_split_arguments(part[1:-1]))
+                if part and part[0].value == "{" and part[-1].value == "}"
+                else _expression_model(part, resolve_integer, call_resolver)
+                for part in parts if part]
+
+    size = resolve_integer(_tokens_text(size_tokens)) if size_tokens else None
+    if tokens and tokens[0].value == "{" and tokens[-1].value == "}":
+        items = values(_split_arguments(tokens[1:-1]))
+        if size_tokens is None:
+            return {"kind": "initializer", "cType": c_type, "values": items}
+        if size is not None and 0 <= size <= 65536:
+            items = (items + [0] * max(0, size - len(items)))[:size]
+        return [{"kind": "initializer", "cType": c_type, "values": item} if isinstance(item, list)
+                else item for item in items]
+    if size_tokens is not None and len(tokens) == 1 and tokens[0].kind == "string":
+        items = (_decode_c_string_literal(tokens[0].value) or []) + [0]
+        return (items + [0] * max(0, size - len(items)))[:size] if size is not None and 0 <= size <= 65536 else items
+    return _expression_model(tokens, resolve_integer, call_resolver)
 
 
 _PURE_LIBC_FUNCTIONS = {
@@ -1951,10 +2138,12 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer, call_resolver=N
         if close_call == len(cleaned) - 1:
             if cleaned[0].value == "HAL_GetTick":
                 return {"kind": "tick"}
+            if cleaned[0].value == "__get_PRIMASK" and not cleaned[2:close_call]:
+                return {"kind": "irqMask"}
             if cleaned[0].value in {"strlen", "sizeof"}:
                 raw_argument = cleaned[2:close_call]
                 if cleaned[0].value == "sizeof":
-                    type_name = _sizeof_type_name(raw_argument)
+                    type_name = _sizeof_type_name(raw_argument, getattr(resolve_integer, "c_types", {}))
                     if type_name is not None:
                         return {"kind": "sizeOf", "cType": type_name}
                 argument = _expression_model(raw_argument, resolve_integer, call_resolver)
@@ -2028,34 +2217,6 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer, call_resolver=N
             ),
             "alternate": _expression_model(cleaned[conditional_colon + 1 :], resolve_integer, call_resolver),
         }
-
-    # A cast followed by a unary operator is still one cast expression in C,
-    # for example ``(uint8_t *)&sample``. Recognize this before binary
-    # precedence scanning so the ``&`` is not mistaken for a top-level
-    # bitwise-and operator.
-    if len(cleaned) >= 4 and cleaned[0].value == "(":
-        cast_close = _matching(cleaned, 0, "(", ")")
-        if cast_close is not None and cast_close < len(cleaned) - 1:
-            cast_tokens = cleaned[1:cast_close]
-            cast_identifiers = [token.value for token in cast_tokens if token.kind == "identifier"]
-            cast_type_names = {
-                "bool", "char", "const", "double", "enum", "float", "int", "long", "short", "signed",
-                "size_t", "struct", "union", "unsigned", "void", "volatile", "_Bool",
-            }
-            is_type_cast = bool(cast_identifiers) and all(
-                name in cast_type_names or name.endswith("_t") or name.endswith("TypeDef")
-                for name in cast_identifiers
-            ) and all(token.kind == "identifier" or token.value == "*" for token in cast_tokens)
-            remainder = cleaned[cast_close + 1 :]
-            if is_type_cast and remainder and remainder[0].value in {"&", "*", "+", "-", "!", "~"}:
-                cast_type = _tokens_text(cast_tokens).replace(" *", "*")
-                if "float" in cast_type or "double" in cast_type:
-                    return {
-                        "kind": "cast",
-                        "cType": cast_type,
-                        "value": _expression_model(remainder, resolve_integer, call_resolver),
-                    }
-                return _expression_model(remainder, resolve_integer, call_resolver)
 
     # The comma operator sequences expressions and yields the value of the
     # final operand.  It is common in compact register/loop code and also
@@ -2164,6 +2325,7 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer, call_resolver=N
         "/": "div",
         "%": "mod",
     }
+    unary_positions = _unary_operator_positions(cleaned, getattr(resolve_integer, "c_types", {}))
 
     def rightmost_top_level_operator(operators: set[str]) -> int | None:
         depth = 0
@@ -2177,9 +2339,7 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer, call_resolver=N
                 continue
             if depth != 0 or token.value not in operators:
                 continue
-            if token.value in {"+", "-", "*", "&"} and (
-                index == 0 or cleaned[index - 1].value in {"(", "[", ",", "=", "+", "-", "*", "/", "%", "&", "|", "^", "<<", ">>"}
-            ):
+            if index in unary_positions:
                 continue
             selected = index
         return selected
@@ -2240,7 +2400,7 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer, call_resolver=N
                         continue
                     break
                 operand = operand[:end]
-        type_name = _sizeof_type_name(operand)
+        type_name = _sizeof_type_name(operand, getattr(resolve_integer, "c_types", {}))
         if type_name is not None:
             return {"kind": "sizeOf", "cType": type_name}
         return {"kind": "sizeOf", "value": _expression_model(operand, resolve_integer, call_resolver)}
@@ -2257,11 +2417,11 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer, call_resolver=N
         field = "pointer" if cleaned[0].value == "*" else "value"
         return {"kind": unary_kinds[cleaned[0].value], field: _expression_model(cleaned[1:], resolve_integer, call_resolver)}
 
-    without_cast = _strip_leading_c_casts(cleaned)
+    without_cast = _strip_leading_c_casts(cleaned, getattr(resolve_integer, "c_types", {}))
     if without_cast != cleaned:
         close = _matching(cleaned, 0, "(", ")")
         cast_type = _tokens_text(cleaned[1:close]).replace(" *", "*") if close is not None else ""
-        if "float" in cast_type or "double" in cast_type:
+        if cast_type:
             return {"kind": "cast", "cType": cast_type, "value": _expression_model(cleaned[close + 1 :], resolve_integer, call_resolver)}
         return _expression_model(without_cast, resolve_integer, call_resolver)
 
@@ -2342,6 +2502,8 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer, call_resolver=N
                 return {"kind": "constant", "name": token.value}
             if token.value in constants:
                 return {"kind": "constant", "name": token.value, "value": constants[token.value]}
+            if re.fullmatch(r"GPIO[A-K]", token.value):
+                return {"kind": "constant", "name": token.value, "value": token.value}
             resolved = resolve_integer(token.value)
             if resolved is not None:
                 return {"kind": "constant", "name": token.value, "value": resolved}
@@ -2368,6 +2530,8 @@ def _expression_model(tokens: Sequence[_Token], resolve_integer, call_resolver=N
                         continue
                     break
                 if replacement:
+                    if len(replacement) == 1 and re.fullmatch(r"GPIO[A-K]", replacement[0].value):
+                        return _expression_model(replacement, resolve_integer, call_resolver)
                     if all(item.kind == "string" for item in replacement):
                         decoded_parts = [_decode_c_string_literal(item.value) for item in replacement]
                         if all(part is not None for part in decoded_parts):
@@ -2404,8 +2568,14 @@ def _runtime_expression_supported(expression: Mapping[str, object]) -> bool:
     # a transfer length, or a malloc size.
     kind = str(expression.get("kind") or expression.get("op") or expression.get("type") or "")
     kind = re.sub(r"[^A-Za-z0-9]", "", kind).casefold()
-    if kind in {"literal", "constant", "variable", "char", "string", "tick", "halcall"}:
+    if kind in {"literal", "constant", "variable", "char", "string", "tick", "irqmask", "halcall"}:
         return True
+    if kind == "initializer":
+        def supported(value):
+            if isinstance(value, list):
+                return all(supported(item) for item in value)
+            return not isinstance(value, Mapping) or _runtime_expression_supported(value)
+        return supported(expression.get("values", []))
     if kind == "inlinecall":
         # Value-returning project helpers are compiled into a local runtime
         # instruction region before their containing HAL call.  The parser
@@ -2507,6 +2677,7 @@ def _condition_model(tokens: Sequence[_Token], resolve_integer, expression_model
         "<=": "le",
         ">=": "ge",
     }
+    unary_positions = _unary_operator_positions(cleaned, getattr(resolve_integer, "c_types", {}))
 
     def top_level_operator(operators: set[str]) -> int | None:
         depth = 0
@@ -2516,7 +2687,7 @@ def _condition_model(tokens: Sequence[_Token], resolve_integer, expression_model
                 depth += 1
             elif token.value in {")", "]"}:
                 depth -= 1
-            elif depth == 0 and token.value in operators:
+            elif depth == 0 and token.value in operators and index not in unary_positions:
                 # Binary operators in this subset are left-associative. Split
                 # at the rightmost operator of each precedence level so
                 # ``a < b < c`` becomes ``(a < b) < c`` rather than the
@@ -2684,6 +2855,8 @@ class _StatementParser:
         diagnostics: list[dict],
         inline_stack: Sequence[str] | None = None,
         function_tokens: Sequence[_Token] | None = None,
+        records: Sequence[_ProjectFile] = (),
+        context: dict | None = None,
     ) -> None:
         self.tokens = list(tokens)
         self.function_tokens = list(function_tokens) if function_tokens is not None else self.tokens
@@ -2697,6 +2870,22 @@ class _StatementParser:
         self.diagnostics = diagnostics
         self.inline_stack = tuple(inline_stack or ())
         self.resolve_expression, self.resolve_identifier = _make_integer_resolver(macros)
+        self.context = context if context is not None else {
+            "sequence": 0, "types": _collect_c_types(records, macros),
+            "sources": [(record.path, _lex_c(record.content, macros)) for record in records
+                        if record.path.casefold().endswith(C_SOURCE_SUFFIXES + C_HEADER_SUFFIXES)
+                        and not re.search(r"(?:^|/)Drivers/(?:CMSIS|STM32[^/]*_HAL_Driver)/", record.path, re.I)],
+        }
+        self.c_types = self.context["types"]
+        self.resolve_expression.c_types = self.c_types
+        self.declarations: dict[str, dict] = {}
+
+    def _function_definition(self, name: str):
+        for file, tokens in [(self.file, self.function_tokens), *self.context["sources"]]:
+            body = _find_function(tokens, name)
+            if body is not None:
+                return file, tokens, body
+        return None
 
     @staticmethod
     def _append_operation(operations: list[dict], operation: dict | list[dict] | None) -> None:
@@ -2718,7 +2907,7 @@ class _StatementParser:
         "spiTransmitReceiveIt", "spiTransmitDma", "spiReceiveDma", "spiTransmitReceiveDma",
         "spiAbortIt", "adcStart", "adcStop", "adcStartIt",
         "adcStopIt", "adcStartDma", "adcStopDma", "adcPollForConversion", "timerStartIt", "timerStopIt",
-        "pwmStart", "pwmStop",
+        "pwmStart", "pwmStop", "pwmStartDma", "pwmStopDma",
     }
     _VALUE_RETURNING_OPERATIONS = {"adcGetValue", "gpioRead"}
     _SUCCESSFUL_NOOP_HAL_CALLS = {
@@ -2730,7 +2919,7 @@ class _StatementParser:
         "HAL_RCC_OscConfig", "HAL_RCC_ClockConfig", "HAL_RCCEx_PeriphCLKConfig",
     }
 
-    def _inline_call_expression(self, call: _Token, arguments: Sequence[Sequence[_Token]]) -> dict | None:
+    def _inline_call_expression(self, call: _Token, arguments: Sequence[Sequence[_Token]], *, discard=False) -> dict | None:
         """Lower a project helper call into a value-producing expression.
 
         The browser compiler expands this into a local instruction region with
@@ -2740,10 +2929,11 @@ class _StatementParser:
         """
 
         call_name = call.value
-        body = _find_function(self.function_tokens, call_name)
-        if body is None or call_name in self.inline_stack:
+        definition = self._function_definition(call_name)
+        if definition is None or call_name in self.inline_stack:
             return None
-        parameters = _function_parameter_names(self.function_tokens, call_name)
+        file, function_tokens, body = definition
+        parameters = _function_parameters(function_tokens, call_name, self.c_types)
         if len(arguments) != len(parameters):
             source = self._source(call)
             self.diagnostics.append(
@@ -2755,13 +2945,25 @@ class _StatementParser:
                 )
             )
             return {"kind": "unsupportedCall", "text": call_name}
-        inline_tokens = _substitute_function_parameters(
-            self.function_tokens[body[0] : body[1]],
-            dict(zip(parameters, arguments)),
-        )
+        self.context["sequence"] += 1
+        prefix = f"__alice_call_{self.context.get('entry', 'main')}_{self.context['sequence']}_{call_name}_"
+        bindings = []
+        substitutions = {}
+        for parameter, argument in zip(parameters, arguments):
+            name, c_type = parameter["name"], parameter["cType"]
+            # Peripheral handles and driver contexts are compile-time routing
+            # identities; ordinary C data arguments are evaluated once by value.
+            if "HandleTypeDef" in c_type or c_type.startswith(("GPIO_TypeDef", "AliceSIM_")):
+                substitutions[name] = argument
+                continue
+            local_name = prefix + name
+            substitutions[name] = [_Token(local_name, "identifier", call.start, call.line, call.column)]
+            bindings.append({"op": "assign", "target": local_name, "cType": c_type,
+                             "value": self._model_expression(argument), "source": self._source(call)})
+        inline_tokens = _substitute_function_parameters(function_tokens[body[0]:body[1]], substitutions)
         parser = _StatementParser(
             inline_tokens,
-            self.file,
+            file,
             self.macros,
             self.aliases,
             self.uart_instances,
@@ -2770,13 +2972,14 @@ class _StatementParser:
             self.adc_instances,
             self.diagnostics,
             self.inline_stack + (call_name,),
-            self.function_tokens,
+            function_tokens,
+            context=self.context,
         )
         operations = parser.parse()
         # A complete branch return makes every reachable path deterministic;
         # the return does not have to be the physically last operation (for
         # example ``if (x) return 1; else return 2;``).
-        if not _operations_return_value(operations):
+        if not discard and not _operations_return_value(operations):
             source = self._source(call)
             self.diagnostics.append(
                 _diagnostic(
@@ -2787,10 +2990,18 @@ class _StatementParser:
                 )
             )
             return {"kind": "unsupportedCall", "text": call_name}
+        renames = {name: (f"__alice_static_{re.sub(r'[^A-Za-z0-9]', '_', file)}_{call_name}_" if declaration["static"] else prefix) + name
+                   for name, declaration in parser.declarations.items()}
+        operations = _rename_local_references(operations, renames)
+        locals_ = [binding["target"] for binding in bindings]
+        locals_.extend(renames[name] for name, declaration in parser.declarations.items() if not declaration["static"])
         return {
             "kind": "inlineCall",
             "function": call_name,
-            "operations": operations,
+            "operations": [*bindings, *operations],
+            "bindingCount": len(bindings),
+            "locals": locals_,
+            "discard": discard,
             "source": self._source(call),
         }
 
@@ -2798,6 +3009,11 @@ class _StatementParser:
         """Model a value-returning call through the same HAL lowerer as statements."""
 
         name = call.value
+        if name.startswith(("AliceSIM_WS2812_", "AliceSIM_DS18B20_")) or name in {"AliceSIM_TM1637_DisplayRaw", "AliceSIM_TM1637_WriteSegments", "AliceSIM_TM1637_SetColon"}:
+            operation = self._parse_alicesim_call(call, arguments)
+            if operation and operation.get("op") != "unsupported":
+                return {"kind": "halCall", "operation": operation, "returnKind": "value" if name in {"AliceSIM_WS2812_RequiredPulseCount", "AliceSIM_DS18B20_RawToCelsiusX100"} else "status"}
+            return {"kind": "unsupportedCall", "text": name}
         if not name.startswith(("HAL_", "__HAL_")):
             return self._inline_call_expression(call, arguments)
         operation = self._parse_hal_call(call, arguments)
@@ -3184,123 +3400,41 @@ class _StatementParser:
         and the display drivers write through their addresses.
         """
 
-        cursor = 0
-        saw_type = False
-        while cursor < len(tokens):
-            token = tokens[cursor]
-            lowered = token.value.casefold()
-            if token.kind == "identifier" and (
-                lowered in self._DECLARATION_PREFIXES
-                or lowered.endswith("_t")
-                or token.value.endswith("TypeDef")
-            ):
-                saw_type = True
-                cursor += 1
-                continue
-            if token.value == "*" and saw_type:
-                cursor += 1
-                continue
-            break
-        if not saw_type or cursor >= len(tokens):
+        declarations = _declarators(tokens, self.c_types)
+        if declarations is None:
             return None
 
         operations: list[dict] = []
-        for declarator in _split_arguments(tokens[cursor:]):
-            if not declarator:
-                continue
-            depth = 0
-            assignment = None
-            for index, token in enumerate(declarator):
-                if token.value in {"(", "[", "{"}:
-                    depth += 1
-                elif token.value in {")", "]", "}"}:
-                    depth = max(0, depth - 1)
-                elif token.value == "=" and depth == 0:
-                    assignment = index
-                    break
-            name_tokens = declarator[:assignment] if assignment is not None else declarator
-            bracket = next((index for index, token in enumerate(name_tokens) if token.value == "["), None)
-            identifiers = [
-                token for token in (name_tokens[:bracket] if bracket is not None else name_tokens)
-                if token.kind == "identifier"
-            ]
-            if not identifiers:
-                continue
-            name = identifiers[-1]
+        for declaration in declarations:
+            name = declaration["name"]
             source = self._source(name)
-
-            if assignment is not None:
-                initializer = declarator[assignment + 1 :]
-                # Declarations are parsed before ordinary assignments.  Keep
-                # call initializers on the same lowering path as an existing
-                # variable assignment, including a leading pointer cast such
-                # as ``uint32_t *samples = (uint32_t *)malloc(...)``.
-                call_initializer = _strip_leading_c_casts(_strip_wrapping_parentheses(initializer))
-                if (
-                    len(call_initializer) >= 3
-                    and call_initializer[0].kind == "identifier"
-                    and call_initializer[1].value == "("
-                ):
-                    close = _matching(call_initializer, 1, "(", ")")
-                    if close == len(call_initializer) - 1:
-                        call = call_initializer[0]
-                        arguments = _split_arguments(call_initializer[2:close])
-                        operation = None
-                        # HAL_GetTick is a value-producing HAL helper rather
-                        # than a peripheral operation.  Declaration
-                        # initializers take this call-specific fast path
-                        # before ordinary RHS expression modeling, so retain
-                        # its live tick expression explicitly here.
-                        if call.value == "HAL_GetTick" and not arguments:
-                            operations.append({
-                                "op": "assign",
-                                "target": name.value,
-                                "value": {"kind": "tick"},
-                                "source": source,
-                            })
-                            continue
-                        if call.value.startswith(("HAL_", "__HAL_")):
-                            operation = self._parse_hal_call(call, arguments)
-                        elif call.value in {"snprintf", "sprintf"}:
-                            operation = self._parse_format_call(call, arguments)
-                        elif call.value in _STATEMENT_LIBC_FUNCTIONS:
-                            operation = self._parse_libc_call(call, arguments)
-                        if operation is not None:
-                            if operation.get("op") == "adcGetValue":
-                                operation["target"] = name.value
-                            else:
-                                operation["resultTarget"] = name.value
-                            operations.append(operation)
-                            continue
-                if len(initializer) >= 2 and initializer[0].value == "{" and initializer[-1].value == "}":
-                    values = [
-                        self._model_expression(value)
-                        for value in _split_arguments(initializer[1:-1])
-                        if value
-                    ]
+            self.declarations[name.value] = declaration
+            initializer = declaration["initializer"]
+            size_tokens = declaration["size"]
+            size = self.resolve_expression(_tokens_text(size_tokens)) if size_tokens else None
+            metadata = {"cType": declaration["cType"], "declaration": True}
+            if declaration["static"]:
+                metadata["static"] = True
+            if initializer is not None:
+                start = len(operations)
+                if (initializer and initializer[0].value == "{" and initializer[-1].value == "}"
+                    or size_tokens is not None and len(initializer) == 1 and initializer[0].kind == "string"):
+                    values = _initializer_model(initializer, declaration["cType"], size_tokens,
+                                                self.resolve_expression, self._call_expression_model)
                     operations.append({"op": "assign", "target": name.value, "value": values, "source": source})
                 else:
-                    operations.append({
-                        "op": "assign",
-                        "target": name.value,
-                        "value": self._model_expression(initializer),
-                        "source": source,
-                    })
+                    self._append_operation(operations, self._parse_simple([
+                        name, _Token("=", "operator", name.start, name.line, name.column), *initializer,
+                    ]))
+                for operation in operations[start:]:
+                    operation.update(metadata)
                 continue
 
-            if bracket is None:
-                continue
-            close = _matching(name_tokens, bracket, "[", "]")
-            if close is None:
-                continue
-            size = self.resolve_expression(_tokens_text(name_tokens[bracket + 1 : close]))
-            if size is None or size < 0 or size > 65536:
-                continue
+            if size_tokens is not None and (size is None or not 0 <= size <= 65536):
+                return [self._unsupported(tokens, "C_UNSUPPORTED_ARRAY_SIZE")]
             operations.append({
-                "op": "assign",
-                "target": name.value,
-                "value": [0] * size,
-                "source": source,
+                "op": "assign", "target": name.value, "value": [0] * size if size is not None else 0,
+                "source": source, **metadata,
             })
         return operations
 
@@ -3327,6 +3461,12 @@ class _StatementParser:
         """Model an lvalue once so compound operations do not re-evaluate it."""
 
         return _lvalue_expression_model(tokens, self.resolve_expression, self._call_expression_model)
+
+    def _assignment_target(self, tokens: Sequence[_Token]) -> str | dict | None:
+        target = self._compound_assignment_target(tokens)
+        if target and target.get("kind") == "variable":
+            return target["name"]
+        return target
 
     def _parse_simple(self, tokens: Sequence[_Token]) -> dict | list[dict] | None:
         if not tokens:
@@ -3396,20 +3536,21 @@ class _StatementParser:
                 }
         for index, token in enumerate(tokens[:-1]):
             is_hal_call = token.kind == "identifier" and (token.value.startswith("HAL_") or token.value.startswith("__HAL_"))
+            is_irq_call = token.kind == "identifier" and token.value in {"__disable_irq", "__enable_irq", "__set_PRIMASK"}
             is_alice_call = token.kind == "identifier" and token.value.startswith("AliceSIM_")
             is_middleware_call = token.kind == "identifier" and token.value in {
                 "vTaskDelay", "vTaskDelayUntil", "taskYIELD", "osDelay", "osDelayUntil", "osThreadYield",
                 "xQueueReceive", "xSemaphoreTake", "osMessageQueueGet", "osSemaphoreAcquire",
             }
             expression_only_hal = token.value in {"HAL_GetTick", "HAL_ADCEx_Calibration_Start"}
-            if (is_hal_call or is_alice_call or is_middleware_call) and tokens[index + 1].value == "(" and not expression_only_hal:
+            if (is_hal_call or is_irq_call or is_alice_call or is_middleware_call) and tokens[index + 1].value == "(" and not expression_only_hal:
                 close = _matching(tokens, index + 1, "(", ")")
                 # The statement lowerer only owns a complete call. A call
                 # nested inside arithmetic or another expression must remain
                 # an expression node so the runtime can preserve C ordering.
                 if close == len(tokens) - 1:
                     arguments = _split_arguments(tokens[index + 2 : close])
-                    if is_hal_call:
+                    if is_hal_call or is_irq_call:
                         operation = self._parse_hal_call(token, arguments)
                     elif is_alice_call:
                         operation = self._parse_alicesim_call(token, arguments)
@@ -3422,8 +3563,8 @@ class _StatementParser:
                         # a standalone setup call still needs no instruction.
                         if assignment_index is not None and assignment_index < index:
                             left = list(tokens[:assignment_index])
-                            target = next((item.value for item in reversed(left) if item.kind == "identifier"), None)
-                            if target and not any(item.value in {".", "->"} for item in left):
+                            target = self._assignment_target(left)
+                            if target:
                                 return {
                                     "op": "assign",
                                     "target": target,
@@ -3433,13 +3574,13 @@ class _StatementParser:
                         return None
                     if operation and operation.get("op") == "adcGetValue" and assignment_index is not None and assignment_index < index:
                         left = list(tokens[:assignment_index])
-                        target = next((item.value for item in reversed(left) if item.kind == "identifier"), None)
-                        if target and not any(item.value in {".", "->"} for item in left):
+                        target = self._assignment_target(left)
+                        if target:
                             operation["target"] = target
                     elif operation and assignment_index is not None and assignment_index < index:
                         left = list(tokens[:assignment_index])
-                        target = next((item.value for item in reversed(left) if item.kind == "identifier"), None)
-                        if target and not any(item.value in {".", "->"} for item in left):
+                        target = self._assignment_target(left)
+                        if target:
                             operation["resultTarget"] = target
                     return operation
 
@@ -3453,7 +3594,7 @@ class _StatementParser:
             operation = self._parse_format_call(token, arguments)
             if operation and assignment_index is not None and assignment_index < index:
                 left = list(tokens[:assignment_index])
-                target = next((item.value for item in reversed(left) if item.kind == "identifier"), None)
+                target = self._assignment_target(left)
                 if target:
                     operation["resultTarget"] = target
             return operation
@@ -3477,7 +3618,7 @@ class _StatementParser:
                     }
             if operation and assignment_index is not None and assignment_index < index:
                 left = list(tokens[:assignment_index])
-                target = next((item.value for item in reversed(left) if item.kind == "identifier"), None)
+                target = self._assignment_target(left)
                 if target:
                     operation["resultTarget"] = target
             return operation
@@ -3500,36 +3641,9 @@ class _StatementParser:
                     }
                 call_close = _matching(tokens, call_index + 1, "(", ")")
                 call_arguments = _split_arguments(tokens[call_index + 2 : call_close]) if call_close is not None else []
-                inline_body = _find_function(self.function_tokens, call_name)
-                if inline_body is not None and call_name not in self.inline_stack:
-                    parameter_names = _function_parameter_names(self.function_tokens, call_name)
-                    if len(call_arguments) != len(parameter_names):
-                        return self._unsupported(
-                            tokens,
-                            "C_UNSUPPORTED_FUNCTION_ARGUMENTS",
-                            f"Function call '{call_name}' expects {len(parameter_names)} arguments but received {len(call_arguments)}",
-                        )
-                    inline_tokens = _substitute_function_parameters(
-                        self.function_tokens[inline_body[0] : inline_body[1]],
-                        dict(zip(parameter_names, call_arguments)),
-                    )
-                    parser = _StatementParser(
-                        inline_tokens,
-                        self.file,
-                        self.macros,
-                        self.aliases,
-                        self.uart_instances,
-                        self.i2c_instances,
-                        self.spi_instances,
-                        self.adc_instances,
-                        self.diagnostics,
-                        self.inline_stack + (call_name,),
-                        self.function_tokens,
-                    )
-                    inline_operations = parser.parse()
-                    if inline_operations and inline_operations[-1].get("op") == "return" and "value" not in inline_operations[-1]:
-                        inline_operations.pop()
-                    return inline_operations
+                inline = self._inline_call_expression(tokens[call_index], call_arguments, discard=True)
+                if inline is not None:
+                    return {"op": "expression", "expression": inline, "source": self._source(tokens[call_index])}
                 if call_name in {"HAL_GetTick", "HAL_ADCEx_Calibration_Start"}:
                     return None
                 return self._unsupported(tokens, "C_UNSUPPORTED_FUNCTION_CALL", f"Function call '{call_name}' is outside the supported HAL/driver subset")
@@ -3558,26 +3672,9 @@ class _StatementParser:
                 return None
             return self._unsupported(tokens, "C_UNSUPPORTED_STATEMENT")
         left = list(tokens[:assignment_index])
-        target: str | dict | None = None
-        stripped_left = _strip_wrapping_parentheses(left)
-        if stripped_left and stripped_left[0].value == "*":
-            target = {
-                "kind": "dereference",
-                "pointer": self._model_expression(stripped_left[1:]),
-            }
-        bracket_index = next((index for index, token in enumerate(left) if token.value == "["), None)
-        if bracket_index is not None and bracket_index > 0 and left[bracket_index - 1].kind == "identifier":
-            target_model = self._model_expression(left[bracket_index - 1 :])
-            if target_model.get("kind") == "arrayIndex":
-                target = target_model
-        if target is None:
-            member_target = self._compound_assignment_target(left)
-            if member_target is not None and member_target.get("kind") == "member":
-                target = member_target
-        if target is None:
-            target = next((token.value for token in reversed(left) if token.kind == "identifier"), None)
+        target = self._assignment_target(left)
         if not target:
-            return None
+            return self._unsupported(tokens, "C_UNSUPPORTED_ASSIGNMENT_TARGET")
         value_tokens = _strip_wrapping_parentheses(tokens[assignment_index + 1 :])
         if len(value_tokens) >= 3 and value_tokens[0].kind == "identifier" and value_tokens[1].value == "(":
             close = _matching(value_tokens, 1, "(", ")")
@@ -3812,6 +3909,93 @@ class _StatementParser:
             return {"kind": "constant", "name": identifier, "value": enum_values[identifier]}
         return model
 
+    def _ds18b20_gpio_pin(self, port_tokens, pin_tokens) -> str | None:
+        def single_port(text, visited=()):
+            cleaned = re.sub(r"[\s()]", "", text)
+            if re.fullmatch(r"GPIO[A-K]", cleaned):
+                return cleaned
+            if not re.fullmatch(r"[A-Za-z_]\w*", cleaned) or cleaned in visited:
+                return None
+            macro = self.macros.get(cleaned)
+            return single_port(macro.expression, (*visited, cleaned)) if macro and macro.parameters is None else None
+        port = single_port(_tokens_text(port_tokens))
+        mask = self.resolve_expression(_tokens_text(pin_tokens))
+        if not port or mask is None or not 1 <= mask <= 0x8000 or mask & (mask - 1):
+            return None
+        return f"P{port[-1]}{mask.bit_length() - 1}"
+
+    def _ds18b20_context(self, tokens, source) -> tuple[str | None, bool, bool]:
+        cleaned = _strip_leading_c_casts(_strip_wrapping_parentheses(tokens), self.c_types)
+        if _tokens_text(cleaned) == "NULL" or self.resolve_expression(_tokens_text(cleaned)) == 0:
+            return None, True, True
+        if cleaned and cleaned[0].value == "&":
+            target = _strip_wrapping_parentheses(cleaned[1:])
+            if len(target) == 1 and target[0].kind == "identifier":
+                return target[0].value, False, True
+            if len(target) >= 4 and target[0].kind == "identifier" and target[1].value == "[" and _matching(target, 1, "[", "]") == len(target) - 1:
+                index = self.resolve_expression(_tokens_text(target[2:-1]))
+                if index is not None and 0 <= index <= 65535:
+                    return f"{target[0].value}[{index}]", False, True
+        self.diagnostics.append(_diagnostic(
+            "error", "ALICESIM_DS18B20_CONTEXT_UNRESOLVED",
+            "DS18B20 needs the address of a named device or a constant array element; dynamic device pointers cannot be simulated",
+            **source,
+        ))
+        return None, False, False
+
+    def _ds18b20_callback_pins(self, name: str | None, arguments=None, stack=()) -> tuple[set[str], bool]:
+        """Resolve actual HAL GPIO accesses, including statically bound helpers.
+
+        Opaque context fields and indirect calls deliberately do not imply a DQ
+        pin. A valid semantic binding needs GPIO evidence from each callback.
+        """
+        if not name or name in stack or len(stack) >= 8:
+            return set(), False
+        definition = self._function_definition(name)
+        if definition is None:
+            return set(), False
+        _, function_tokens, body = definition
+        tokens = function_tokens[body[0]:body[1]]
+        if arguments is not None:
+            parameters = _function_parameters(function_tokens, name, self.c_types)
+            if len(arguments) != len(parameters):
+                return set(), False
+            tokens = _substitute_function_parameters(tokens, {parameter["name"]: argument for parameter, argument in zip(parameters, arguments)})
+        tokens = _expand_function_macros(tokens, self.macros)
+        pins: set[str] = set()
+        valid = True
+        returns = []
+        for index, token in enumerate(tokens[:-1]):
+            if token.value == "return":
+                end = next((cursor for cursor in range(index + 1, len(tokens)) if tokens[cursor].value == ";"), len(tokens))
+                expression = _tokens_text(_strip_wrapping_parentheses(tokens[index + 1:end]))
+                returns.append({"HAL_OK": 0, "HAL_ERROR": 1, "HAL_BUSY": 2, "HAL_TIMEOUT": 3}.get(expression, self.resolve_expression(expression)))
+            if token.kind != "identifier" or tokens[index + 1].value != "(":
+                continue
+            end = _matching(tokens, index + 1, "(", ")")
+            if end is None:
+                valid = False
+                continue
+            call_arguments = _split_arguments(tokens[index + 2:end])
+            if token.value in {"HAL_GPIO_WritePin", "HAL_GPIO_ReadPin", "HAL_GPIO_TogglePin"}:
+                gpio_pin = self._ds18b20_gpio_pin(call_arguments[0], call_arguments[1]) if len(call_arguments) >= 2 else None
+                if gpio_pin:
+                    pins.add(gpio_pin)
+                else:
+                    valid = False
+            elif self._function_definition(token.value) is not None:
+                helper_pins, helper_valid = self._ds18b20_callback_pins(token.value, call_arguments, (*stack, name))
+                pins.update(helper_pins)
+                # Helpers without GPIO are often delay routines. Unresolved
+                # GPIO inside a helper must still invalidate the binding.
+                valid = valid and helper_valid
+        # Reject a callback proven never to return HAL_OK. Conditional and
+        # hardware-dependent callback status remains outside this semantic
+        # binding check; it is not a substitute for executing 1-Wire code.
+        if returns and all(value is not None for value in returns) and 0 not in returns:
+            valid = False
+        return pins, valid
+
     def _parse_alicesim_call(self, call: _Token, arguments: Sequence[Sequence[_Token]]) -> dict | None:
         source = self._source(call)
         name = call.value
@@ -3834,6 +4018,54 @@ class _StatementParser:
 
         def expression(index: int) -> dict:
             return self._alicesim_expression(arguments[index]) if index < len(arguments) else {"kind": "unknown", "text": ""}
+
+        if name == "AliceSIM_DS18B20_Init":
+            if not require(5):
+                return {"op": "unsupported", "call": name, "source": source}
+            context, device_null, context_valid = self._ds18b20_context(arguments[0], source)
+            callbacks = []
+            callback_pins = []
+            binding_valid = True
+            for argument in arguments[2:5]:
+                callback_text = _tokens_text(argument).strip().strip("()").lstrip("&").strip()
+                callback = callback_text if re.fullmatch(r"[A-Za-z_]\w*", callback_text) and callback_text != "NULL" else None
+                callbacks.append(callback)
+                pins, valid = self._ds18b20_callback_pins(callback)
+                callback_pins.append(pins)
+                binding_valid = binding_valid and valid and len(pins) == 1
+            pins = set().union(*callback_pins)
+            binding_valid = binding_valid and len(pins) == 1
+            if not binding_valid:
+                self.diagnostics.append(_diagnostic(
+                    "error", "ALICESIM_DS18B20_BINDING_UNRESOLVED",
+                    "DS18B20 callbacks must resolve to one shared HAL GPIO pin; opaque or ambiguous 1-Wire callbacks cannot be simulated",
+                    **source,
+                ))
+            return {
+                "op": "aliceDs18b20Init", "context": context,
+                "deviceNull": device_null, "contextValid": context_valid,
+                "busContext": identifier(1), "callbacks": callbacks,
+                "bindingValid": binding_valid, "dataPin": next(iter(pins)) if binding_valid else None,
+                "source": source,
+            }
+
+        if name in {"AliceSIM_DS18B20_StartConversion", "AliceSIM_DS18B20_ReadRaw"}:
+            if not require(2 if name.endswith("ReadRaw") else 1):
+                return {"op": "unsupported", "call": name, "source": source}
+            context, device_null, context_valid = self._ds18b20_context(arguments[0], source)
+            operation = {
+                "op": "aliceDs18b20ReadRaw" if name.endswith("ReadRaw") else "aliceDs18b20StartConversion",
+                "context": context, "deviceNull": device_null, "contextValid": context_valid,
+                "source": source,
+            }
+            if name.endswith("ReadRaw"):
+                operation["outputPointer"] = expression(1)
+            return operation
+
+        if name == "AliceSIM_DS18B20_RawToCelsiusX100":
+            if not require(1):
+                return {"op": "unsupported", "call": name, "source": source}
+            return {"op": "aliceDs18b20RawToCelsiusX100", "raw": expression(0), "source": source}
 
         if name == "AliceSIM_SSD1306_Init":
             if not require(4):
@@ -4166,6 +4398,69 @@ class _StatementParser:
                 return {"op": "unsupported", "call": name, "source": source}
             return {"op": "aliceTm1637Clear", "context": identifier(0), "source": source}
 
+        if name == "AliceSIM_TM1637_DisplayRaw":
+            if not require(3):
+                return {"op": "unsupported", "call": name, "source": source}
+            return {"op": "aliceTm1637DisplayRaw", "context": identifier(0), "buffer": self._buffer_reference(arguments[1]), "colon": expression(2), "source": source}
+
+        if name == "AliceSIM_TM1637_WriteSegments":
+            if not require(4):
+                return {"op": "unsupported", "call": name, "source": source}
+            return {"op": "aliceTm1637WriteSegments", "context": identifier(0), "startPosition": expression(1), "buffer": self._buffer_reference(arguments[2]), "count": expression(3), "source": source}
+
+        if name == "AliceSIM_TM1637_SetColon":
+            if not require(2):
+                return {"op": "unsupported", "call": name, "source": source}
+            return {"op": "aliceTm1637SetColon", "context": identifier(0), "enabled": expression(1), "source": source}
+
+        if name == "AliceSIM_WS2812_Init":
+            if not require(6):
+                return {"op": "unsupported", "call": name, "source": source}
+            callback = identifier(2)
+            definition = self._function_definition(callback) if callback else None
+            binding = None
+            if definition:
+                _, callback_tokens, body = definition
+                parameters = _function_parameters(callback_tokens, callback, self.c_types)
+                body_tokens = callback_tokens[body[0]:body[1]]
+                calls = [index for index, token in enumerate(body_tokens[:-1]) if token.value == "HAL_TIM_PWM_Start_DMA" and body_tokens[index + 1].value == "("]
+                if len(parameters) == 3 and len(calls) == 1:
+                    index = calls[0]
+                    close = _matching(body_tokens, index + 1, "(", ")")
+                    dma_arguments = _split_arguments(body_tokens[index + 2:close]) if close is not None else []
+                    # This semantic adapter implements a callback that directly
+                    # forwards the supplied pulse buffer to one PWM DMA channel.
+                    # More complex callbacks must not silently lose side effects.
+                    prefix = [token.value for token in body_tokens[:index] if token.value != "("]
+                    suffix = [token.value for token in body_tokens[close + 1:] if token.value != ")"] if close is not None else []
+                    if len(dma_arguments) == 4 and prefix == ["return"] and suffix == [";"]:
+                        forwarded_buffer = _strip_leading_c_casts(_strip_wrapping_parentheses(dma_arguments[2]), self.c_types)
+                        forwarded_length = _strip_wrapping_parentheses(dma_arguments[3])
+                        channel_text = _tokens_text(dma_arguments[1])
+                        channel_match = re.fullmatch(r"TIM_CHANNEL_([1-4])", channel_text)
+                        if _tokens_text(forwarded_buffer) == parameters[1]["name"] and _tokens_text(forwarded_length) == parameters[2]["name"] and channel_match:
+                            timer_tokens = _substitute_function_parameters(dma_arguments[0], {parameters[0]["name"]: arguments[1]})
+                            timer = _first_identifier(_strip_leading_c_casts(_strip_wrapping_parentheses(timer_tokens), self.c_types))
+                            if timer and re.fullmatch(r"h?tim\d+", timer, re.I):
+                                binding = {"timer": timer, "channel": int(channel_match.group(1)), "channelExpression": channel_text}
+            if binding is None:
+                self.diagnostics.append(_diagnostic("error", "ALICESIM_WS2812_TRANSPORT_UNSUPPORTED", "WS2812 transmit callback must directly return HAL_TIM_PWM_Start_DMA for a concrete timer and channel", **source))
+                return {"op": "unsupported", "call": name, "source": source}
+            return {"op": "aliceWs2812Init", "context": identifier(0), **binding, "zeroHighTicks": expression(3), "oneHighTicks": expression(4), "resetSlots": expression(5), "source": source}
+
+        if name == "AliceSIM_WS2812_RequiredPulseCount":
+            if not require(2):
+                return {"op": "unsupported", "call": name, "source": source}
+            return {"op": "aliceWs2812RequiredPulseCount", "ledCount": expression(0), "resetSlots": expression(1), "source": source}
+
+        if name in {"AliceSIM_WS2812_Encode", "AliceSIM_WS2812_Show"}:
+            if not require(6 if name.endswith("_Encode") else 5):
+                return {"op": "unsupported", "call": name, "source": source}
+            operation = {"op": "aliceWs2812Encode" if name.endswith("_Encode") else "aliceWs2812Show", "context": identifier(0), "buffer": self._buffer_reference(arguments[1]), "ledCount": expression(2), "pulseBuffer": self._buffer_reference(arguments[3]), "capacity": expression(4), "source": source}
+            if name.endswith("_Encode"):
+                operation["pulseCountTarget"] = self._buffer_reference(arguments[5])
+            return operation
+
         light_conversions = {
             "AliceSIM_LightSensor_RawToMillivolts": "aliceLightRawToMillivolts",
             "AliceSIM_LightSensor_RawToLux": "aliceLightRawToLux",
@@ -4180,6 +4475,10 @@ class _StatementParser:
                 "raw": expression(1),
                 "source": source,
             }
+
+        inline = self._inline_call_expression(call, arguments, discard=True)
+        if inline is not None:
+            return {"op": "expression", "expression": inline, "source": source}
 
         self.diagnostics.append(
             _diagnostic(
@@ -4214,8 +4513,22 @@ class _StatementParser:
     def _parse_hal_call(self, call: _Token, arguments: Sequence[Sequence[_Token]]) -> dict | None:
         source = self._source(call)
         name = call.value
-        if name in {"HAL_TIM_PWM_Start", "HAL_TIM_PWM_Start_IT", "HAL_TIM_PWM_Stop", "HAL_TIM_PWM_Stop_IT", "__HAL_TIM_SET_COMPARE"}:
-            if len(arguments) < (3 if name == "__HAL_TIM_SET_COMPARE" else 2):
+        if name in {"__disable_irq", "__enable_irq", "__set_PRIMASK"}:
+            expected = 1 if name == "__set_PRIMASK" else 0
+            if len(arguments) != expected:
+                self.diagnostics.append(_diagnostic(
+                    "error", "HAL_CALL_ARGUMENTS", f"{name} requires {expected} arguments", **source
+                ))
+                return {"op": "unsupported", "call": name, "source": source}
+            operation = {
+                "op": {"__disable_irq": "irqDisable", "__enable_irq": "irqEnable", "__set_PRIMASK": "irqSetMask"}[name],
+                "source": source,
+            }
+            if expected:
+                operation["value"] = self._model_expression(arguments[0])
+            return operation
+        if name in {"HAL_TIM_PWM_Start", "HAL_TIM_PWM_Start_IT", "HAL_TIM_PWM_Stop", "HAL_TIM_PWM_Stop_IT", "HAL_TIM_PWM_Start_DMA", "HAL_TIM_PWM_Stop_DMA", "__HAL_TIM_SET_COMPARE"}:
+            if len(arguments) < (4 if name == "HAL_TIM_PWM_Start_DMA" else 3 if name == "__HAL_TIM_SET_COMPARE" else 2):
                 self.diagnostics.append(
                     _diagnostic("error", "HAL_CALL_ARGUMENTS", f"{name} has too few arguments", **source)
                 )
@@ -4237,8 +4550,8 @@ class _StatementParser:
                     "compareExpression": _tokens_text(arguments[2]),
                     "source": source,
                 }
-            return {
-                "op": "pwmStart" if "Start" in name else "pwmStop",
+            operation = {
+                "op": ("pwmStart" if "Start" in name else "pwmStop") + ("Dma" if name.endswith("_DMA") else ""),
                 "timer": handle,
                 "instance": instance,
                 "channel": channel_number,
@@ -4246,6 +4559,9 @@ class _StatementParser:
                 "interrupt": name.endswith("_IT"),
                 "source": source,
             }
+            if name == "HAL_TIM_PWM_Start_DMA":
+                operation.update({"buffer": self._buffer_reference(arguments[2]), "length": self._model_expression(arguments[3])})
+            return operation
         if name in {
             "HAL_UART_Receive", "HAL_UART_Transmit",
             "HAL_UART_Receive_IT", "HAL_UART_Transmit_IT",
@@ -4363,6 +4679,10 @@ class _StatementParser:
                 )
                 return {"op": "unsupported", "call": name, "source": source}
             handle = _first_identifier(arguments[0])
+            handle_expression = None
+            if any(token.value in {".", "->", "["} for token in arguments[0]):
+                handle = None
+                handle_expression = self._model_expression(arguments[0])
             instance = self.i2c_instances.get(handle, {}).get("instance") if handle else None
             device_address_expression = _tokens_text(arguments[1])
             device_address = self._model_expression(arguments[1])
@@ -4405,6 +4725,8 @@ class _StatementParser:
                 "dma": transfer_mode == "DMA",
                 "source": source,
             }
+            if handle_expression is not None:
+                operation["i2cExpression"] = handle_expression
             if memory_access:
                 operation.update(
                     {
@@ -4465,6 +4787,10 @@ class _StatementParser:
                 )
                 return {"op": "unsupported", "call": name, "source": source}
             handle = _first_identifier(arguments[0])
+            handle_expression = None
+            if any(token.value in {".", "->", "["} for token in arguments[0]):
+                handle = None
+                handle_expression = self._model_expression(arguments[0])
             tx_buffer = self._buffer_reference(arguments[1])
             rx_buffer = self._buffer_reference(arguments[2]) if full_duplex else None
             length_index = 3 if full_duplex else 2
@@ -4495,6 +4821,8 @@ class _StatementParser:
                 "dma": transfer_mode == "DMA",
                 "source": source,
             }
+            if handle_expression is not None:
+                operation["spiExpression"] = handle_expression
             if length is None and not _runtime_expression_supported(
                 self._model_expression(arguments[length_index])
             ):
@@ -4631,7 +4959,11 @@ class _StatementParser:
                 )
                 return {"op": "unsupported", "call": name, "source": source}
             gpio = self._resolve_gpio(arguments[0], arguments[1])
-            if gpio["pin"] is None:
+            dynamic_gpio = any(token.value in {".", "->", "["} for argument in arguments[:2] for token in argument)
+            port_expression = self._model_expression(arguments[0]) if dynamic_gpio else None
+            pin_expression = self._model_expression(arguments[1]) if dynamic_gpio else None
+            dynamic_supported = dynamic_gpio and _runtime_expression_supported(port_expression) and _runtime_expression_supported(pin_expression)
+            if gpio["pin"] is None and not dynamic_supported:
                 self.diagnostics.append(
                     _diagnostic(
                         "error",
@@ -4656,6 +4988,9 @@ class _StatementParser:
                 "mask": gpio["mask"],
                 "source": source,
             }
+            if dynamic_supported:
+                operation["portExpression"] = port_expression
+                operation["pinExpression"] = pin_expression
             if name == "HAL_GPIO_WritePin":
                 operation["value"] = self._model_expression(arguments[2])
             return operation
@@ -4734,7 +5069,7 @@ def _find_function(tokens: Sequence[_Token], name: str) -> tuple[int, int] | Non
     return None
 
 
-def _function_parameter_names(tokens: Sequence[_Token], name: str) -> list[str]:
+def _function_parameters(tokens: Sequence[_Token], name: str, known_types=()) -> list[dict]:
     for index, token in enumerate(tokens[:-1]):
         if token.value != name or tokens[index + 1].value != "(":
             continue
@@ -4746,13 +5081,45 @@ def _function_parameter_names(tokens: Sequence[_Token], name: str) -> list[str]:
             cursor += 1
         if cursor >= len(tokens) or tokens[cursor].value != "{":
             continue
-        parameters: list[str] = []
+        parameters = []
         for argument in _split_arguments(tokens[index + 2 : close_paren]):
+            declarations = _declarators(argument, known_types)
+            if declarations and len(declarations) == 1:
+                declaration = declarations[0]
+                parameters.append({"name": declaration["name"].value,
+                                   "cType": declaration["cType"] + ("*" if declaration["size"] is not None else "")})
+                continue
             identifiers = [item.value for item in argument if item.kind == "identifier" and item.value != "void"]
             if identifiers:
-                parameters.append(identifiers[-1])
+                parameters.append({"name": identifiers[-1], "cType": "int"})
         return parameters
     return []
+
+
+def _function_parameter_names(tokens: Sequence[_Token], name: str) -> list[str]:
+    return [parameter["name"] for parameter in _function_parameters(tokens, name)]
+
+
+def _rename_local_references(value, names):
+    if isinstance(value, str):
+        return names.get(value, value)
+    if isinstance(value, list):
+        return [_rename_local_references(item, names) for item in value]
+    if isinstance(value, dict):
+        if value.get("kind") in {"string", "char", "constant", "literal"}:
+            return value
+        if value.get("kind") == "inlineCall":
+            # Actual arguments belong to the caller's scope. The callee's
+            # body already has unique locals and must keep its own globals.
+            count = value["bindingCount"]
+            operations = value["operations"]
+            bindings = [{**item, "value": _rename_local_references(item["value"], names)}
+                        for item in operations[:count]]
+            return {**value, "operations": [*bindings, *operations[count:]]}
+        return {key: item if key in {"source", "cType", "member", "function", "call", "pin", "instance",
+                                    "kind", "op", "type", "operator", "id", "returnKind"}
+                else _rename_local_references(item, names) for key, item in value.items()}
+    return value
 
 
 def _substitute_function_parameters(
@@ -5458,7 +5825,8 @@ def _parse_named_function_program(
         reverse=True,
     )
     selected, tokens, body = candidates[0]
-    parser = _StatementParser(tokens, selected.path, macros, aliases, uarts, i2cs, spis, adcs, diagnostics)
+    parser = _StatementParser(tokens, selected.path, macros, aliases, uarts, i2cs, spis, adcs, diagnostics, records=records)
+    parser.context["entry"] = name
     operations = parser.parse(body[0], body[1])
     _assign_operation_ids(operations, "task-" + re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").lower())
     return selected.path, operations
@@ -5768,7 +6136,7 @@ def _parse_program(
                 details={"candidates": [item[0].path for item in candidates]},
             )
         )
-    parser = _StatementParser(tokens, selected.path, macros, aliases, uarts, i2cs, spis, adcs, diagnostics)
+    parser = _StatementParser(tokens, selected.path, macros, aliases, uarts, i2cs, spis, adcs, diagnostics, records=records)
     operations = parser.parse(start, end)
     _assign_operation_ids(operations)
     blocking_receives: list[dict] = []
@@ -6007,6 +6375,17 @@ def build_hal_model(files: Iterable[object]) -> dict:
     macros = _collect_enum_constants(records, macros)
     variables = _parse_initial_variables(records, macros)
     variable_types = _parse_variable_types(records, macros)
+    c_types = _collect_c_types(records, macros)
+    initializers = {}
+    resolve, _ = _make_integer_resolver(macros)
+    resolve.c_types = c_types
+    for declaration in _global_declarations(records, macros, c_types):
+        name = declaration["name"].value
+        variable_types[name] = declaration["cType"]
+        size = resolve(_tokens_text(declaration["size"])) if declaration["size"] else None
+        variables.setdefault(name, [0] * size if size is not None and 0 <= size <= 65536 else 0)
+        if declaration["initializer"]:
+            initializers[name] = _initializer_model(declaration["initializer"], declaration["cType"], declaration["size"], resolve)
     aliases = _build_gpio_aliases(macros, ioc, diagnostics)
     _parse_gpio_interrupt_configuration(records, macros, ioc)
     uarts = _parse_source_uart_configuration(records, macros, ioc, diagnostics)
@@ -6018,6 +6397,11 @@ def build_hal_model(files: Iterable[object]) -> dict:
     program = _parse_program(records, macros, aliases, uarts, i2cs, spis, adcs, diagnostics)
     middlewares = _parse_middlewares(records, macros, aliases, uarts, i2cs, spis, adcs, diagnostics)
     callbacks = _parse_hal_callbacks(records, macros, aliases, uarts, i2cs, spis, adcs, diagnostics)
+    for operation in _walk_model_operations(program["operations"]):
+        if operation.get("cType"):
+            target = operation.get("resultTarget", operation.get("target"))
+            if isinstance(target, str):
+                variable_types[target] = operation["cType"]
 
     for link in dma_links:
         peripheral_handle = link.get("peripheral")
@@ -6102,7 +6486,7 @@ def build_hal_model(files: Iterable[object]) -> dict:
             operation["dmaInstance"] = dma.get("instance")
             operation["circular"] = bool(dma.get("circular", False))
 
-        if operation.get("op") not in {"pwmStart", "pwmStop", "pwmSetCompare", "timerStartIt", "timerStopIt"}:
+        if operation.get("op") not in {"pwmStart", "pwmStop", "pwmStartDma", "pwmStopDma", "aliceWs2812Init", "pwmSetCompare", "timerStartIt", "timerStopIt"}:
             continue
         handle = operation.get("timer")
         timer = timers.get(handle) if handle else None
@@ -6188,6 +6572,8 @@ def build_hal_model(files: Iterable[object]) -> dict:
         "outputs": dict(sorted(outputs.items())),
         "variables": dict(sorted(variables.items())),
         "variableTypes": dict(sorted(variable_types.items())),
+        "types": c_types,
+        "initializers": initializers,
         "program": program,
         "callbacks": callbacks,
         "middlewares": middlewares,

@@ -1292,11 +1292,15 @@
     var canvas = target && target.querySelector(".oled-pixel-canvas");
     var device = componentDevice(component);
     if (!canvas || !device || typeof device.getState !== "function") return;
-    var state = device.getState({ framebuffer: true });
+    var state = device.getState({ timeMs: schematicState.time });
+    var frameKey = [state.revision, state.visible, state.contrast, state.scroll && state.scroll.steps].join("|");
+    if (canvas._aliceFrameKey === frameKey) return;
+    canvas._aliceFrameKey = frameKey;
     var context = canvas.getContext("2d", { alpha: false });
     context.imageSmoothingEnabled = false;
     context.fillStyle = "#071419";
     context.fillRect(0, 0, canvas.width, canvas.height);
+    context.globalAlpha = 0.08 + 0.92 * (Number(state.contrast) || 0) / 255;
     if (state.visible) {
       if (state.contentMode === "text" && Array.isArray(state.textEntries) && state.textEntries.length) {
         state.textEntries.forEach(function (entry) {
@@ -1314,6 +1318,7 @@
         }
       }
     }
+    context.globalAlpha = 1;
     target.classList.toggle("is-powered", Boolean(state.connection && state.connection.powered));
     target.classList.toggle("is-bus-connected", Boolean(state.connection && state.connection.busConnected));
     target.classList.toggle("is-display-on", Boolean(state.visible));
@@ -1401,7 +1406,7 @@
     context.fillStyle = "#090b0e";
     context.fillRect(0, 0, canvas.width, canvas.height);
     if (state.visible && typeof device.getFramebuffer === "function") {
-      var framebuffer = device.getFramebuffer();
+      var framebuffer = typeof device.getDisplayFramebuffer === "function" ? device.getDisplayFramebuffer() : device.getFramebuffer();
       var image = context.createImageData(state.width, state.height);
       for (var index = 0; index < framebuffer.length; index += 1) {
         var color = framebuffer[index];
@@ -1499,9 +1504,21 @@
       if (primary) primary.textContent = state.energized ? "COM → NO" : "COM → NC";
       if (secondary) secondary.textContent = "";
     } else if (component.type === "ds3231") {
-      if (primary) primary.textContent = new Date(Number(properties.unixTime || 0) * 1000).toISOString().slice(11, 19) + " UTC";
+      if (primary) primary.textContent = new Date(Number(state.unixTime != null ? state.unixTime : properties.unixTime || 0) * 1000).toISOString().slice(11, 19) + " UTC";
+    } else if (component.type === "pcf8574") {
+      if (primary) primary.textContent = "P7…P0 " + Number(state.pinMask || 0).toString(2).padStart(8, "0");
+      if (secondary) secondary.textContent = state.interruptActive ? "INT ↓" : "";
+    } else if (component.type === "pca9685") {
+      if (primary) primary.textContent = Number(state.frequencyHz || 0).toFixed(1) + " Hz";
+      if (secondary) secondary.textContent = (state.channels || []).filter(function (channel) { return channel.active; }).length + " / 16 通道输出";
+    } else if (component.type === "w25qxx") {
+      if (primary) primary.textContent = Math.round(Number(state.capacityBytes || 0) / 1024) + " KiB";
+      if (secondary) secondary.textContent = Number(state.storedBytes || 0) + " B 已写入";
     } else if (component.type === "sht30") {
       if (primary) primary.textContent = Number(properties.temperatureC || 0).toFixed(1) + "°C · " + Math.round(Number(properties.humidityPercent) || 0) + "%";
+    } else if (component.type === "ds18b20") {
+      if (primary) primary.textContent = Number(state.temperatureC || 0).toFixed(2) + " °C";
+      if (secondary) secondary.textContent = "采样 " + Number(state.convertedTemperatureC || 0).toFixed(2) + " °C";
     } else if (component.type === "dcDcConverter") {
       var converterPower = component.powerState;
       if (primary) primary.textContent = Number(properties.outputVoltageV || 0).toFixed(2) + " V OUT";
@@ -1521,7 +1538,9 @@
       else if (component.type === "mosfet") status.textContent = component.mosfetOn ? "CHANNEL ON" : "CHANNEL OFF";
       else if (!state.ready) status.textContent = "WAIT WIRING";
       else if (state.active || state.visible) status.textContent = "ACTIVE";
-      else if (["bmp280", "mpu6050", "bh1750", "sht30", "ds3231", "pcf8574", "pca9685", "ina219", "ds18b20"].indexOf(component.type) >= 0) status.textContent = "参数预览";
+      else if (component.type === "ds18b20") status.textContent = state.conversionPending ? "CONVERTING · 750 ms" : "1-Wire READY";
+      else if (/I²C/.test(bus)) status.textContent = "I²C 0x" + Number(state.address).toString(16).toUpperCase().padStart(2, "0") + " READY";
+      else if (component.type === "w25qxx") status.textContent = state.writeEnabled ? "WRITE ENABLED" : "SPI READY";
       else status.textContent = bus + " READY";
     }
     target.classList.toggle("is-powered", Boolean(state.power && state.power.powered));
@@ -1857,24 +1876,24 @@
       netById.set(net.id, net);
     });
 
-    function addAnalogDriver(endpoint, voltage, kind) {
+    function addAnalogDriver(endpoint, voltage, kind, weak) {
       var numericVoltage = Number(voltage);
       if (!Number.isFinite(numericVoltage)) return;
       var netId = endpointToNet[endpointKey(endpoint)];
       var net = netById.get(netId);
       if (!net) return;
-      net.analogDrivers.push({ componentId: endpoint.componentId, pin: endpoint.pin, kind: kind, voltage: numericVoltage });
+      net.analogDrivers.push({ componentId: endpoint.componentId, pin: endpoint.pin, kind: kind, voltage: numericVoltage, weak: Boolean(weak) });
     }
 
-    function addDriver(endpoint, level, kind, voltage, pwm) {
+    function addDriver(endpoint, level, kind, voltage, pwm, weak) {
       var normalizedLevel = normalizeDriveLevel(level);
       if (normalizedLevel == null) return;
       var netId = endpointToNet[endpointKey(endpoint)];
       var net = netById.get(netId);
       if (!net) return;
-      net.drivers.push({ componentId: endpoint.componentId, pin: endpoint.pin, kind: kind, level: normalizedLevel });
+      net.drivers.push({ componentId: endpoint.componentId, pin: endpoint.pin, kind: kind, level: normalizedLevel, weak: Boolean(weak) });
       if (pwm) net.pwmDrivers.push({ componentId: endpoint.componentId, pin: endpoint.pin, pwm: Object.assign({}, pwm) });
-      if (voltage != null) addAnalogDriver(endpoint, voltage, kind);
+      if (voltage != null) addAnalogDriver(endpoint, voltage, kind, weak);
     }
 
     schematicState.components.forEach(function (component) {
@@ -1902,12 +1921,16 @@
 
     function solveNets() {
       nets.forEach(function (net) {
-        var hasHigh = net.drivers.some(function (driver) { return driver.level === 1; });
-        var hasLow = net.drivers.some(function (driver) { return driver.level === 0; });
+        var strongDrivers = net.drivers.filter(function (driver) { return !driver.weak; });
+        var drivers = strongDrivers.length ? strongDrivers : net.drivers;
+        var hasHigh = drivers.some(function (driver) { return driver.level === 1; });
+        var hasLow = drivers.some(function (driver) { return driver.level === 0; });
         net.floating = !hasHigh && !hasLow && !net.analogDrivers.length;
         net.conflict = hasHigh && hasLow;
         net.level = net.conflict || (!hasHigh && !hasLow) ? null : (hasHigh ? 1 : 0);
-        var voltages = net.analogDrivers.map(function (driver) { return driver.voltage; }).filter(Number.isFinite);
+        var strongAnalogDrivers = net.analogDrivers.filter(function (driver) { return !driver.weak; });
+        var analogDrivers = strongAnalogDrivers.length ? strongAnalogDrivers : net.analogDrivers;
+        var voltages = analogDrivers.map(function (driver) { return driver.voltage; }).filter(Number.isFinite);
         if (!voltages.length) {
           net.voltage = null;
           net.analogConflict = false;
@@ -1935,7 +1958,11 @@
     };
 
     updatePeripheralConnections(compiled);
-    schematicState.components.forEach(function (component) {
+    // Emit peripheral signals before switches that consume them, independent
+    // of the order in which parts were inserted into the circuit.
+    Array.from(schematicState.components.values()).sort(function (left, right) {
+      return Number(left.type === "mosfet") - Number(right.type === "mosfet");
+    }).forEach(function (component) {
       if (component.type === "lightSensor") {
         var device = componentDevice(component);
         if (!device) return;
@@ -1954,13 +1981,25 @@
       var catalogState = catalogDevice && catalogDevice.getState();
       var properties = catalogState && (catalogState.properties || component.peripheralProperties) || component.peripheralProperties || {};
       if (component.type === "mosfet") {
+        solveNets();
         var gateNet = netForEndpoint(compiled, { componentId: component.id, pin: "G" });
         var drainNet = netForEndpoint(compiled, { componentId: component.id, pin: "D" });
         var sourceNet = netForEndpoint(compiled, { componentId: component.id, pin: "S" });
         var gateVoltage = gateNet && !gateNet.analogConflict ? gateNet.voltage : null;
         var sourceVoltage = sourceNet && !sourceNet.analogConflict ? sourceNet.voltage : null;
         var gateThreshold = clampNumber(Number(properties.gateThresholdV) || 2, 0.5, 5);
-        component.mosfetOn = gateVoltage != null && sourceVoltage != null && gateVoltage - sourceVoltage >= gateThreshold;
+        var gatePwm = pwmForNet(compiled, gateNet);
+        var gateHighVoltage = gatePwm && Number.isFinite(Number(gatePwm.highVoltage)) ? Number(gatePwm.highVoltage) : 3.3;
+        var pwmCanSwitch = Boolean(gatePwm && gateNet && !gateNet.conflict && !gateNet.analogConflict && sourceVoltage != null && gateHighVoltage - sourceVoltage >= gateThreshold);
+        component.mosfetOn = gatePwm ? Boolean(pwmCanSwitch && pwmSampleLevel(gatePwm, schematicState.time)) : gateVoltage != null && sourceVoltage != null && gateVoltage - sourceVoltage >= gateThreshold;
+        if (gatePwm && drainNet && sourceNet && sourceNet.level === 0 && !sourceNet.conflict && !sourceNet.analogConflict) {
+          var gateDuty = gatePwm.active === false ? 0 : clampNumber(Number(gatePwm.dutyCycle) || 0, 0, 1);
+          // A low-side drain is low while the gate is high. The LED renderer
+          // then inverts its cathode PWM to recover the actual load duty.
+          drainNet.pwmDrivers.push({ componentId: component.id, pin: "D", pwm: Object.assign({}, gatePwm, {
+            active: Boolean(gatePwm.active && pwmCanSwitch), dutyCycle: 1 - gateDuty, dutyPercent: (1 - gateDuty) * 100, timeMs: schematicState.time
+          }) });
+        }
         if (component.mosfetOn && drainNet && sourceNet && !sourceNet.conflict && !sourceNet.analogConflict) {
           if (sourceNet.level != null) addDriver({ componentId: component.id, pin: "D" }, sourceNet.level, "mosfet-channel", sourceNet.voltage);
           else if (sourceNet.voltage != null) addAnalogDriver({ componentId: component.id, pin: "D" }, sourceNet.voltage, "mosfet-channel");
@@ -1982,7 +2021,23 @@
       if (!power || !power.powered) return;
       var lowVoltage = power.gndLevel == null ? 0 : power.gndLevel;
       var highVoltage = power.vccLevel == null ? lowVoltage + 3.3 : power.vccLevel;
-      if (component.type === "potentiometer") {
+      if (component.type === "pcf8574" && catalogState.outputLatch != null) {
+        for (var port = 0; port < 8; port += 1) {
+          var released = Boolean(catalogState.outputLatch & (1 << port));
+          var inputHigh = Boolean(catalogState.inputMask & (1 << port));
+          var portLevel = released && inputHigh ? 1 : 0;
+          addDriver({ componentId: component.id, pin: "P" + port }, portLevel, "pcf8574-port", portLevel ? highVoltage : lowVoltage, null, released && inputHigh);
+        }
+      } else if (component.type === "pca9685" && Array.isArray(catalogState.channels)) {
+        catalogState.channels.forEach(function (channel, index) {
+          var duty = clampNumber(Number(channel.dutyCycle) || 0, 0, 1);
+          var frequency = Number(catalogState.frequencyHz) || 0;
+          var pwm = { active: Boolean(channel.active), dutyCycle: duty, dutyPercent: duty * 100, frequencyHz: frequency, channel: index,
+            timer: "PCA9685", instance: component.ref || "PCA9685", period: 4095, compare: Math.round(duty * 4096), highVoltage: highVoltage, lowVoltage: lowVoltage, timeMs: schematicState.time };
+          var level = channel.level == null ? (channel.active && duty > 0 ? 1 : 0) : Number(channel.level) ? 1 : 0;
+          addDriver({ componentId: component.id, pin: "PWM" + index }, level, "pca9685-pwm", level ? highVoltage : lowVoltage, pwm);
+        });
+      } else if (component.type === "potentiometer") {
         addAnalogDriver({ componentId: component.id, pin: "AO" }, lowVoltage + (highVoltage - lowVoltage) * clampNumber(Number(properties.percent) || 0, 0, 100) / 100, "potentiometer");
       } else if (component.type === "pir") {
         var motion = Number(properties.motion) ? 1 : 0;
@@ -1999,13 +2054,40 @@
         addDriver({ componentId: component.id, pin: "SW" }, joystickLevel, "joystick-switch", joystickLevel ? highVoltage : lowVoltage);
       } else if (component.type === "rotaryEncoder") {
         var quadrature = [[0, 0], [0, 1], [1, 1], [1, 0]];
-        var position = Math.round(Number(properties.position) || 0);
+        var targetPosition = Math.round(Number(properties.position) || 0);
+        var encoderPhase = component.encoderPhase;
+        if (!encoderPhase || encoderPhase.tick > schematicState.tick) encoderPhase = component.encoderPhase = { position: targetPosition, tick: schematicState.tick };
+        // Consume at most one adjacent phase per input snapshot. A dragged
+        // control can jump many steps without skipping edges between frames.
+        if (encoderPhase.tick !== schematicState.tick) {
+          encoderPhase.position += Math.sign(targetPosition - encoderPhase.position);
+          encoderPhase.tick = schematicState.tick;
+        }
+        var position = encoderPhase.position;
         var phase = quadrature[((position % 4) + 4) % 4];
         addDriver({ componentId: component.id, pin: "A" }, phase[0], "encoder-a", phase[0] ? highVoltage : lowVoltage);
         addDriver({ componentId: component.id, pin: "B" }, phase[1], "encoder-b", phase[1] ? highVoltage : lowVoltage);
         var encoderSwitch = Number(properties.pressed) ? 0 : 1;
         addDriver({ componentId: component.id, pin: "SW" }, encoderSwitch, "encoder-switch", encoderSwitch ? highVoltage : lowVoltage);
       }
+    });
+    solveNets();
+    // Quasi-bidirectional PCF ports release high, allowing a wired button or
+    // another device to pull them low without a push-pull driver conflict.
+    schematicState.components.forEach(function (component) {
+      if (component.type !== "pcf8574") return;
+      var device = componentDevice(component);
+      if (!device || typeof device.setPortInputs !== "function") return;
+      var mask = 255;
+      for (var port = 0; port < 8; port += 1) {
+        var net = netForEndpoint(compiled, { componentId: component.id, pin: "P" + port });
+        if (!net) continue;
+        var externalLow = net.drivers.some(function (driver) { return driver.componentId !== component.id && !driver.weak && driver.level === 0; });
+        if (externalLow) mask &= ~(1 << port);
+      }
+      device.setPortInputs(mask);
+      var state = device.getState();
+      if (state.power && state.power.powered && state.interruptActive) addDriver({ componentId: component.id, pin: "INT" }, 0, "pcf8574-interrupt", state.power.gndLevel);
     });
     solveNets();
     updatePeripheralConnections(compiled);
@@ -2108,6 +2190,7 @@
 
   function sameConnection(left, right) {
     var keys = ["powered", "busConnected", "bindingValid", "vccLevel", "gndLevel", "sclPin", "sdaPin", "sckPin", "mosiPin", "misoPin", "selected", "signalLevel", "dataMode", "reason", "vccConnected", "gndConnected", "aoConnected", "doConnected", "aoPin", "doPin", "vccNet", "gndNet", "dataConnected", "triggerConnected", "echoConnected", "pwmConnected", "signalConnected", "clkConnected", "dioConnected", "dataPin", "triggerPin", "echoPin", "pwmPin", "signalPin", "clkPin", "dioPin", "timer", "channel"];
+    keys.push("outputEnabled", "csPin", "externalInputMask");
     return keys.every(function (key) { return (left && left[key]) === (right && right[key]); });
   }
 
@@ -2145,7 +2228,7 @@
     connection.gndLevel = gndPin && gndNet && !gndNet.analogConflict ? gndNet.voltage : 0;
     connection.vccNet = vccNet && vccNet.id || "";
     connection.gndNet = gndNet && gndNet.id || "";
-    connection.powered = connection.vccConnected && connection.gndConnected;
+    connection.powered = connection.vccConnected && connection.gndConnected && (!vccPin || Boolean(vccNet && !vccNet.conflict && !vccNet.analogConflict && Number.isFinite(vccNet.voltage))) && (!gndPin || Boolean(gndNet && !gndNet.conflict && !gndNet.analogConflict && Number.isFinite(gndNet.voltage)));
     pins.forEach(function (pin) {
       var fields = roleFields[pin.role];
       if (!fields) return;
@@ -2155,14 +2238,54 @@
       if (!connection[fields[1]]) connection[fields[1]] = externalMcuPinOnNet(net, component.id);
       if (pin.role === "signal") connection.signalLevel = net && !net.conflict && !net.analogConflict ? net.level : null;
     });
-    if (component.type === "max7219" || component.type === "ws2812") {
+    if (/I²C/.test(definition.bus || "")) {
+      var sclNet = netForEndpoint(compiled, { componentId: component.id, pin: "SCL" });
+      var sdaNet = netForEndpoint(compiled, { componentId: component.id, pin: "SDA" });
+      var i2c = modelI2cs().find(function (candidate) { return netHasMcuPin(sclNet, candidate.sclPin) && netHasMcuPin(sdaNet, candidate.sdaPin); });
+      component.i2cBinding = i2c ? { instance: i2c.instance || "", handle: i2c.handle || "" } : null;
+      connection.bindingValid = Boolean(i2c);
+      connection.clkConnected = netHasExternalEndpoint(sclNet, component.id);
+      connection.dioConnected = netHasExternalEndpoint(sdaNet, component.id);
+      connection.sclPin = externalMcuPinOnNet(sclNet, component.id);
+      connection.sdaPin = externalMcuPinOnNet(sdaNet, component.id);
+      connection.busConnected = connection.clkConnected && connection.dioConnected;
+      if (component.type === "pca9685") {
+        var oeNet = netForEndpoint(compiled, { componentId: component.id, pin: "OE" });
+        connection.outputEnabled = !netHasExternalEndpoint(oeNet, component.id) || (oeNet && !oeNet.conflict && oeNet.level === 0);
+      }
+    } else if (component.type === "w25qxx") {
+      var flashSck = netForEndpoint(compiled, { componentId: component.id, pin: "SCK" });
+      var flashMosi = netForEndpoint(compiled, { componentId: component.id, pin: "MOSI" });
+      var flashMiso = netForEndpoint(compiled, { componentId: component.id, pin: "MISO" });
+      var flashCs = netForEndpoint(compiled, { componentId: component.id, pin: "CS" });
+      var flashSpi = modelSpis().find(function (candidate) { return netHasMcuPin(flashSck, candidate.sckPin) && netHasMcuPin(flashMosi, candidate.mosiPin) && netHasMcuPin(flashMiso, candidate.misoPin) && !/LSB|16BIT/.test(String(candidate.firstBit || "") + String(candidate.dataSize || "")); });
+      component.spiBinding = flashSpi ? { instance: flashSpi.instance || "", handle: flashSpi.handle || "" } : null;
+      connection.bindingValid = Boolean(flashSpi);
+      connection.clkConnected = netHasExternalEndpoint(flashSck, component.id);
+      connection.dataConnected = netHasExternalEndpoint(flashMosi, component.id);
+      connection.dioConnected = netHasExternalEndpoint(flashMiso, component.id);
+      connection.signalConnected = netHasExternalEndpoint(flashCs, component.id);
+      connection.csPin = externalMcuPinOnNet(flashCs, component.id);
+      connection.selected = Boolean(flashCs && !flashCs.conflict && flashCs.level === 0);
+      connection.busConnected = connection.clkConnected && connection.dataConnected && connection.dioConnected && connection.signalConnected;
+    } else if (component.type === "max7219" || component.type === "ws2812") {
       var spi = modelSpis().find(function (candidate) { return connection.dataPin && (component.type === "ws2812" || normalizeMcuPinName(candidate.sckPin) === connection.clkPin) && normalizeMcuPinName(candidate.mosiPin) === connection.dataPin; });
       component.spiBinding = spi ? { instance: spi.instance || "", handle: spi.handle || "" } : null;
       connection.bindingValid = Boolean(spi);
       connection.selected = component.type === "ws2812" || connection.signalLevel === 0;
       if (component.type === "ws2812") connection.bindingValid = Boolean(spi && spi.baudRate >= 2200000 && spi.baudRate <= 2700000 && !/LSB/.test(spi.firstBit || "") && !/16BIT/.test(spi.dataSize || ""));
+      if (component.type === "ws2812") {
+        modelTimers().some(function (timer) {
+          var channel = (timer.channels || []).find(function (item) { return normalizeMcuPinName(item.pin) === connection.dataPin; });
+          if (!channel) return false;
+          connection.timer = timer.instance || timer.handle || "";
+          connection.channel = String(channel.channelNumber);
+          connection.bindingValid = Boolean(timer.frequencyHz >= 700000 && timer.frequencyHz <= 900000);
+          return true;
+        });
+      }
     }
-    connection.busConnected = Boolean((connection.clkConnected && connection.dioConnected) || connection.dataConnected || connection.signalConnected || connection.pwmConnected || (connection.triggerConnected && connection.echoConnected));
+    if (connection.busConnected == null) connection.busConnected = Boolean((connection.clkConnected && connection.dioConnected) || connection.dataConnected || connection.signalConnected || connection.pwmConnected || (connection.triggerConnected && connection.echoConnected));
     if (!connection.powered) connection.reason = "power-disconnected";
     else if (!connection.busConnected && component.type !== "rotaryEncoder") connection.reason = "signal-disconnected";
     return connection;
@@ -2359,7 +2482,7 @@
     schematicState.compiledNetlist = null;
     // A Worker's batch can contain several CS pulses before the next paint.
     // Latch each rising edge now so all rows, not just the last one, survive.
-    if (normalizedLevel === 1 && Array.from(schematicState.devices.values()).some(function (device) { return device.kind === "max7219" && device.connection.selected && device.connection.signalPin === physical; })) compileNetlist();
+    if (normalizedLevel === 1 && Array.from(schematicState.devices.values()).some(function (device) { return (device.kind === "max7219" || device.kind === "w25qxx") && device.connection.selected && (device.connection.csPin || device.connection.signalPin) === physical; })) compileNetlist();
     if (schematicState.initialized) {
       if (options.render !== false) renderWires();
       document.dispatchEvent(new CustomEvent("alice:schematic-signal", { detail: { name: physical, value: normalizedLevel, highImpedance: normalizedLevel == null } }));
@@ -2507,28 +2630,46 @@
 
   function handleI2cTransmission(event) {
     var transaction = event && typeof event === "object" ? event : {};
+    return routeI2c(transaction, false);
+  }
+
+  function handleI2cReception(event) {
+    return routeI2c(event && typeof event === "object" ? event : {}, true);
+  }
+
+  function transactionI2cAddress(event) {
+    if (event.address7Bit != null) return Number(event.address7Bit);
+    if (event.deviceAddress != null) return Number(event.deviceAddress) >> 1;
+    return normalizeI2cAddress(event.address);
+  }
+
+  function routeI2c(transaction, reading) {
     var descriptor = findModelI2c(transaction.instance || transaction.i2c || transaction.handle);
-    var address = normalizeI2cAddress(transaction.deviceAddress != null ? transaction.deviceAddress : transaction.address);
-    var accepted = [];
+    var address = transactionI2cAddress(transaction);
+    var targets = [];
     compileNetlist();
     schematicState.components.forEach(function (component) {
-      if (component.type !== "oled") return;
       var device = componentDevice(component);
       var state = device && device.getState();
       var bindingMatches = descriptor && component.i2cBinding && peripheralMatches(descriptor, component.i2cBinding.instance || component.i2cBinding.handle);
       if (!device || !state || !state.connection.powered || !state.connection.busConnected || !state.connection.bindingValid || !bindingMatches) return;
-      if (address != null && !device.accepts(address)) return;
-      var byteCount = deliverOledI2c(device, transaction);
-      updateOledVisual(component);
-      accepted.push({ componentId: component.id, ref: component.ref, address: device.address, byteCount: byteCount });
+      if (typeof device.accepts !== "function" || !device.accepts(address) || (state.ready === false)) return;
+      targets.push({ component: component, device: device });
     });
-    return {
-      accepted: accepted.length > 0,
-      targetCount: accepted.length,
-      targets: accepted,
-      instance: descriptor && descriptor.instance || transaction.instance || "",
-      address: address
-    };
+    if (targets.length !== 1) return { accepted: false, targetCount: targets.length, targets: [], address: address, reason: targets.length ? "i2c-address-collision" : "no-i2c-target" };
+    var target = targets[0], component = target.component, device = target.device;
+    var event = Object.assign({ timeMs: schematicState.time }, transaction, { address7Bit: address });
+    if (typeof device.setTime === "function") device.setTime(event.timeMs);
+    var response;
+    if (component.type === "oled") {
+      response = reading ? { accepted: false, reason: "no-readable-i2c-target" } : { accepted: true, byteCount: deliverOledI2c(device, event) };
+      updateOledVisual(component);
+    } else {
+      response = typeof device[reading ? "receive" : "transmit"] === "function" ? device[reading ? "receive" : "transmit"](event) : { accepted: false, reason: "unsupported-i2c-device" };
+      schematicState.compiledNetlist = null;
+      updateCatalogVisual(component);
+    }
+    return Object.assign({}, response, { targetCount: response.accepted ? 1 : 0, targets: response.accepted ? [{ componentId: component.id, ref: component.ref, address: address, byteCount: response.byteCount }] : [], instance: descriptor && descriptor.instance || transaction.instance || "", address: address });
   }
 
   function handleSpiTransmission(input) {
@@ -2538,13 +2679,15 @@
     var bytes = i2cBytes(event.bytes != null ? event.bytes : (event.buffer != null ? event.buffer : event.data));
     compileNetlist();
     schematicState.components.forEach(function (component) {
-      if (["spiDisplay", "max7219", "ws2812"].indexOf(component.type) < 0) return;
+      if (["spiDisplay", "max7219", "ws2812", "w25qxx"].indexOf(component.type) < 0) return;
       var device = componentDevice(component);
       var state = device && device.getState();
       var bindingMatches = descriptor && component.spiBinding && peripheralMatches(descriptor, component.spiBinding.instance || component.spiBinding.handle);
       var ready = component.type !== "spiDisplay" ? state && state.ready : state && state.connection.powered && state.connection.busConnected && state.connection.bindingValid;
       if (!device || !ready || !state.connection.selected || !bindingMatches) return;
-      var byteCount = component.type === "ws2812" ? device.transmitSpi(bytes, Number(descriptor.baudRate)) : device.transmit(bytes, Boolean(state.connection.dataMode));
+      var flashResponse = component.type === "w25qxx" ? device.transmit(Object.assign({ timeMs: schematicState.time }, event, { bytes: bytes })) : null;
+      if (flashResponse && !flashResponse.accepted) return;
+      var byteCount = flashResponse ? flashResponse.byteCount : component.type === "ws2812" ? device.transmitSpi(bytes, Number(descriptor.baudRate)) : device.transmit(bytes, Boolean(state.connection.dataMode));
       if (component.type === "spiDisplay") updateSpiDisplayVisual(component);
       else updateCatalogVisual(component);
       accepted.push({ componentId: component.id, ref: component.ref, byteCount: byteCount, dataMode: Boolean(state.connection.dataMode) });
@@ -2557,6 +2700,20 @@
       handle: descriptor && descriptor.handle || event.handle || "",
       byteCount: bytes.length
     };
+  }
+
+  function handleSpiReception(input) {
+    var event = input && typeof input === "object" ? input : {};
+    var descriptor = findModelSpi(event.instance || event.spi || event.handle);
+    compileNetlist();
+    var targets = Array.from(schematicState.components.values()).filter(function (component) {
+      var device = componentDevice(component), state = device && device.getState();
+      return component.type === "w25qxx" && state && state.ready && state.connection.selected && descriptor && component.spiBinding && peripheralMatches(descriptor, component.spiBinding.instance || component.spiBinding.handle);
+    });
+    if (targets.length !== 1) return { accepted: false, targetCount: targets.length, bytes: [], reason: targets.length ? "spi-bus-contention" : "no-readable-spi-target" };
+    var response = componentDevice(targets[0]).receive(Object.assign({ timeMs: schematicState.time }, event));
+    updateCatalogVisual(targets[0]);
+    return Object.assign({}, response, { targetCount: response.accepted ? 1 : 0, targets: [{ componentId: targets[0].id }] });
   }
 
   function adcChannelPin(descriptor, options) {
@@ -2645,7 +2802,7 @@
     var timerSignal = timerChannelSignal(event);
     if (timerSignal) {
       compared = true;
-      var connectedPin = connection.pwmPin || connection.signalPin;
+      var connectedPin = connection.pwmPin || connection.signalPin || (component.type === "ws2812" ? connection.dataPin : "");
       if (mcuSignalForPin(connectedPin).indexOf(timerSignal) < 0) return false;
     }
     return compared || candidatesOfType.length === 1;
@@ -2657,6 +2814,14 @@
     var action = String(event.action || event.operation || "").toLowerCase();
     var candidates = Array.from(schematicState.components.values()).filter(function (component) { return component.type === type; });
     compileNetlist();
+    if (type === "ds18b20") {
+      if (!event.dataPin) return { accepted: false, targetCount: 0, targets: [], result: null, reason: "missing-data-pin" };
+      var oneWireTargets = candidates.filter(function (component) {
+        var sensor = componentDevice(component);
+        return sensor && sensor.getState().ready && peripheralEventMatches(component, event, candidates);
+      });
+      if (oneWireTargets.length !== 1) return { accepted: false, targetCount: oneWireTargets.length, targets: [], result: null, reason: oneWireTargets.length ? "onewire-bus-collision" : "no-onewire-target" };
+    }
     var targets = [];
     var result = null;
     candidates.forEach(function (component) {
@@ -2673,7 +2838,22 @@
       else if (type === "buzzer" && typeof device.setTone === "function") targetResult = { active: device.setTone(event.frequencyHz, event.dutyPermille == null ? 500 : event.dutyPermille) };
       else if (type === "tm1637" && action.indexOf("brightness") >= 0 && typeof device.setBrightness === "function") targetResult = { brightness: device.setBrightness(event.brightness, event.enabled) };
       else if (type === "tm1637" && action.indexOf("clear") >= 0 && typeof device.clear === "function") { device.clear(); targetResult = { text: "    " }; }
+      else if (type === "tm1637" && (action === "write-segments" || action === "set-colon") && typeof device.setSegments === "function") {
+        var segments = (state.segments || [0, 0, 0, 0]).slice();
+        if (action === "write-segments") (event.segments || []).forEach(function (value, index) { segments[(Number(event.startPosition) || 0) + index] = Number(value) & 255; });
+        if (event.colon != null) segments[1] = (segments[1] & 127) | (event.colon ? 128 : 0);
+        device.setSegments(segments, Boolean(segments[1] & 128));
+        targetResult = { segments: segments, colon: Boolean(segments[1] & 128) };
+      }
       else if (type === "tm1637" && typeof device.displayNumber === "function") targetResult = { text: device.displayNumber(event.value, event.leadingZero, event.colon) };
+      else if (type === "ws2812" && action === "pwm-frame" && typeof device.transmitPwm === "function") {
+        var pulseCount = device.transmitPwm(event.pulses, event.period, event.frequencyHz);
+        if (pulseCount > 0) targetResult = { pulseCount: pulseCount, colors: device.getState().colors };
+      }
+      else if (type === "ds18b20") {
+        var sensorResponse = device.apply(action, event);
+        if (sensorResponse.accepted) targetResult = sensorResponse.result;
+      }
       else if (typeof device.apply === "function") targetResult = device.apply(action, event);
       if (targetResult == null) return;
       result = result == null ? targetResult : result;
@@ -2694,6 +2874,43 @@
       if (!device || typeof device.getState !== "function") return;
       var state = device.getState();
       var connection = state && state.connection || {};
+      if (component.type !== "oled" && /I²C/.test(catalogDefinition(component.type)?.bus || "")) {
+        var portPins, channelPins, oePin, interruptReleaseLevel, portMcuLevels = {}, inputMask = 255;
+        if (component.type === "pcf8574") {
+          portPins = Array.from({ length: 8 }, function (_, index) {
+            var net = netForEndpoint(compiled, { componentId: component.id, pin: "P" + index });
+            if (net) net.drivers.forEach(function (driver) {
+              var owner = schematicState.components.get(driver.componentId);
+              if (owner && owner.type === "mcu") portMcuLevels[normalizeMcuPinName(driver.pin)] = driver.level;
+              else if (driver.componentId !== component.id && !driver.weak && driver.level === 0) inputMask &= ~(1 << index);
+            });
+            return externalMcuPinOnNet(net, component.id);
+          });
+          if (connection.signalPin) {
+            var interruptNet = netForEndpoint(compiled, {componentId: component.id, pin: "INT"});
+            if (!state.interruptActive) {
+              interruptReleaseLevel = !interruptNet || interruptNet.conflict || interruptNet.analogConflict || interruptNet.floating ? null
+                : (interruptNet.level != null ? interruptNet.level : (interruptNet.voltage >= 1.65 ? 1 : 0));
+            } else {
+              // Solve the existing resistor network with only this open-drain
+              // output released; an asserted INT must not hide its pull-up.
+              var releasedVoltages = solvePowerSystem(compiled, {componentId: component.id, pin: "INT"});
+              var releasedVoltage = interruptNet && releasedVoltages.get(interruptNet.id);
+              interruptReleaseLevel = Number.isFinite(releasedVoltage) ? (releasedVoltage >= 1.65 ? 1 : 0) : null;
+            }
+          }
+        }
+        if (component.type === "pca9685") {
+          channelPins = Array.from({length: 16}, function (_, index) {
+            return externalMcuPinOnNet(netForEndpoint(compiled, {componentId: component.id, pin: "PWM" + index}), component.id);
+          });
+          oePin = externalMcuPinOnNet(netForEndpoint(compiled, {componentId: component.id, pin: "OE"}), component.id);
+        }
+        snapshot.i2c.push({ componentId: component.id, type: component.type, instance: component.i2cBinding && component.i2cBinding.instance || "", handle: component.i2cBinding && component.i2cBinding.handle || "",
+          address: state.address, ready: Boolean(state.ready), properties: Object.assign({}, component.peripheralProperties), connection: Object.assign({}, connection, component.type === "pcf8574" ? {externalInputMask: inputMask} : {}), portPins: portPins, portMcuLevels: component.type === "pcf8574" ? portMcuLevels : undefined,
+          channelPins: channelPins, oePin: oePin, interruptReleaseLevel: interruptReleaseLevel });
+        return;
+      }
       if (component.type === "oled") {
         snapshot.i2c.push({
           componentId: component.id,
@@ -2704,11 +2921,14 @@
         });
         return;
       }
-      if (component.type === "spiDisplay" || component.type === "max7219" || component.type === "ws2812") {
+      if (component.type === "spiDisplay" || component.type === "max7219" || (component.type === "ws2812" && !connection.timer) || component.type === "w25qxx") {
         var csNet = netForEndpoint(compiled, { componentId: component.id, pin: "CS" });
         var dcNet = netForEndpoint(compiled, { componentId: component.id, pin: "DC" });
         snapshot.spi.push({
           componentId: component.id,
+          type: component.type,
+          properties: component.type === "w25qxx" ? Object.assign({}, component.peripheralProperties) : undefined,
+          connection: component.type === "w25qxx" ? Object.assign({}, connection) : undefined,
           instance: component.spiBinding && component.spiBinding.instance || "",
           handle: component.spiBinding && component.spiBinding.handle || "",
           csPin: externalMcuPinOnNet(csNet, component.id),
@@ -2726,6 +2946,11 @@
         type: component.type,
         ready: Boolean(state.ready),
         connection: {
+          powered: connection.powered,
+          bindingValid: connection.bindingValid,
+          dataConnected: connection.dataConnected,
+          vccLevel: connection.vccLevel,
+          gndLevel: connection.gndLevel,
           dataPin: connection.dataPin || "",
           triggerPin: connection.triggerPin || "",
           echoPin: connection.echoPin || "",
@@ -3253,6 +3478,7 @@
       visited.add(netId);
       var net = netlist.netById.get(netId);
       if (net) {
+        (net.pwmDrivers || []).forEach(function (driver) { if (driver.pwm) matches.push(driver.pwm); });
         net.endpoints.forEach(function (endpoint) {
           var component = schematicState.components.get(endpoint.componentId);
           if (!component || component.type !== "mcu") return;
@@ -3416,16 +3642,33 @@
     return ratingW > 0 ? Math.max(0, powerW) / ratingW * 100 : null;
   }
 
-  function solvePowerSystem(netlist) {
+  function solvePowerSystem(netlist, releasedEndpoint) {
     var compiled = netlist || { nets: [], endpointToNet: Object.create(null), netById: new Map() };
+    var releasedKey = releasedEndpoint && endpointKey(releasedEndpoint);
+    if (releasedKey && compiled.releasedVoltages && compiled.releasedVoltages.has(releasedKey)) return compiled.releasedVoltages.get(releasedKey);
     var knownVoltages = new Map();
     (compiled.nets || []).forEach(function (net) {
-      if (!net.conflict && !net.analogConflict && Number.isFinite(net.voltage)) knownVoltages.set(net.id, Number(net.voltage));
+      if (!releasedEndpoint) {
+        if (!net.conflict && !net.analogConflict && Number.isFinite(net.voltage)) knownVoltages.set(net.id, Number(net.voltage));
+        return;
+      }
+      // Use source drivers rather than already-solved voltages, which may
+      // include a resistor voltage drop caused by the output being released.
+      function retained(driver) { return driver.componentId !== releasedEndpoint.componentId || driver.pin !== releasedEndpoint.pin; }
+      var digital = net.drivers.filter(retained), strong = digital.filter(function (driver) { return !driver.weak; });
+      if (strong.length) digital = strong;
+      if (digital.some(function (driver) { return driver.level === 0; }) && digital.some(function (driver) { return driver.level === 1; })) return;
+      var analog = net.analogDrivers.filter(retained), strongAnalog = analog.filter(function (driver) { return !driver.weak; });
+      if (strongAnalog.length) analog = strongAnalog;
+      var voltages = analog.map(function (driver) { return driver.voltage; }).filter(Number.isFinite);
+      if (voltages.length && Math.max.apply(Math, voltages) - Math.min.apply(Math, voltages) <= 0.05) {
+        knownVoltages.set(net.id, voltages.reduce(function (sum, value) { return sum + value; }, 0) / voltages.length);
+      }
     });
 
     var resistors = [];
     schematicState.components.forEach(function (component) {
-      component.powerState = null;
+      if (!releasedEndpoint) component.powerState = null;
       if (component.type !== "resistor") return;
       var resistance = parseResistanceValue(component.value);
       var left = compiled.endpointToNet[endpointKey({ componentId: component.id, pin: "1" })];
@@ -3509,6 +3752,13 @@
         knownVoltages.get(led.anode) - knownVoltages.get(led.cathode) > led.forwardVoltage + 0.01;
     }) : [];
     if (activeLeds.length) knownVoltages = solveNetwork(activeLeds);
+
+    // Snapshot-only query: preserve the rendered nets and power readings.
+    if (releasedEndpoint) {
+      if (!compiled.releasedVoltages) compiled.releasedVoltages = new Map();
+      compiled.releasedVoltages.set(releasedKey, knownVoltages);
+      return knownVoltages;
+    }
 
     knownVoltages.forEach(function (voltage, netId) {
       var net = compiled.netById.get(netId);
@@ -5515,13 +5765,30 @@
     else schematicState.tick += 1;
     // PWM is time-dependent even when its compare register is unchanged.
     // Rebuild the netlist so digital samples follow the configured carrier.
-    if (schematicState.mcuPwm.size) schematicState.compiledNetlist = null;
+    var clockedOutputs = false;
+    schematicState.components.forEach(function (component) {
+      var device = componentDevice(component);
+      if (device && typeof device.setTime === "function") device.setTime(schematicState.time);
+      if (component.type === "pca9685" || component.type === "rotaryEncoder") clockedOutputs = true;
+    });
+    if (schematicState.mcuPwm.size || clockedOutputs) schematicState.compiledNetlist = null;
     processUartSenders(schematicState.time);
     if (options.render !== false) {
       updateTickUi();
       if (schematicNodes.mcuState) schematicNodes.mcuState.textContent = "RUNNING";
       if (schematicNodes.recordDot) schematicNodes.recordDot.classList.add("active");
       renderWires();
+      schematicState.components.forEach(function (component) {
+        if (component.type === "oled") updateOledVisual(component);
+        else if (component.type === "ds3231" || component.type === "ds18b20") updateCatalogVisual(component);
+      });
+      if (window.AlicePeripheralAudio && window.AlicePeripheralAudio.getState().enabled) {
+        var buzzers = [];
+        schematicState.components.forEach(function (component) {
+          if (component.type === "buzzer") buzzers.push({id: component.id, type: component.type, deviceState: componentDevice(component).getState()});
+        });
+        window.AlicePeripheralAudio.sync(buzzers);
+      }
     }
     return { time: schematicState.time, tick: schematicState.tick };
   }
@@ -6721,8 +6988,10 @@
     validateWithPySpice: function () { return requestSpiceProbeValidation(true); },
     sampleAdc: sampleAdc,
     handleI2cTransmission: handleI2cTransmission,
+    handleI2cReception: handleI2cReception,
     onI2cTx: handleI2cTransmission,
     handleSpiTransmission: handleSpiTransmission,
+    handleSpiReception: handleSpiReception,
     onSpiTx: handleSpiTransmission,
     handlePeripheralOperation: handlePeripheralOperation,
     getFirmwareInputSnapshot: firmwareInputSnapshot,

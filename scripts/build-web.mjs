@@ -21,12 +21,17 @@ const sourceFiles = [
   "libdriver-registry.js",
   "peripheral-catalog.js",
   "peripheral-devices.js",
+  "peripheral-bus-devices.js",
+  "ds18b20-device.js",
+  "peripheral-audio.js",
   "peripheral-visuals.js",
   "simulation-accel.js",
   "schematic.js",
   "alice-drivers.js",
   "ui-actions.js",
   "panel-resize.js",
+  "simulation-workbench.js",
+  "sidebar-tools.js",
   "ioc-viewer.js",
   "project-folder.js",
   "firmware-runtime.js",
@@ -45,7 +50,7 @@ for (const relative of sourceFiles) {
   await cp(source, destination);
 }
 
-for (const directory of ["assets", "Drivers"]) {
+for (const directory of ["assets", "Drivers", "tutorials"]) {
   await cp(path.join(root, directory), path.join(output, directory), { recursive: true });
 }
 

@@ -310,6 +310,7 @@ int main(void) {
                 "aliceLightInit",
                 "aliceLightReadRaw",
                 "aliceLightReadLux",
+                "assign",
                 "aliceLightRead",
                 "assign",
                 "while",
@@ -322,6 +323,7 @@ int main(void) {
         raw_read = next(operation for operation in operations if operation["op"] == "aliceLightReadRaw")
         lux_read = next(operation for operation in operations if operation["op"] == "aliceLightReadLux")
         sample_read = next(operation for operation in operations if operation["op"] == "aliceLightRead")
+        sample_declaration = next(operation for operation in operations if operation["op"] == "assign" and operation.get("target") == "sample")
         copied_lux = next(
             operation
             for operation in operations
@@ -335,6 +337,7 @@ int main(void) {
         self.assertEqual("status", oled_init["resultTarget"])
         self.assertEqual("status", sample_read["resultTarget"])
         self.assertEqual("sample", sample_read["target"])
+        self.assertEqual("AliceSIM_LightSensor_Sample", sample_declaration["cType"])
         self.assertEqual(
             {"kind": "member", "object": {"kind": "variable", "name": "sample"}, "member": "lux", "pointer": False},
             copied_lux["value"],

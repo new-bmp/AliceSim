@@ -97,6 +97,7 @@
     if (kind === "i2c-rx") {
       var readI2c = findI2c(currentModel, payload.instance || payload.i2c || payload.handle);
       var i2cReadEvent = Object.assign({}, payload, readI2c ? { instance: readI2c.instance || payload.instance, handle: readI2c.handle || payload.handle, sclPin: readI2c.sclPin, sdaPin: readI2c.sdaPin, clockSpeed: readI2c.clockSpeed, addressBits: readI2c.addressBits } : {});
+      if (root.AliceSchematic && typeof root.AliceSchematic.handleI2cReception === "function") i2cReadEvent.result = root.AliceSchematic.handleI2cReception(i2cReadEvent);
       dispatch("alice:firmware-i2c-rx", i2cReadEvent);
       return;
     }
@@ -110,6 +111,7 @@
     if (kind === "spi-rx") {
       var readSpi = findSpi(currentModel, payload.instance || payload.spi || payload.handle);
       var spiReadEvent = Object.assign({}, payload, readSpi ? { instance: readSpi.instance || payload.instance, handle: readSpi.handle || payload.handle, sckPin: readSpi.sckPin, mosiPin: readSpi.mosiPin, misoPin: readSpi.misoPin, mode: readSpi.mode, dataSize: readSpi.dataSize, clockPolarity: readSpi.clockPolarity, clockPhase: readSpi.clockPhase } : {});
+      if (root.AliceSchematic && typeof root.AliceSchematic.handleSpiReception === "function") spiReadEvent.result = root.AliceSchematic.handleSpiReception(spiReadEvent);
       dispatch("alice:firmware-spi-rx", spiReadEvent);
       return;
     }
@@ -133,7 +135,7 @@
   function createWorkerBridge() {
     if (typeof root.Worker !== "function" || !root.location || !root.location.href) return null;
     var url;
-    try { url = new URL("./firmware-worker.js?v=20260827.6", root.location.href); } catch (_) { return null; }
+    try { url = new URL("./firmware-worker.js?v=20261001.1", root.location.href); } catch (_) { return null; }
     var worker;
     try { worker = new root.Worker(url.href); } catch (_) { return null; }
     var pending = new Map();

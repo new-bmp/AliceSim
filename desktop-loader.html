@@ -5,10 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#080b12" />
     <title>AliceSIM</title>
+    <link rel="icon" href="./assets/alicesim-app-icon-v2.svg" type="image/svg+xml" />
     <style>
       html,body{width:100%;height:100%;margin:0;background:#080a10;color:#e7eaf1;font-family:"Segoe UI","Microsoft YaHei",sans-serif}
       body{display:grid;place-items:center}
       main{display:grid;justify-items:center;gap:14px}
+      .app-icon{width:64px;height:64px}
       strong{font-size:24px;font-weight:650;letter-spacing:0}
       p{margin:0;color:#8e98a9;font-size:13px;letter-spacing:0}
       i{width:34px;height:34px;border:3px solid #263344;border-top-color:#4bb7c5;border-radius:50%;animation:spin .8s linear infinite}
@@ -16,6 +18,6 @@
     </style>
   </head>
   <body>
-    <main><i aria-hidden="true"></i><strong>AliceSIM</strong><p id="desktopStatus">正在启动本地仿真服务...</p></main>
+    <main><img class="app-icon" src="./assets/alicesim-app-icon-v2.svg" alt="" width="64" height="64"/><strong>AliceSIM</strong><i aria-hidden="true"></i><p id="desktopStatus">正在启动本地仿真服务...</p></main>
   </body>
 </html>

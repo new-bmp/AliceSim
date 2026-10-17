@@ -22,6 +22,8 @@ test("ribbon navigation has one clear responsibility per tab", () => {
 test("initial ribbon selection does not open a mobile tool drawer", () => {
   assert.match(actions, /selectRibbon\(initial, \{ runAction: false \}\)/);
   assert.match(actions, /if \(options\.runAction !== false\) selection\.action\?\.\(\)/);
+  assert.match(actions, /pageDefault = document\.body\.classList\.contains\("app-page-simulation"\) \? "仿真" : "编辑"/);
+  assert.match(actions, /alice:workspace-page-change/);
 });
 
 test("duplicate page and tool-window commands are removed from the ribbon", () => {

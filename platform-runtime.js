@@ -16,11 +16,13 @@
     : (search === "tauri-mobile" || (tauriRuntime && mobile) ? "tauri-mobile" : "web");
   var browserFetch = typeof root.fetch === "function" ? root.fetch.bind(root) : null;
   var mobileBackendMessage = "手机和平板版本不包含本地 Python/Clang 编译服务。请在桌面版中构建，或通过提供 AliceSIM 后端的网页使用编译与 HAL 仿真。";
+  var backendOrigin = "";
   var backendState = {
     available: false,
     service: "",
     engine: "",
-    detail: kind === "tauri-mobile" ? mobileBackendMessage : "not-probed"
+    detail: kind === "tauri-mobile" ? mobileBackendMessage : "not-probed",
+    origin: ""
   };
 
   function isApiRequest(value) {
@@ -33,10 +35,44 @@
   function apiUrl(value) {
     var text = String(value || "");
     if (!/^\/api(?:\/|$)/.test(text)) return value;
-    try { return new URL(text, location.origin || location.href).href; } catch (_) { return text; }
+    try { return new URL(text, backendOrigin || location.origin || location.href).href; } catch (_) { return text; }
   }
 
-  function platformFetch(input, init) {
+  function isLoopbackLocation() {
+    try {
+      var parsed = new URL(location.href);
+      return /^(127\.0\.0\.1|localhost|\[::1\]|::1)$/i.test(parsed.hostname) && /^https?:$/i.test(parsed.protocol);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function backendCandidates() {
+    var candidates = [];
+    function add(origin) {
+      var normalized = String(origin || "").replace(/\/$/, "");
+      if (normalized && candidates.indexOf(normalized) < 0) candidates.push(normalized);
+    }
+    try {
+      var parsed = new URL(location.href);
+      add(parsed.origin);
+      if (!isLoopbackLocation()) return candidates;
+      var configured = parsed.searchParams.get("alice-backend");
+      if (configured) {
+        try { add(new URL(configured, parsed.origin).origin); } catch (_) {}
+      }
+      var host = parsed.hostname;
+      var protocol = parsed.protocol;
+      // The standalone launcher normally serves both UI and API from one
+      // port. During development the UI may be opened by a preview server
+      // on 4174/4175 while the local HAL service remains on its default
+      // 4173 port, so check the small loopback range explicitly.
+      for (var port = 4173; port <= 4193; port += 1) add(protocol + "//" + host + ":" + port);
+    } catch (_) {}
+    return candidates;
+  }
+
+  async function platformFetch(input, init) {
     if (!browserFetch) return Promise.reject(new Error("Fetch is unavailable on this device"));
     if (kind === "tauri-mobile" && isApiRequest(input)) {
       var unavailable = new Error(mobileBackendMessage);
@@ -44,7 +80,21 @@
       return Promise.reject(unavailable);
     }
     var request = typeof input === "string" ? apiUrl(input) : input;
-    return browserFetch(request, init);
+    var apiRequest = isApiRequest(input);
+    try {
+      var response = await browserFetch(request, init);
+      if (!apiRequest || backendOrigin) return response;
+      var discovered = await probeBackend();
+      var retryUrl = apiUrl(input);
+      if (discovered.available && retryUrl !== request) return browserFetch(retryUrl, init);
+      return response;
+    } catch (error) {
+      if (!apiRequest) throw error;
+      var discoveredAfterError = await probeBackend();
+      var retryAfterError = apiUrl(input);
+      if (discoveredAfterError.available && retryAfterError !== request) return browserFetch(retryAfterError, init);
+      throw error;
+    }
   }
 
   function directoryPicker(options) {
@@ -57,18 +107,51 @@
   }
 
   async function probeBackend() {
-    try {
-      var response = await platformFetch("/api/health", { cache: "no-store" });
-      var payload = response.ok ? await response.json() : null;
+    if (kind === "tauri-mobile") {
+      backendOrigin = "";
       backendState = {
-        available: Boolean(payload && payload.service === "AliceSIM"),
-        service: payload && payload.service || "",
-        engine: payload && payload.engine || "",
-        detail: payload && payload.detail || ""
+        available: false,
+        service: "",
+        engine: "",
+        detail: mobileBackendMessage,
+        origin: ""
       };
-    } catch (error) {
-      backendState = { available: false, service: "", engine: "", detail: error && error.message || "offline" };
+      root.dispatchEvent(new CustomEvent("alice:platform-backend", { detail: backendSnapshot() }));
+      return backendSnapshot();
     }
+    var lastError = null;
+    var candidates = backendCandidates();
+    for (var index = 0; index < candidates.length; index += 1) {
+      var origin = candidates[index];
+      try {
+        var response = await browserFetch(origin + "/api/health", { cache: "no-store" });
+        var payload = response.ok ? await response.json() : null;
+        if (!response.ok || !payload || payload.service !== "AliceSIM") {
+          lastError = new Error("HTTP " + (response.status || 404));
+          continue;
+        }
+        backendOrigin = origin;
+        backendState = {
+          available: true,
+          service: payload.service || "AliceSIM",
+          engine: payload.engine || "",
+          detail: payload.detail || "",
+          origin: backendOrigin
+        };
+        root.dispatchEvent(new CustomEvent("alice:platform-backend", { detail: backendSnapshot() }));
+        return backendSnapshot();
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    backendOrigin = "";
+    backendState = {
+      available: false,
+      service: "",
+      engine: "",
+      detail: lastError && lastError.message || "offline",
+      origin: ""
+    };
     root.dispatchEvent(new CustomEvent("alice:platform-backend", { detail: backendSnapshot() }));
     return backendSnapshot();
   }

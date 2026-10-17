@@ -14,6 +14,10 @@ extern "C" {
 #include ALICESIM_HAL_HEADER
 
 #define ALICESIM_INA219_DEFAULT_ADDRESS 0x40U
+/* Init calibrates the 0.1-ohm shunt fitted to common INA219 modules.
+ * For another shunt, write register 0x05 after Init using
+ * floor(0.04096 / (current_lsb_ua * 1e-6 * shunt_ohms)). */
+#define ALICESIM_INA219_DEFAULT_SHUNT_MILLIOHMS 100U
 
 typedef struct {
   I2C_HandleTypeDef *i2c;

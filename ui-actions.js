@@ -36,6 +36,10 @@
       style.textContent = `
         .ui-action-menu{position:fixed;z-index:600;min-width:210px;padding:5px;border:1px solid #c8c8c8;background:#fff;color:#242424;box-shadow:0 8px 24px rgba(0,0,0,.22);font:11px "Segoe UI",sans-serif}
         .toast.warning i{background:#ca5010!important;box-shadow:none!important}
+        .ui-tutorial-modal,body.visio-theme .ui-action-modal.ui-tutorial-modal{display:flex;flex-direction:column;width:min(1500px,calc(100vw - 24px));height:calc(100dvh - 24px);padding:18px;box-sizing:border-box}
+        .ui-tutorial-modal .modal-eyebrow,.ui-tutorial-modal .ui-action-buttons{display:none}
+        .ui-tutorial-modal .ui-action-body{flex:1;min-height:0;margin-top:8px}
+        .ui-tutorial-frame{display:block;width:100%;height:100%;border:1px solid #dce6eb;border-radius:5px;background:#fff}
         .alice-save-feedback{min-width:300px}.alice-save-feedback span{font-variant-numeric:tabular-nums}
         body.alice-project-saving .quick-access button[data-alice-save-title] svg,body.alice-project-saving #saveCircuitButton svg{animation:aliceSavePulse .75s ease-in-out infinite}
         @keyframes aliceSavePulse{50%{opacity:.3;transform:scale(.88)}}
@@ -163,7 +167,7 @@
       if (terminalPath) terminalPath.textContent = `~/${cleanName}`;
       if (mcu) {
         const badge = $(".chip-badge");
-        const deviceName = $(".device-summary strong");
+        const deviceName = $("#sideDeviceName");
         if (badge) badge.textContent = mcu;
         if (deviceName) deviceName.textContent = mcu;
       }
@@ -231,7 +235,8 @@
           panel: window.AlicePanelLayout?.getState?.() || null,
           sidebar: window.AliceSidebarLayout?.getState?.() || null,
           ribbonCollapsed: window.AliceRibbonLayout?.isCollapsed?.() || false,
-          observer: window.AliceObserverLayout?.getState?.() || null
+          observer: window.AliceObserverLayout?.getState?.() || null,
+          workbench: window.AliceSimulationWorkbench?.getState?.() || null
         }
       };
       return {
@@ -287,6 +292,7 @@
         if (layout.panel?.preferredWidth != null) window.AlicePanelLayout?.setWidth?.(layout.panel.preferredWidth);
         if (typeof layout.ribbonCollapsed === "boolean") window.AliceRibbonLayout?.setCollapsed?.(layout.ribbonCollapsed);
         if (layout.observer) window.AliceObserverLayout?.setState?.(layout.observer);
+        if (layout.workbench) window.AliceSimulationWorkbench?.setState?.(layout.workbench);
       } catch (_) {}
       if (saved.workspacePage) window.AliceWorkspacePages?.set?.(saved.workspacePage);
     }
@@ -1472,7 +1478,8 @@
       document.body.classList.remove("hide-project-pane");
       const checkbox = $(`[data-pane-toggle="project"]`);
       if (checkbox) checkbox.checked = true;
-      $(`.activity-item[data-view="${name}"]`)?.click();
+      const button = $(`.activity-item[data-view="${name}"]`);
+      if (button?.getAttribute("aria-expanded") !== "true") button?.click();
     }
 
     function showSimulatorPane() {
@@ -1571,10 +1578,10 @@
       ]);
       const config = {
         "项目": { original: [], generated: ["file-project", "project-drivers", "file-save"], context: "工程与文件", action: () => activateSidePanel("project") },
-        "MCU": { original: ["mcu"], generated: [], context: "器件与 IOC", action: () => { window.AliceWorkspacePages?.set?.("code"); openWorkspaceTab("pinout"); } },
-        "元件": { original: ["components"], generated: ["component-import"], context: "原理图元件库与说明书导入", action: showSimulatorPane },
-        "编辑": { original: [], generated: ["code-edit", "code-view"], context: "代码编辑工具", action: () => { window.AliceWorkspacePages?.set?.("code"); openWorkspaceTab("code"); } },
-        "仿真": { original: ["run"], generated: ["sim-circuit", "sim-view"], context: "运行与电路", action: showSimulatorPane },
+        "MCU": { original: ["mcu"], generated: [], page: "code", context: "器件与 IOC", action: () => { window.AliceWorkspacePages?.set?.("code"); openWorkspaceTab("pinout"); } },
+        "元件": { original: ["components"], generated: ["component-import"], page: "simulation", context: "原理图元件库与说明书导入", action: showSimulatorPane },
+        "编辑": { original: [], generated: ["code-edit", "code-view"], page: "code", context: "代码编辑工具", action: () => { window.AliceWorkspacePages?.set?.("code"); openWorkspaceTab("code"); } },
+        "仿真": { original: ["run"], generated: ["sim-circuit", "sim-view"], page: "simulation", context: "运行与电路", action: showSimulatorPane },
         "视图": { original: ["view"], generated: ["layout"], context: "工作区布局" }
       };
 
@@ -1596,12 +1603,27 @@
         ribbon.setAttribute("aria-label", `${label}功能区`);
         const contextLabel = $(".ribbon-context");
         if (contextLabel) contextLabel.textContent = selection.context || "AliceSIM 工具";
+        if (options.runAction !== false) window.AliceRibbonLayout?.setCollapsed?.(false);
         if (options.runAction !== false) selection.action?.();
       }
 
       tabButtons.forEach(button => button.addEventListener("click", () => selectRibbon(button)));
-      const initial = tabButtons.find(button => button.classList.contains("active")) || tabButtons.find(button => button.textContent.trim() === "项目");
+      const pageDefault = document.body.classList.contains("app-page-simulation") ? "仿真" : "编辑";
+      const initial = tabButtons.find(button => button.textContent.trim() === pageDefault)
+        || tabButtons.find(button => button.classList.contains("active"))
+        || tabButtons.find(button => button.textContent.trim() === "项目");
       if (initial) selectRibbon(initial, { runAction: false });
+      document.addEventListener("alice:workspace-page-change", event => {
+        const page = event.detail?.page;
+        // A deferred page event must not replace a newer, compatible tool tab.
+        if (page !== document.body.dataset.appPage) return;
+        const selected = tabButtons.find(button => button.getAttribute("aria-selected") === "true");
+        const selectedPage = config[selected?.textContent.trim()]?.page;
+        if (selected && (!selectedPage || selectedPage === page)) return;
+        const preferred = page === "simulation" ? "仿真" : "编辑";
+        const next = tabButtons.find(button => button.textContent.trim() === preferred);
+        if (next) selectRibbon(next, { runAction: false });
+      });
     }
 
     setupRibbonTabs();
@@ -1625,9 +1647,31 @@
 
     $("#projectMenu")?.addEventListener("click", event => openMenu(event.currentTarget, projectMenuItems()));
 
+    function openTutorials() {
+      const frame = document.createElement("iframe");
+      frame.className = "ui-tutorial-frame";
+      frame.title = "AliceSIM 教程与例程";
+      frame.src = "./tutorials/";
+      const modal = openActionModal({ title: "教程与例程", content: frame, primaryLabel: null, secondaryLabel: null });
+      $(".ui-action-modal", modal).classList.add("ui-tutorial-modal");
+      $(".modal-close", modal).focus();
+    }
+
+    function handleTutorialLink(event) {
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      openTutorials();
+    }
+
+    $("#tutorialsButton")?.addEventListener("click", handleTutorialLink);
+
     function openHelpCenter() {
       const content = document.createElement("div");
       content.innerHTML = `
+        <a class="ui-help-card" href="./tutorials/" target="_blank" rel="noopener" style="display:block;margin-bottom:12px;text-decoration:none;border-color:#9ecaca;background:#f0faf8">
+          <h3 style="color:#087f83">教程与例程 ↗</h3>
+          <p>按模块学习 GPIO、ADC、PWM、串口、传感器、显示与 DMA。含 CubeMX 配置、实际截图和可下载的完整工程。</p>
+        </a>
         <div class="ui-help-grid">
           <div class="ui-help-card"><h3>1. 导入或创建</h3><p>选择完整 STM32 工程文件夹，Alice 会读取 Core、Drivers、CMSIS、源码、头文件和 IOC。</p></div>
           <div class="ui-help-card"><h3>2. 查看 IOC</h3><p>“MCU”功能区用于核对器件、引脚、时钟、外设和原始 IOC 参数。</p></div>
@@ -1643,6 +1687,7 @@
           <div>全局搜索 <kbd>Ctrl+K</kbd></div>
           <div>构建 / 运行 <kbd>Ctrl+B / F5</kbd></div>
         </div>`;
+      $("a[href='./tutorials/']", content).addEventListener("click", handleTutorialLink);
       openActionModal({
         eyebrow: "HELP CENTER",
         title: "AliceSIM 使用指南",
@@ -1670,6 +1715,10 @@
     }
 
     $('.activity-item[data-tooltip="帮助中心"]')?.addEventListener("click", openHelpCenter);
+    window.addEventListener("message", event => {
+      const frame = actionModal?.querySelector(".ui-tutorial-frame");
+      if (frame && event.origin === location.origin && event.source === frame.contentWindow && event.data?.type === "alicesim:tutorial-close") closeActionModal();
+    });
 
     function buildSearchItems() {
       const items = [];
@@ -1678,24 +1727,19 @@
         kind: "文件",
         action: () => button.click()
       }));
-      $$(".peripheral-list button").forEach(button => items.push({
-        label: button.querySelector("span")?.textContent.trim() || button.textContent.trim(),
-        kind: "外设",
-        action: () => button.click()
-      }));
-      $$(".component-grid button").forEach(button => items.push({
-        label: button.querySelector("strong")?.textContent.trim() || button.textContent.trim(),
+      $$(".library-items [data-component-type]").filter(button => button.style.display !== "none").forEach(button => items.push({
+        label: button.querySelector("b")?.textContent.trim() || button.textContent.trim(),
         kind: "组件",
         action: () => {
-          activateSidePanel("packages");
-          button.focus();
+          showSimulatorPane();
+          button.click();
         }
       }));
       [
         ["新建项目", openNewProjectDialog], ["打开 STM32 工程文件夹", openProjectFolder], ["打开 IOC 或工程包", openProjectPicker], ["保存完整项目", saveWholeProject],
         ["另存电路", saveCurrentCircuit], ["打开电路", openCircuitPicker],
         ["添加 AliceSIM 外设驱动", openPeripheralDriverManager],
-        ["导出工程", exportProject], ["重置工作区布局", resetLayout], ["帮助中心", openHelpCenter]
+        ["导出工程", exportProject], ["重置工作区布局", resetLayout], ["教程与例程", openTutorials], ["帮助中心", openHelpCenter]
       ].forEach(([label, action]) => items.push({ label, kind: "命令", action }));
       return items;
     }
@@ -1804,10 +1848,6 @@
         group: "原理图基础元件",
         button
       }));
-      $$(".component-grid button").forEach(button => {
-        const label = button.querySelector("strong")?.textContent.trim() || button.textContent.trim();
-        entries.push({ key: `catalog:${label.toLowerCase()}`, label, group: "虚拟器件目录", button });
-      });
       return entries;
     }
 
@@ -1863,33 +1903,7 @@
     }
 
     $('.library-head button[title="管理元件库"]')?.addEventListener("click", openLibraryManager);
-    $('.side-view[data-panel="packages"] .panel-title button')?.addEventListener("click", () => {
-      const count = applyLibraryPreferences();
-      toast(`组件索引已刷新 · ${count} 项可用`);
-    });
     applyLibraryPreferences();
-
-    const componentSearch = $('.side-view[data-panel="packages"] .component-search input');
-    componentSearch?.addEventListener("input", () => {
-      const term = componentSearch.value.trim().toLocaleLowerCase("zh-CN");
-      $$(".component-grid button").forEach(button => {
-        const enabledByPreference = !new Set(safeStorageGet(STORAGE_LIBRARY, [])).has(`catalog:${button.querySelector("strong")?.textContent.trim().toLowerCase()}`);
-        button.style.display = enabledByPreference && (!term || button.textContent.toLocaleLowerCase("zh-CN").includes(term)) ? "" : "none";
-      });
-    });
-
-    $$(".component-grid button").forEach(button => button.addEventListener("click", () => {
-      const name = button.querySelector("strong")?.textContent.trim() || "组件";
-      showSimulatorPane();
-      const typeMap = { LED: "led", Button: "button" };
-      const target = $(`.library-items [data-component-type="${typeMap[name] || ""}"]`);
-      if (target) {
-        target.focus();
-        toast(`${name} 已在右侧原理图库中定位`);
-      } else {
-        toast(`${name} 属于扩展器件，可在元件库管理器中查看`);
-      }
-    }));
 
     function openNewFileDialog() {
       const form = document.createElement("form");
@@ -2012,44 +2026,6 @@
       }));
     }
     setupOutlineSections();
-
-    const peripheralButtons = $$(".peripheral-list button");
-    peripheralButtons.forEach(button => button.addEventListener("click", () => {
-      const name = button.querySelector("span")?.textContent.trim();
-      if (name === "RCC") openWorkspaceTab("clock");
-      else if (name === "USART1") $("[data-bottom=serial]")?.click();
-      else openWorkspaceTab("pinout");
-      toast(`${name} 配置视图已打开`);
-    }));
-
-    $('.side-view[data-panel="device"] .panel-title button')?.addEventListener("click", event => openMenu(event.currentTarget, [
-      { icon: "◫", label: "打开引脚配置", action: () => openWorkspaceTab("pinout") },
-      { icon: "◷", label: "打开时钟树", action: () => openWorkspaceTab("clock") },
-      { icon: "▣", label: "复制 MCU 型号", action: async () => {
-        const value = $(".chip-badge")?.textContent.trim() || "STM32F103C8T6";
-        try { await navigator.clipboard.writeText(value); toast(`已复制 ${value}`); }
-        catch (_) { toast(value); }
-      } }
-    ], { align: "right" }));
-
-    $('.side-view[data-panel="debug"] .panel-title button')?.addEventListener("click", event => openMenu(event.currentTarget, [
-      { icon: "⌁", label: "构建工程", shortcut: "Ctrl+B", action: () => $("#buildButton")?.click() },
-      { icon: "▶", label: $("#runButton.running") ? "停止仿真" : "启动调试", shortcut: "F5", action: () => $("#runButton")?.click() },
-      { icon: "↺", label: "复位 MCU", action: () => $("#resetButton")?.click() },
-      { separator: true },
-      { icon: "×", label: "禁用全部断点", action: () => {
-        $$('.side-view[data-panel="debug"] .debug-block input[type="checkbox"]').forEach(input => { input.checked = false; });
-        toast("全部断点已禁用");
-      } }
-    ], { align: "right" }));
-
-    $('.side-view[data-panel="analyzer"] .panel-title button')?.addEventListener("click", () => {
-      const next = $$('.side-view[data-panel="analyzer"] .channel-checks input').find(input => !input.checked);
-      if (next) {
-        next.checked = true;
-        toast("已启用一个逻辑分析通道");
-      } else toast("所有可用分析通道均已启用");
-    });
 
     document.addEventListener("pointerdown", event => {
       if (activeMenu && !activeMenu.contains(event.target) && !event.target.closest("#projectMenu,#simMore,.editor-action,.panel-title button")) closeMenu();

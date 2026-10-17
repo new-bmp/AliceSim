@@ -14,19 +14,25 @@
   "categories": ["developer", "education", "utilities"],
   "icons": [
     {
-      "src": "./assets/pwa/192x192.png",
+      "src": "./assets/pwa/v2/192x192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./assets/pwa/512x512.png",
+      "src": "./assets/pwa/v2/512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "./assets/alicesim-app-icon.svg",
+      "src": "./assets/pwa/v2/maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "./assets/alicesim-app-icon-v2.svg",
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any"

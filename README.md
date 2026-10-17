@@ -1,11 +1,17 @@
 # AliceSIM
 
-AliceSIM 是面向 STM32 的浏览器仿真工作台原型，当前目标器件为 `STM32F103C8T6`。
+AliceSIM 是面向 STM32 的嵌入式仿真学习平台，当前目标器件为 `STM32F103C8T6`。
+
+## 教程与例程
+
+启动软件后，点击顶部“教程与例程”，可以按知识点阅读 31 篇教程，查看实际运行截图、CubeMX 配置、接线与代码解释。小屏幕上入口显示为“教程”，帮助中心也保留了入口。也可在实际服务地址后加 `/tutorials/` 直接阅读。
+
+十四套例程位于 [`tutorials/examples`](tutorials/README.md)。从电路、最小闪灯、C 数据与指针开始，加入非阻塞计时、消抖、EXTI、定时器中断、UART 命令与总线读手册实验，再进入 ADC、PWM、传感器、显示、DMA 和趋势记录。教材还介绍排错、实机下载与断点调试。配套课程可下载工程 JSON 与源码 ZIP；目录及维护方法见[教程说明](tutorials/README.md)。
 
 ## 已实现
 
 - 导入本地 STM32 工程文件夹，保留 `Core`、`Drivers`、CMSIS、源码、头文件和相对目录结构
-- 代码独立保存：通过可写目录打开工程时 `Ctrl+S` 原位写回当前源码，普通上传模式则下载当前文件
+- 完整项目保存：`Ctrl+S` 保存代码、IOC、电路和工作区；可写工程保存到 `AliceSIM` 工作目录，否则使用浏览器本地存储；`Ctrl+Shift+S` 导出完整工程包
 - 电路独立保存/加载：`.alice-sch.json` 保存元件、数值、位置、旋转、导线拐点及画布视图
 - 单独导入并解析 STM32CubeMX `.ioc` 文件
 - IOC 只读报告：完整 LQFP48 引脚、时钟、外设、MCU/项目字段及逐行原始配置
@@ -89,7 +95,8 @@ Android 开发需要 Rust 的 Android targets、Android Studio、SDK 与 NDK；�
 
 ## 保存与外设驱动
 
-- `Ctrl+S`：保存当前代码。可写工程会写回原文件；否则下载当前活动文件。
+- `Ctrl+S`：保存完整项目。可写工程保存到工程内 `AliceSIM` 工作目录；否则保存在当前浏览器与页面地址的本地存储中。
+- `Ctrl+Shift+S`：导出完整 `.alice.json` 工程，用于备份、迁移或提交作业。
 - `Ctrl+Alt+S`：保存电路为独立的 `.alice-sch.json`。
 - `Ctrl+Alt+O`：打开已保存的电路；IOC 控制的 MCU 型号和当前有效 IO 不会被旧电路覆盖。
 - “项目 → 添加 AliceSIM 驱动”：可选择全部 26 个已登记器件驱动，复制到工程的 `Drivers/AliceSIM` 目录。默认保留已有同名源码，可显式选择更新。

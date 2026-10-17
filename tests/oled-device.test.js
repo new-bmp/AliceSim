@@ -206,3 +206,49 @@ test("the common A1/C8 initialization keeps logical framebuffer coordinates upri
   assert.equal(device.pixelAt(127, 63), 1);
   assert.equal(device.pixelAt(127, 0), 0);
 });
+
+test("SSD1306 scroll configuration consumes all arguments without moving the RAM write cursor", () => {
+  const device = createConnected();
+  device.command([0x20, 2, 0xb3, 0x13, 0x07]);
+  device.command([0x26, 0, 0, 7, 0, 0, 0xff]);
+  device.data([0x5a]);
+  assert.equal(framebufferOf(device)[offset(3, 55)], 0x5a);
+  assert.equal(device.page, 3);
+  assert.equal(device.column, 56);
+});
+
+test("SSD1306 horizontal scrolling advances selected pages using simulation time and stops in place", () => {
+  const device = createConnected({ frameRateHz: 100 });
+  const data = new Uint8Array(AliceOledDevice.BUFFER_SIZE);
+  data[offset(0, 0)] = 1;
+  data[offset(1, 0)] = 1;
+  device.writeFramebuffer(data);
+  device.setTime(100);
+  device.command([0x27, 0, 1, 7, 1, 0, 0xff, 0x2f]);
+  assert.equal(device.pixelAt(0, 8, 119), 1);
+  assert.equal(device.pixelAt(127, 8, 120), 1, "left scrolling wraps the first column to the right edge");
+  assert.equal(device.pixelAt(0, 8, 120), 0);
+  assert.equal(device.pixelAt(0, 0, 120), 1, "pages outside the selected range remain fixed");
+  device.setTime(140);
+  device.command(0x2e);
+  assert.equal(device.pixelAt(126, 8, 1000), 1);
+  assert.equal(device.getState().scroll.active, false);
+  assert.equal(framebufferOf(device)[offset(1, 0)], 1, "scrolling never rewrites RAM");
+});
+
+test("SSD1306 diagonal scrolling respects the vertical scroll area and split command arguments", () => {
+  const device = createConnected({ frameRateHz: 100 });
+  const data = new Uint8Array(AliceOledDevice.BUFFER_SIZE);
+  data[offset(0, 0)] = 1;
+  data[offset(1, 0)] = 4;
+  data[offset(3, 0)] = 0x40;
+  device.writeFramebuffer(data);
+  device.command([0xa3, 8]);
+  device.command([16, 0x29, 0, 1, 7]);
+  device.command([2, 2, 0x2f], { timeMs: 50 });
+  assert.equal(device.pixelAt(0, 10, 69), 1);
+  assert.equal(device.pixelAt(1, 8, 70), 1, "one step moves right one column and up two rows");
+  assert.equal(device.pixelAt(0, 0, 70), 1);
+  assert.equal(device.pixelAt(0, 30, 70), 1);
+  assert.equal(device.getState().scroll.verticalOffset, 2);
+});
