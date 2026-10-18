@@ -8,6 +8,8 @@
   var traceChannels = [];
   var traceSamples = [];
   var traceSamplesByPin = Object.create(null);
+  var tracePwmByPin = Object.create(null);
+  var traceTimeMs = 0;
   var lastUartActivityMs = -Infinity;
   var uartActiveUntilMs = -Infinity;
   var MAX_TRACE_SAMPLES = 720;
@@ -63,7 +65,7 @@
     if (kind === "gpio") {
       var gpioPin = String(payload.pin || payload.physicalPin || "").toUpperCase();
       if (root.AliceSchematic && typeof root.AliceSchematic.driveMcuPin === "function") root.AliceSchematic.driveMcuPin(gpioPin, payload.value, { render: false, source: "firmware-worker" });
-      if (tracePins.indexOf(gpioPin) >= 0) appendTraceSample(gpioPin, Number(payload.timeMs != null ? payload.timeMs : payload.time) || 0, payload.value);
+      recordGpioTrace(gpioPin, Number(payload.timeMs != null ? payload.timeMs : payload.time) || 0, payload.value);
       dispatch("alice:firmware-gpio", payload);
       return;
     }
@@ -72,6 +74,7 @@
       var timer = findTimer(currentModel, payload.instance || payload.timer || payload.handle);
       var channel = timer && Array.isArray(timer.channels) ? timer.channels.find(function (item) { return Number(item.channelNumber) === Number(payload.channel); }) : null;
       var pwmEvent = Object.assign({}, payload, timer ? { instance: timer.instance || payload.instance, handle: timer.handle || payload.handle, timerClockHz: timer.clockHz, frequencyHz: payload.frequencyHz != null ? payload.frequencyHz : timer.frequencyHz, pin: payload.pin || channel && channel.pin || "", render: false } : { render: false });
+      recordPwmEvent(pwmEvent);
       var pwmResult = root.AliceSchematic && typeof root.AliceSchematic.driveMcuPwm === "function" ? root.AliceSchematic.driveMcuPwm(pwmEvent) : false;
       pwmEvent.result = pwmResult;
       dispatch("alice:firmware-pwm", pwmEvent);
@@ -127,7 +130,12 @@
 
   function compressTrace(samples) {
     if (root.AliceSimulationAccel && typeof root.AliceSimulationAccel.compressTrace === "function") {
-      return root.AliceSimulationAccel.compressTrace(samples, MAX_TRACE_SAMPLES);
+      var compressed = root.AliceSimulationAccel.compressTrace(samples, MAX_TRACE_SAMPLES);
+      // Compression retains transitions; the final timestamp also matters for
+      // displaying a stable low/high interval after the last PWM edge.
+      var last = samples[samples.length - 1];
+      if (last && (!compressed.length || compressed[compressed.length - 1].timeMs !== last.timeMs)) compressed.push(last);
+      return compressed.slice(-MAX_TRACE_SAMPLES);
     }
     return Array.isArray(samples) ? samples.slice() : [];
   }
@@ -437,6 +445,8 @@
   function chooseTracePin(model) {
     var outputs = modelOutputs(model);
     if (outputs.length) return outputs[0].physicalPin;
+    var pwmPin = modelTimers(model).flatMap(function (timer) { return timer.channels || []; }).find(function (channel) { return /^P[A-Z]\d+$/.test(channel.pin); });
+    if (pwmPin) return pwmPin.pin;
     var pins = Object.keys(model && model.pins || {});
     return pins.find(function (pin) { return /^P[A-Z]\d+$/.test(pin); }) || "";
   }
@@ -456,6 +466,9 @@
       channels.push({ pin: physical, label: String(label || physical), source: source || "GPIO" });
     }
     modelOutputs(model).forEach(function (output) { add(output.physicalPin, output.aliases && output.aliases[0] || output.iocSignal || "GPIO", "GPIO"); });
+    modelTimers(model).forEach(function (timer) {
+      (timer.channels || []).forEach(function (channel) { add(channel.pin, String(timer.instance || timer.handle || "TIM") + " CH" + channel.channelNumber, "PWM"); });
+    });
     modelUarts(model).forEach(function (uart) {
       add(uart.txPin, String(uart.instance || uart.handle || "UART") + " TX", "UART");
       add(uart.rxPin, String(uart.instance || uart.handle || "UART") + " RX", "UART");
@@ -475,6 +488,7 @@
   }
 
   function setTracePinsInternal(pins, clearSamples) {
+    var previousPins = tracePins;
     var requested = Array.isArray(pins) ? pins : [];
     var available = Object.create(null);
     traceChannels.forEach(function (channel) { available[channel.pin] = true; });
@@ -487,12 +501,19 @@
     tracePins = next;
     tracePin = tracePins[0] || "";
     if (clearSamples) clearTraceSamples();
-    else tracePins.forEach(function (pin) { if (!traceSamplesByPin[pin]) traceSamplesByPin[pin] = []; });
+    else tracePins.forEach(function (pin) {
+      if (previousPins.indexOf(pin) < 0) {
+        traceSamplesByPin[pin] = [];
+        if (tracePwmByPin[pin]) tracePwmByPin[pin].sampledUntilMs = traceTimeMs;
+        appendTraceSample(pin, traceTimeMs, traceValue(pin));
+      }
+    });
     traceSamples = tracePin && traceSamplesByPin[tracePin] ? traceSamplesByPin[tracePin] : [];
     return tracePins.slice();
   }
 
   function traceValue(pin) {
+    if (tracePwmByPin[pin]) return pwmTraceValue(tracePwmByPin[pin], traceTimeMs);
     var gpio = runtimeGpioState();
     if (Object.prototype.hasOwnProperty.call(gpio, pin)) return Boolean(gpio[pin]);
     var sample = root.AliceSchematic && typeof root.AliceSchematic.sampleMcuPin === "function"
@@ -502,14 +523,85 @@
   }
 
   function runtimeGpioState() {
-    if (!runtime || typeof runtime.getState !== "function") return {};
-    var state = runtime.getState() || {};
+    var state = workerBridge ? workerState : (runtime && runtime.getState ? runtime.getState() : null);
+    if (!state) return {};
     return state.gpio || state.pins || {};
   }
 
   function recordTrace(timeMs) {
+    traceTimeMs = Number(timeMs) || 0;
     if (!tracePins.length) return;
-    tracePins.forEach(function (pin) { appendTraceSample(pin, Number(timeMs) || 0, traceValue(pin)); });
+    tracePins.forEach(function (pin) {
+      if (tracePwmByPin[pin]) recordPwmTrace(pin, traceTimeMs);
+      else appendTraceSample(pin, traceTimeMs, traceValue(pin));
+    });
+  }
+
+  // PWM hardware keeps toggling while firmware sleeps. Reconstruct its actual
+  // edges from runtime events rather than sampling once per UI/Worker batch.
+  // Phase follows the same absolute simulated clock as schematic PWM sampling.
+  function pwmTraceValue(record, timeMs) {
+    if (!record.active || record.dutyCycle <= 0) return false;
+    if (record.dutyCycle >= 1) return true;
+    if (!(record.frequencyHz > 0)) return record.dutyCycle >= .5;
+    var period = 1000 / record.frequencyHz;
+    var cycles = timeMs / period;
+    var nearest = Math.round(cycles);
+    if (Math.abs(cycles - nearest) <= Number.EPSILON * Math.max(1, Math.abs(cycles)) * 4) cycles = nearest;
+    return timeMs < (Math.floor(cycles) + record.dutyCycle) * period;
+  }
+
+  function recordPwmTrace(pin, timeMs) {
+    var record = tracePwmByPin[pin];
+    if (!record || timeMs < record.sampledUntilMs) return;
+    if (tracePins.indexOf(pin) >= 0) {
+      var start = record.sampledUntilMs;
+      var period = 1000 / record.frequencyHz;
+      if (record.active && record.dutyCycle > 0 && record.dutyCycle < 1 && Number.isFinite(period) && period > 0) {
+        // Skip expired cycles arithmetically. Even a multi-second MHz batch
+        // costs at most the number of edges that can fit in the trace buffer.
+        var cyclesToKeep = Math.floor((MAX_TRACE_SAMPLES - 2) / 2);
+        var recentStart = Math.max(start, timeMs - period * cyclesToKeep);
+        if (recentStart > start) {
+          traceSamplesByPin[pin] = [];
+          start = recentStart;
+        }
+        appendTraceSample(pin, start, pwmTraceValue(record, start));
+        var firstCycle = Math.floor(start / period);
+        for (var index = 0; index <= cyclesToKeep + 1; index++) {
+          var cycle = firstCycle + index;
+          var rise = cycle * period;
+          if (rise > timeMs) break;
+          var fall = (cycle + record.dutyCycle) * period;
+          if (rise > start) appendTraceSample(pin, rise, true);
+          if (fall > start && fall <= timeMs) appendTraceSample(pin, fall, false);
+        }
+      }
+      appendTraceSample(pin, timeMs, pwmTraceValue(record, timeMs));
+    }
+    record.sampledUntilMs = timeMs;
+  }
+
+  function recordPwmEvent(event) {
+    var pin = String(event.pin || "").toUpperCase();
+    if (!/^P[A-Z]\d+$/.test(pin)) return;
+    var timeMs = Number(event.timeMs != null ? event.timeMs : event.time) || 0;
+    recordPwmTrace(pin, timeMs);
+    var frequency = Number(event.frequencyHz);
+    tracePwmByPin[pin] = {
+      active: event.active !== false,
+      dutyCycle: Math.max(0, Math.min(1, Number(event.dutyCycle) || 0)),
+      frequencyHz: Number.isFinite(frequency) ? frequency : 0,
+      sampledUntilMs: timeMs
+    };
+    if (tracePins.indexOf(pin) >= 0) appendTraceSample(pin, timeMs, pwmTraceValue(tracePwmByPin[pin], timeMs));
+  }
+
+  function recordGpioTrace(pin, timeMs, value) {
+    // A normal GPIO write takes the pin back from the timer in the schematic.
+    recordPwmTrace(pin, timeMs);
+    delete tracePwmByPin[pin];
+    if (tracePins.indexOf(pin) >= 0) appendTraceSample(pin, timeMs, value);
   }
 
   function appendTraceSample(pin, timeMs, value) {
@@ -556,7 +648,7 @@
         if (root.AliceSchematic && typeof root.AliceSchematic.driveMcuPin === "function") {
           root.AliceSchematic.driveMcuPin(event.pin, event.value, event);
         }
-        if (tracePins.indexOf(String(event.pin || "").toUpperCase()) >= 0) appendTraceSample(String(event.pin).toUpperCase(), Number(event.timeMs != null ? event.timeMs : event.time) || 0, event.value);
+        recordGpioTrace(String(event.pin || "").toUpperCase(), Number(event.timeMs != null ? event.timeMs : event.time) || 0, event.value);
         dispatch("alice:firmware-gpio", event);
       },
       onGpioRead: function (event) {
@@ -577,6 +669,7 @@
           frequencyHz: event.frequencyHz != null ? event.frequencyHz : timer.frequencyHz,
           pin: event.pin || channel && channel.pin || ""
         } : {});
+        recordPwmEvent(enriched);
         var result = root.AliceSchematic && typeof root.AliceSchematic.driveMcuPwm === "function"
           ? root.AliceSchematic.driveMcuPwm(enriched)
           : false;
@@ -739,6 +832,8 @@
     traceChannels = [];
     traceSamples = [];
     traceSamplesByPin = Object.create(null);
+    tracePwmByPin = Object.create(null);
+    traceTimeMs = 0;
     lastUartActivityMs = -Infinity;
     uartActiveUntilMs = -Infinity;
     var result = await requestSimulationModel(requestPayload);
@@ -810,6 +905,7 @@
   function synchronizePins() {
     var gpio = workerState && workerState.gpio ? workerState.gpio : runtimeGpioState();
     Object.keys(gpio).forEach(function (pin) {
+      if (tracePwmByPin[pin]) return;
       if (root.AliceSchematic && typeof root.AliceSchematic.driveMcuPin === "function") {
         root.AliceSchematic.driveMcuPin(pin, gpio[pin], { render: false, source: "firmware-worker-sync" });
       }
@@ -843,6 +939,7 @@
       return workerBridge.call("reset").then(function (state) {
         workerState = state;
         clearTraceSamples();
+        tracePwmByPin = Object.create(null);
         lastUartActivityMs = -Infinity;
         uartActiveUntilMs = -Infinity;
         recordTrace(state && state.timeMs || 0);
@@ -853,6 +950,7 @@
     }
     var state = requireRuntime().reset();
     clearTraceSamples();
+    tracePwmByPin = Object.create(null);
     lastUartActivityMs = -Infinity;
     uartActiveUntilMs = -Infinity;
     recordTrace(state && state.timeMs || 0);
@@ -951,6 +1049,7 @@
       : (runtime && runtime.getState ? runtime.getState() : { timeMs: 0 });
     return {
       pin: tracePin,
+      timeMs: Number(state && state.timeMs) || 0,
       samples: compressTrace((traceSamplesByPin[tracePin] || traceSamples || []).slice()),
       pins: tracePins.slice(),
       channels: tracePins.map(function (pin) {

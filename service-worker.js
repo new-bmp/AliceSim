@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "alicesim-shell-20261017-st7789-icon";
+const CACHE_NAME = "alicesim-shell-20261018-pwm-trace";
 const APP_SHELL = [
   "./",
   "./index.html",

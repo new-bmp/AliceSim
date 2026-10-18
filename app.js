@@ -1580,6 +1580,12 @@ function drawLogic() {
   const channels = Array.isArray(trace.channels) && trace.channels.length
     ? trace.channels
     : [{ pin: trace.pin || "GPIO", label: trace.pin || "GPIO", samples: trace.samples || [] }];
+  const captured = channels.filter(channel => channel.samples?.length);
+  // All lanes share the interval still retained by every selected channel.
+  // A fast PWM buffer can roll over much sooner than a slow GPIO buffer.
+  const firstTime = Math.max(0, ...captured.map(channel => channel.samples[0].timeMs));
+  const lastTime = Math.max(trace.timeMs || 0, ...captured.map(channel => channel.samples[channel.samples.length - 1].timeMs));
+  const span = lastTime > firstTime ? lastTime - firstTime : 1;
   const laneHeight = h / Math.max(1, channels.length);
   channels.forEach((channel, index) => {
     const samples = channel.samples || [];
@@ -1593,20 +1599,21 @@ function drawLogic() {
     ctx.shadowBlur = 2;
     ctx.beginPath();
     if (samples.length) {
-      const firstTime = samples[0].timeMs;
-      const lastTime = samples[samples.length - 1].timeMs;
-      const span = Math.max(1, lastTime - firstTime);
       let sampleIndex = 0;
-      let previousY = samples[0].value ? high : low;
+      while (sampleIndex + 1 < samples.length && samples[sampleIndex + 1].timeMs <= firstTime) sampleIndex++;
+      let previousY = samples[sampleIndex].value ? high : low;
       ctx.moveTo(0, previousY);
-      for (let x = 1; x <= w; x++) {
-        const targetTime = firstTime + span * x / w;
-        while (sampleIndex + 1 < samples.length && samples[sampleIndex + 1].timeMs <= targetTime) sampleIndex++;
-        const y = samples[sampleIndex].value ? high : low;
-        if (y !== previousY) ctx.lineTo(x, previousY);
+      // Draw every captured transition, including pulses narrower than one
+      // canvas pixel. Sampling the trace once per pixel can erase both edges.
+      for (sampleIndex++; sampleIndex < samples.length; sampleIndex++) {
+        const sample = samples[sampleIndex];
+        const x = Math.max(0, Math.min(w, (sample.timeMs - firstTime) / span * w));
+        const y = sample.value ? high : low;
+        ctx.lineTo(x, previousY);
         ctx.lineTo(x, y);
         previousY = y;
       }
+      ctx.lineTo(w, previousY);
     } else {
       ctx.moveTo(0, low); ctx.lineTo(w, low);
     }
