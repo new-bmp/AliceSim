@@ -1715,6 +1715,10 @@ class AliceSIMHandler(SimpleHTTPRequestHandler):
         self.send_error(404, "Not found")
 
     def do_GET(self):
+        if self.path == "/api/learning/status":
+            from learning_service import status
+            self.send_json(status())
+            return
         if self.path == "/api/health":
             host, port = self.server.server_address[:2]
             self.send_json(
@@ -1739,6 +1743,9 @@ class AliceSIMHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self):
+        if self.path == "/api/learning/respond":
+            self.learning_response()
+            return
         if self.path not in {
             "/api/clang-check",
             "/api/sim-model",
@@ -1819,6 +1826,35 @@ class AliceSIMHandler(SimpleHTTPRequestHandler):
             elif datasheet_request:
                 error_payload["ok"] = False
             self.send_json(error_payload, status=400)
+
+    def learning_response(self):
+        from learning_service import LearningError, MAX_REQUEST_BYTES as learning_limit, respond
+        try:
+            origin = self.headers.get("Origin", "")
+            if origin and not re.fullmatch(r"https?://(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?", origin, re.IGNORECASE):
+                # Also support a deployed same-origin AliceSIM instance.
+                from urllib.parse import urlsplit
+                if urlsplit(origin).netloc != self.headers.get("Host", ""):
+                    raise LearningError("AI_ORIGIN_DENIED", "AI 请求必须来自 AliceSIM 工作台。", 403)
+            if self.headers.get_content_type() != "application/json":
+                raise LearningError("AI_BAD_REQUEST", "AI 请求必须使用 application/json。", 415)
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                raise LearningError("AI_BAD_REQUEST", "请求长度无效。") from None
+            if length <= 0 or length > learning_limit:
+                raise LearningError("AI_REQUEST_TOO_LARGE", "学习请求为空或超过 512 KiB。", 413)
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                raise LearningError("AI_BAD_REQUEST", "请求不是有效的 JSON。") from None
+            self.send_json(respond(payload))
+        except LearningError as exc:
+            self.send_json({"ok": False, "code": exc.code, "detail": str(exc)}, status=exc.status)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception:
+            self.send_json({"ok": False, "code": "AI_INTERNAL_ERROR", "detail": "AI 请求处理失败，请检查后端服务。"}, status=500)
 
     def send_json(self, payload: dict, status: int = 200):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

@@ -1721,5 +1721,14 @@ window.AliceEditorHost = Object.freeze({
   runDiagnostics
 });
 
+window.AliceLearningEvidence = Object.freeze({
+  getSnapshot() {
+    return {
+      runtime: { status: state.running ? "RUNNING" : state.runtimeStatus, timeMs: state.circuitTime, built: state.built },
+      diagnostics: state.diagnostics.map(item => ({ severity: item.severity, text: item.message, file: item.file, line: item.line }))
+    };
+  }
+});
+
 setTimeout(() => $("#bootScreen").classList.add("hide"), 1150);
 setTimeout(() => showToast("Alice Engine 就绪 · STM32F103C8T6"), 1550);

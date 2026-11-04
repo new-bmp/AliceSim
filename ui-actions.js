@@ -252,6 +252,7 @@
         circuitPath,
         circuit,
         pageState,
+        learning: window.AliceLearningAssistant?.exportState?.() || null,
         pinout,
         workspace: workspaceSnapshot ? {
           entryPath: workspaceSnapshot.entryPath,
@@ -267,6 +268,7 @@
     }
 
     function applySavedPageState(project) {
+      window.AliceLearningAssistant?.restore?.(project.learning);
       const saved = project?.pageState;
       if (!saved || typeof saved !== "object") return;
       try { if (saved.envelope) window.AliceEnvelopeAutomation?.setState?.(saved.envelope); } catch (_) {}
@@ -1040,6 +1042,7 @@
           if ($("#runButton.running")) $("#runButton").click();
           setProjectName(name, mcuSelect.value);
           activateMainFile(keepInput.checked ? currentCode : createProjectCode(name));
+          window.AliceLearningAssistant?.restore?.(null);
           cacheSmallProject(collectProject());
           toast(`项目 ${name} 已创建`);
           return true;
@@ -1152,6 +1155,7 @@
           });
           activateMainFile(code);
           if (Array.isArray(project.pinout)) applySavedPinout(project.pinout);
+          applySavedPageState(project);
           cacheSmallProject(project);
           markDirty(false);
           toast(`已打开 ${metadata.name}`);
@@ -1322,6 +1326,7 @@
     quickUndo?.addEventListener("click", undoActive);
     quickRedo?.addEventListener("click", redoActive);
     editor.addEventListener("input", recordHistory);
+    document.addEventListener("alice:learning-change", () => markDirty(true));
     window.addEventListener("alice-editor-file-open", handleEditorFileOpen);
     // project-folder.js emits this event for hosts that provide their own
     // editor.  Supporting both events keeps the fallback and host paths in

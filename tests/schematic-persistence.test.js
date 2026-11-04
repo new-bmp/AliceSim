@@ -135,6 +135,19 @@ function sampleCircuit() {
   };
 }
 
+test("learning snapshot exposes actual pins and selection without device buffers or mutation", () => {
+  const api = loadSchematicApi();
+  assert.equal(typeof api.getLearningSnapshot, "function");
+  api.importCircuit(sampleCircuit());
+  const before = api.serializeCircuit();
+  const snapshot = api.getLearningSnapshot();
+  const oled = snapshot.components.find(c => c.type === "oled");
+  assert.ok(oled.pins.some(pin => pin.name === "SDA"));
+  assert.equal(snapshot.components.some(c => c.deviceState), false);
+  snapshot.components[0].value = "modified snapshot";
+  assert.equal(api.serializeCircuit(), before);
+});
+
 function effectCircuit(type, pins, model = {}) {
   const api = loadSchematicApi();
   api.applyProjectModel({ mcu: "STM32F103C8T6", pins: Object.fromEntries(pins.map(([mcu]) => [mcu, { physicalPin: mcu, mode: "output", configured: true }])), outputs: {}, ...model });
