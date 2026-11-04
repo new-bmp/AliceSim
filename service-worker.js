@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "alicesim-shell-20261104-learning";
+const CACHE_NAME = "alicesim-shell-20261104-learning-settings";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -9,6 +9,7 @@ const APP_SHELL = [
   "./learning-core.js",
   "./learning-workspace.js",
   "./learning-assistant.js",
+  "./learning-settings.js",
   "./manifest.webmanifest",
   "./assets/alicesim-app-icon-v2.svg",
   "./assets/pwa/v2/32x32.png",

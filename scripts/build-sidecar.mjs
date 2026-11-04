@@ -49,7 +49,7 @@ await mkdir(binaryDirectory, { recursive: true });
 const dataSeparator = process.platform === "win32" ? ";" : ":";
 const staticFiles = [
   "index.html", "manifest.webmanifest", "service-worker.js", "styles.css", "platform-runtime.js",
-  "learning-assistant.css", "learning-core.js", "learning-workspace.js", "learning-assistant.js",
+  "learning-assistant.css", "learning-core.js", "learning-workspace.js", "learning-assistant.js", "learning-settings.js",
   "clock-tree.js", "envelope-automation.js", "app.js", "datasheet-import.js", "oled-device.js",
   "spi-display-device.js", "light-sensor-device.js", "libdriver-registry.js", "peripheral-catalog.js",
   "peripheral-bus-devices.js", "ds18b20-device.js", "peripheral-audio.js", "peripheral-devices.js", "peripheral-visuals.js", "simulation-accel.js", "schematic.js", "alice-drivers.js", "ui-actions.js",

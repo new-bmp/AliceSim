@@ -1,5 +1,6 @@
 import http.client
 import json
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -17,6 +18,11 @@ else:
 class LearningServiceTests(unittest.TestCase):
     def setUp(self):
         self.assertIsNotNone(service, "AI gateway has not been implemented")
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        config_path = patch.object(service, "config_path", return_value=Path(directory.name) / "learning.json", create=True)
+        config_path.start()
+        self.addCleanup(config_path.stop)
 
     def test_missing_configuration_is_explicit_and_never_fakes_a_response(self):
         with patch.dict("os.environ", {}, clear=True):
@@ -91,6 +97,13 @@ class LearningServiceTests(unittest.TestCase):
 
 
 class LearningHttpTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        config_path = patch.object(service, "config_path", return_value=Path(directory.name) / "learning.json", create=True)
+        config_path.start()
+        self.addCleanup(config_path.stop)
+
     def test_http_routes_reject_cross_origin_and_oversized_requests_without_calling_a_model(self):
         import server
         httpd = server.AliceSIMHTTPServer(("127.0.0.1", 0), server.AliceSIMHandler)

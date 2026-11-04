@@ -14,6 +14,7 @@ const sourceFiles = [
   "learning-core.js",
   "learning-workspace.js",
   "learning-assistant.js",
+  "learning-settings.js",
   "platform-runtime.js",
   "clock-tree.js",
   "envelope-automation.js",

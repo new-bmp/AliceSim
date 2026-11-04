@@ -206,7 +206,7 @@
       <div class="learning-provider"><i></i><span id="learningProvider">检查服务…</span><button type="button" id="learningRefreshStatus" title="重新检查模型连接">刷新</button></div>
       <div class="learning-body">
         <div id="learningWelcome" class="learning-welcome"><h3>让实验成为你的教材。</h3><p>选中一个目标，提出问题。助手结合当前代码、接线和运行记录，给出解释与位置提示。</p></div>
-        <details id="learningSetup" class="learning-details"><summary>模型连接</summary><p id="learningSetupMessage"></p><p>在启动服务前设置：</p><code>ALICESIM_AI_URL<br>ALICESIM_AI_MODEL<br>ALICESIM_AI_KEY</code><p>URL 填完整 Chat Completions 接口。密钥保留在后端；配置完成后重启服务。纯文本模型可设置 ALICESIM_AI_TOOLS=0。</p></details>
+        <details id="learningSetup" class="learning-details"><summary>模型连接</summary><p id="learningSetupMessage"></p><button type="button" id="learningOpenSettings">配置模型</button><p>填写接口地址、模型名称和密钥，保存后直接生效。</p></details>
         <div class="learning-context-head"><span id="learningContextSummary">工程上下文</span><button type="button" id="learningInspect">查看</button></div>
         <details class="learning-details" id="learningTargetDetails"><summary>选择指导目标</summary><input id="learningTargetSearch" type="search" placeholder="搜索元件、引脚或文件" aria-label="搜索指导目标"><select id="learningTarget" aria-label="指导目标"><option value="">整个工程</option></select><div class="learning-mark-actions"><select id="learningStyle" aria-label="标注样式"><option value="circle">画圈</option><option value="arrow">箭头</option><option value="highlight">高亮</option></select><button type="button" id="learningMark">定位标注</button><button type="button" id="learningClearMarks">清除</button></div></details>
         <div id="learningAnnotations" class="learning-annotations"></div><div id="learningMessages" class="learning-messages" aria-live="polite"></div>
@@ -221,6 +221,8 @@
     $("learningAssistantButton")?.addEventListener("click", () => open(panel.hidden));
     $("learningClose").addEventListener("click", () => open(false));
     $("learningRefreshStatus").addEventListener("click", checkStatus);
+    $("learningOpenSettings").addEventListener("click", () => root.AliceLearningSettings?.open());
+    document.addEventListener("alice:learning-configured", () => { cancelRequest(true); checkStatus(); });
     $("learningComposer").addEventListener("submit", event => { event.preventDefault(); ask(); });
     $("learningQuestion").addEventListener("keydown", event => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); ask(); } });
     panel.querySelectorAll("[data-learning-mode]").forEach(button => button.addEventListener("click", () => ask(button.dataset.learningMode)));

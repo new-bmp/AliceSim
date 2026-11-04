@@ -1,0 +1,118 @@
+/* Isolated settings QA: real UI + Python routes + local model fixture; never changes user configuration. */
+"use strict";
+const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const http = require("node:http");
+const os = require("node:os");
+const path = require("node:path");
+const { spawn } = require("node:child_process");
+const { once } = require("node:events");
+const { chromium } = require(process.env.ALICESIM_PLAYWRIGHT_PATH || "playwright");
+const root = path.resolve(__dirname, "..");
+
+(async () => {
+  const temp = await fs.mkdtemp(path.join(os.tmpdir(), "alicesim-settings-qa-"));
+  let browser, backend, modelServer;
+  try {
+    const modelRequests = [];
+    modelServer = http.createServer(async (req, res) => {
+      const chunks = []; for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks));
+      modelRequests.push({ body, auth: req.headers.authorization });
+      if (body.model === "rejected") { res.writeHead(401); res.end("fixture auth error"); return; }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ choices: [{ message: { content: '{"message":"OK","annotations":[]}' } }] }));
+    });
+    modelServer.listen(0, "127.0.0.1"); await once(modelServer, "listening");
+    const modelUrl = `http://127.0.0.1:${modelServer.address().port}/v1/chat/completions`;
+    const env = { ...process.env, ALICESIM_CONFIG_DIR: temp };
+    for (const key of Object.keys(env)) if (key.startsWith("ALICESIM_AI_")) delete env[key];
+    const python = process.env.ALICESIM_PYTHON || path.join(root, process.platform === "win32" ? ".venv/Scripts/python.exe" : ".venv/bin/python");
+    backend = spawn(python, ["-u", "-c", "import server; s=server.AliceSIMHTTPServer(('127.0.0.1',0), server.AliceSIMHandler); print('QA_PORT='+str(s.server_port), flush=True); s.serve_forever()"], { cwd: root, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    const port = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("QA backend startup timed out")), 15000);
+      backend.once("error", reject);
+      backend.once("exit", code => { clearTimeout(timeout); reject(new Error("QA backend exited: " + code)); });
+      let output = "";
+      backend.stdout.on("data", chunk => { output += chunk; const m = /QA_PORT=(\d+)/.exec(output); if (m) { clearTimeout(timeout); resolve(Number(m[1])); } });
+    });
+    const base = `http://127.0.0.1:${port}`;
+    browser = await chromium.launch({ channel: "msedge", headless: true });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: "block" });
+    const page = await context.newPage(); page.setDefaultTimeout(7000);
+    const errors = []; page.on("pageerror", e => errors.push(e.message));
+    await page.goto(base, { waitUntil: "networkidle" });
+    await page.locator("#bootScreen").waitFor({ state: "hidden" });
+    await page.locator("#settingsButton").click();
+    assert.equal(await page.locator("#modelSettingsButton").count(), 1, "The main settings dialog must offer model settings");
+    await page.locator("#modelSettingsButton").click();
+    await page.locator("#learningSettingsDialog[open]").waitFor();
+    await page.waitForFunction(() => !document.getElementById("learningSettingsFields").disabled);
+    await page.locator("#learningModelUrl").fill(modelUrl);
+    await page.locator("#learningModelName").fill("qa-model");
+    await page.locator("#learningModelKey").fill("browser-fixture-secret");
+    assert.equal(await page.locator("#learningModelKey").getAttribute("type"), "password");
+    await page.locator("#learningSettingsTest").click();
+    await page.waitForFunction(() => document.getElementById("learningSettingsNotice").textContent.includes("连接成功"));
+    assert.equal((await (await fetch(base + "/api/learning/status")).json()).configured, false, "Testing must not save the draft");
+    assert.equal(modelRequests.length, 1);
+    assert.equal(modelRequests[0].auth, "Bearer browser-fixture-secret");
+    assert.equal(modelRequests[0].body.messages.at(-1).content.includes("context"), false);
+    await page.locator("#learningSettingsSave").click();
+    await page.waitForFunction(() => document.getElementById("learningSettingsNotice").textContent.includes("已保存"));
+    assert.equal(await page.locator("#learningModelKey").inputValue(), "");
+    await page.locator("#learningSettingsDone").click();
+    await page.locator("#learningAssistantButton").click();
+    await page.waitForFunction(() => !document.getElementById("learningSend").disabled);
+    assert.ok((await page.locator("#learningProvider").innerText()).includes("qa-model"));
+    if (!await page.locator("#learningOpenSettings").isVisible()) await page.locator("#learningSetup summary").click();
+    await page.locator("#learningOpenSettings").click();
+    await page.waitForFunction(() => !document.getElementById("learningSettingsFields").disabled);
+    assert.equal(await page.locator("#learningModelUrl").inputValue(), modelUrl);
+    assert.equal(await page.locator("#learningModelKey").inputValue(), "");
+    await page.locator("#learningModelName").fill("second-model");
+    await page.locator("#learningSettingsSave").click();
+    await page.waitForFunction(() => document.getElementById("learningSettingsNotice").textContent.includes("已保存"));
+    await page.locator("#learningSettingsTest").click();
+    await page.waitForFunction(() => document.getElementById("learningSettingsNotice").textContent.includes("连接成功"));
+    assert.equal(modelRequests.at(-1).auth, "Bearer browser-fixture-secret", "Blank input preserves the saved key");
+    assert.equal(modelRequests.at(-1).body.model, "second-model");
+    await page.locator("#learningModelName").fill("rejected");
+    await page.locator("#learningSettingsTest").click();
+    await page.waitForFunction(() => document.getElementById("learningSettingsNotice").dataset.kind === "error");
+    assert.ok((await page.locator("#learningSettingsNotice").innerText()).includes("认证"));
+    assert.equal((await (await fetch(base + "/api/learning/config")).json()).model, "second-model");
+    await page.locator("#learningModelUrl").fill("https://new.example/v1/chat/completions");
+    await page.locator("#learningSettingsSave").click();
+    await page.waitForFunction(() => document.getElementById("learningSettingsNotice").textContent.includes("重新填写密钥"));
+    assert.equal((await (await fetch(base + "/api/learning/config")).json()).url, modelUrl);
+    await page.locator("#learningModelUrl").fill(modelUrl);
+    await page.locator("#learningModelName").fill("second-model");
+    await page.locator("#learningModelClearKey").check();
+    await page.locator("#learningSettingsSave").click();
+    await page.waitForFunction(() => document.getElementById("learningSettingsNotice").textContent.includes("已保存"));
+    assert.equal((await (await fetch(base + "/api/learning/config")).json()).hasKey, false);
+    assert.equal(await page.evaluate(() => JSON.stringify(window.AliceLearningAssistant.exportState()).includes("browser-fixture-secret")), false);
+    await page.reload({ waitUntil: "networkidle" });
+    await page.locator("#settingsButton").click(); await page.locator("#modelSettingsButton").click();
+    await page.waitForFunction(() => !document.getElementById("learningSettingsFields").disabled);
+    assert.equal(await page.locator("#learningModelName").inputValue(), "second-model");
+    const qa = path.join(root, "output/qa"); await fs.mkdir(qa, { recursive: true });
+    await page.screenshot({ path: path.join(qa, "model-settings-desktop.png") });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const bounds = await page.locator("#learningSettingsDialog").boundingBox();
+    assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 391);
+    assert.ok(bounds.y >= 0 && bounds.y + bounds.height <= 845);
+    await page.screenshot({ path: path.join(qa, "model-settings-mobile.png") });
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator("#learningSettingsDialog").isVisible(), false);
+    assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ ok: true, checks: "both entries, draft connection, save without restart, key preservation and clearing, auth failure, endpoint change, reload, mobile" }));
+    await context.close();
+  } finally {
+    if (browser) await browser.close();
+    if (backend && backend.exitCode === null) { const stopped = once(backend, "exit"); backend.kill(); await stopped; }
+    if (modelServer) await new Promise(resolve => modelServer.close(resolve));
+    await fs.rm(temp, { recursive: true, force: true });
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });

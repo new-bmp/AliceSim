@@ -5,14 +5,20 @@ The gateway returns declarative guidance. It never executes a model tool call.
 import json
 import os
 import socket
+import sys
+import tempfile
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 MAX_REQUEST_BYTES = 512 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_CONFIG_BYTES = 16 * 1024
 _slots = threading.BoundedSemaphore(2)
+_config_lock = threading.RLock()
 
 
 class LearningError(Exception):
@@ -60,19 +66,112 @@ GUIDANCE_TOOL = {
 }
 
 
-def configuration():
-    url = os.environ.get("ALICESIM_AI_URL", "").strip()
-    model = os.environ.get("ALICESIM_AI_MODEL", "").strip()
+def config_path():
+    override = os.environ.get("ALICESIM_CONFIG_DIR", "").strip()
+    if override:
+        directory = Path(override).expanduser()
+    elif sys.platform == "win32":
+        directory = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "AliceSIM"
+    elif sys.platform == "darwin":
+        directory = Path.home() / "Library" / "Application Support" / "AliceSIM"
+    else:
+        directory = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "alicesim"
+    return directory / "learning.json"
+
+
+def _stored_configuration():
+    try:
+        with config_path().open("rb") as source:
+            data = source.read(MAX_CONFIG_BYTES + 1)
+        value = json.loads(data) if len(data) <= MAX_CONFIG_BYTES else None
+        if not isinstance(value, dict) or value.get("version") != 1:
+            raise ValueError("invalid settings")
+        return {**value, "source": "saved"}
+    except FileNotFoundError:
+        return {"url": os.environ.get("ALICESIM_AI_URL", "").strip(), "model": os.environ.get("ALICESIM_AI_MODEL", "").strip(),
+                "key": os.environ.get("ALICESIM_AI_KEY", "").strip(),
+                "tools": os.environ.get("ALICESIM_AI_TOOLS", "1").strip().lower() not in {"0", "false", "off"}, "source": "environment"}
+    except (OSError, ValueError):
+        raise LearningError("AI_CONFIG_READ_FAILED", "无法读取本机模型配置，请重新填写设置和密钥后保存。", 503) from None
+
+
+def _validate_configuration(value):
+    for field, maximum in (("url", 2048), ("model", 200), ("key", 4096)):
+        if not isinstance(value.get(field), str) or len(value[field]) > maximum or any(ord(c) < 32 or ord(c) == 127 for c in value[field]):
+            raise LearningError("AI_BAD_CONFIG", "接口地址、模型名称或密钥格式无效，请检查输入。")
+    if not isinstance(value.get("tools"), bool):
+        raise LearningError("AI_BAD_CONFIG", "工具调用选项必须是开或关。")
+    url, model, key = (value[field].strip() for field in ("url", "model", "key"))
     if not url or not model:
-        raise LearningError("AI_NOT_CONFIGURED", "尚未配置 AI。请设置 ALICESIM_AI_URL 和 ALICESIM_AI_MODEL，并按服务要求设置 ALICESIM_AI_KEY，然后重启 AliceSIM 服务。", 503)
+        raise LearningError("AI_NOT_CONFIGURED", "请打开模型设置，填写完整接口地址和模型名称。", 503)
     try:
         parsed = urllib.parse.urlsplit(url)
         parsed.port  # Validate malformed numeric ports before accepting configuration.
     except ValueError:
         raise LearningError("AI_BAD_CONFIG", "AI 接口地址格式无效，请检查主机名与端口。", 503) from None
-    if parsed.username or parsed.password or parsed.fragment or not parsed.hostname or (parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"})):
+    if parsed.username or parsed.password or parsed.fragment or not parsed.hostname or parsed.path in {"", "/"} or (parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"})):
         raise LearningError("AI_BAD_CONFIG", "AI 地址必须是 HTTPS 的完整 Chat Completions 地址；本机模型可使用 HTTP 回环地址。", 503)
-    return {"url": url, "host": parsed.hostname, "model": model, "key": os.environ.get("ALICESIM_AI_KEY", "").strip(), "tools": os.environ.get("ALICESIM_AI_TOOLS", "1").strip().lower() not in {"0", "false", "off"}}
+    if any(name.lower().replace("-", "_") in {"key", "api_key", "apikey", "token", "access_token", "authorization"} for name, _ in urllib.parse.parse_qsl(parsed.query)):
+        raise LearningError("AI_BAD_CONFIG", "请将密钥填写在 API 密钥栏，不要放在接口地址中。")
+    if not key.isascii():
+        raise LearningError("AI_BAD_CONFIG", "API 密钥应使用服务商提供的原始密钥，不包含中文。")
+    return {"url": url, "host": parsed.hostname, "model": model, "key": key, "tools": value["tools"], "source": value.get("source", "saved")}
+
+
+def configuration():
+    with _config_lock:
+        return _validate_configuration(_stored_configuration())
+
+
+def settings():
+    with _config_lock:
+        try:
+            value = _stored_configuration()
+        except LearningError:
+            value = {}
+        # Credentials are never returned, including a masked or partial key.
+        return {**status(), "url": value.get("url", ""), "model": value.get("model", ""), "tools": value.get("tools", True),
+                "hasKey": bool(value.get("key")), "source": value.get("source", "none")}
+
+
+def _draft_configuration(payload):
+    if not isinstance(payload, dict):
+        raise LearningError("AI_BAD_CONFIG", "模型设置必须是 JSON 对象。")
+    action = payload.get("keyAction", "keep")
+    if action not in {"keep", "replace", "clear"}:
+        raise LearningError("AI_BAD_CONFIG", "密钥操作无效。")
+    key = payload.get("key", "")
+    if action == "keep":
+        old = _stored_configuration()
+        if old.get("key") and str(payload.get("url", "")).strip() != old.get("url", ""):
+            raise LearningError("AI_KEY_REQUIRED", "接口地址已变化，请重新填写密钥，或勾选清除原密钥。")
+        key = old.get("key", "")
+    elif action == "clear":
+        key = ""
+    return _validate_configuration({"url": payload.get("url"), "model": payload.get("model"), "key": key, "tools": payload.get("tools", True), "source": "saved"})
+
+
+def save_configuration(payload):
+    with _config_lock:
+        config = _draft_configuration(payload)
+        path = config_path()
+        temporary = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, prefix=".learning-", suffix=".tmp", delete=False) as target:
+                temporary = Path(target.name)
+                json.dump({"version": 1, **{k: config[k] for k in ("url", "model", "key", "tools")}}, target, ensure_ascii=False)
+                target.flush()
+                os.fsync(target.fileno())
+            # mkstemp permissions protect the file on POSIX; on Windows it inherits the user's profile ACL.
+            os.replace(temporary, path)
+            temporary = None
+        except OSError:
+            raise LearningError("AI_CONFIG_WRITE_FAILED", "模型设置保存失败，请检查本机用户配置目录的写入权限。", 500) from None
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        return settings()
 
 
 def status():
@@ -144,7 +243,20 @@ def respond(payload):
             messages.append({"role": item["role"], "content": item["text"][:6000]})
     mode = payload.get("mode") if payload.get("mode") in {"ask", "explain", "debug", "handout"} else "ask"
     messages.append({"role": "user", "content": json.dumps({"mode": mode, "question": question, "focusTargetId": str(payload.get("focusTargetId", ""))[:500], "context": context}, ensure_ascii=False)})
-    request_body = {"model": config["model"], "messages": messages, "stream": False, "max_tokens": 6000}
+    guidance = _request_model(config, messages)
+    return {"ok": True, "revision": context["revision"], "guidance": guidance, "model": config["model"]}
+
+
+def test_connection(payload):
+    with _config_lock:
+        config = _draft_configuration(payload)
+    start = time.monotonic()
+    _request_model(config, [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": '连接测试。请只返回 {"message":"OK","annotations":[]}，不生成讲义。'}], max_tokens=256, timeout=20)
+    return {"ok": True, "model": config["model"], "latencyMs": round((time.monotonic() - start) * 1000), "detail": "连接成功，模型已返回有效响应。"}
+
+
+def _request_model(config, messages, max_tokens=6000, timeout=60):
+    request_body = {"model": config["model"], "messages": messages, "stream": False, "max_tokens": max_tokens}
     if config["tools"]:
         request_body.update({"tools": [GUIDANCE_TOOL], "tool_choice": "auto"})
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -154,7 +266,7 @@ def respond(payload):
     if not _slots.acquire(blocking=False):
         raise LearningError("AI_BUSY", "AI 服务正在处理其他请求，请稍后重试。", 429)
     try:
-        with urllib.request.build_opener(_NoRedirect).open(request, timeout=60) as response:
+        with urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout) as response:
             data = response.read(MAX_RESPONSE_BYTES + 1)
             if len(data) > MAX_RESPONSE_BYTES:
                 raise LearningError("AI_RESPONSE_TOO_LARGE", "模型响应过大，请缩小问题范围。", 502)
@@ -162,7 +274,7 @@ def respond(payload):
                 guidance = parse_response(json.loads(data))
             except (json.JSONDecodeError, UnicodeDecodeError):
                 raise LearningError("AI_INVALID_RESPONSE", "模型服务没有返回有效 JSON。", 502) from None
-        return {"ok": True, "revision": context["revision"], "guidance": guidance, "model": config["model"]}
+        return guidance
     except urllib.error.HTTPError as exc:
         if exc.code in {401, 403}:
             raise LearningError("AI_AUTH_FAILED", "模型服务拒绝认证，请检查后端 API 密钥和模型权限。", 502) from None

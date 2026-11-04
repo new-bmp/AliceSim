@@ -7,7 +7,7 @@
 - 按用户提问采集工程快照：当前未保存代码、有限的工程源码与 IOC、元件和引脚、连接网络、运行状态、近期诊断/串口、抽样波形。附采集时间、工程修订标识和裁剪说明。
 - 定位目标使用上下文中的 `targetId`。目标可以是元件、端子、导线、源码文件/行范围、波形通道或已注册的界面区域。模型不能提供可执行 JavaScript 或任意 DOM 选择器。
 - 统一指导响应为 `{message, annotations, handout}`。标注包含 `{targetId, style, label, startLine?, endLine?}`，style 为 circle/arrow/highlight。讲义包含 title、sections（heading/body）、exercises。所有响应先验证，再渲染。
-- 模型网关使用后端环境变量配置兼容 Chat Completions 的服务，提供状态和问答接口。API 密钥仅保留在后端；没有配置时明确提示，不生成假模型回答。
+- 模型网关支持在设置窗口连接兼容 Chat Completions 的服务，也兼容启动环境变量。提供设置、连接测试、状态和问答接口。API 密钥仅保留在后端；没有配置时明确提示，不生成假模型回答。
 - 学习助手提供可收起面板、解释/排查/讲义入口、请求取消、目标选择与本地标注、上下文预览、讲义查看/Markdown 和 HTML 导出/打印 PDF。
 - 对话与讲义进入完整项目快照，随项目保存恢复。标注与电路编辑历史分开；切换工程/修改代码后旧请求不能覆盖当前状态。
 
@@ -22,7 +22,7 @@
 3. 工作台接入：通用上下文适配器、跟随画布和窗口的独立标注层、学习面板、讲义和项目持久化。
 4. 回归检查：Node 测试、Python 网关测试、Web 打包、桌面/窄屏浏览器交互，最后 Git 提交。
 
-接口以新模块隔离：`learning-core.js` 负责纯数据；`learning-workspace.js` 负责只读快照和目标定位；`learning-assistant.js`/`learning-assistant.css` 负责交互；`learning_service.py` 负责模型网关。
+接口以新模块隔离：`learning-core.js` 负责纯数据；`learning-workspace.js` 负责只读快照和目标定位；`learning-assistant.js`/`learning-assistant.css` 负责交互；`learning-settings.js` 提供模型设置窗口；`learning_service.py` 负责模型网关和本机配置。
 
 主要验证：变更源码不能重放旧标注；重命名或删除目标不误标其他对象；模型输出及导出讲义不执行 HTML；密钥不进入响应或项目包；没有模型也能查看上下文、标记目标和保存本地实验记录。
 
@@ -40,9 +40,22 @@ Ctrl+S 保存完整工程时，会一起保存对话和最近 8 份讲义；Ctrl
 
 ## 连接模型
 
-后台提供 `GET /api/learning/status` 与 `POST /api/learning/respond`。支持使用标准 `messages`、`tools`、`tool_calls` 的 Chat Completions 接口。可配置华为云 MaaS 的兼容接口或其他兼容服务；具体模型要支持工具调用，且使用服务控制台给出的完整接口地址与模型 ID。
+点击顶部齿轮 → **AI 模型设置**，或者学习助手 → 模型连接 → **配置模型**，填写：
 
-在启动 AliceSIM 的 PowerShell 中设置下面三个环境变量，然后启动服务。若服务已运行，先在原服务窗口按 Ctrl+C 停止再重启，避免启动器复用旧服务。
+1. **接口地址**：服务商提供的完整 Chat Completions URL，不是控制台页面或只有域名的地址。
+2. **模型名称**：服务商要求的 Model ID。
+3. **API 密钥**：仅首次填写或替换时需要输入；已保存时留空保留。无需认证的本机服务可以留空。
+4. **启用工具调用**：支持 `tools`、`tool_calls` 的模型保持开启；不支持时关闭，使用 JSON / 文本回复。
+
+**保存并生效**会立即应用设置，无需重启，并在重新打开软件后保留。**测试连接**只发送少量测试内容，可能产生少量费用，不包含工程，也不会保存未提交的表单。测试通过表示模型已返回有效响应，不代表所有教学回答或工具能力都已验证。
+
+密钥输入框不会回填原值，读取接口只返回是否存在密钥。更换接口地址后，必须重新填写密钥或选择“清除原密钥”，防止向新地址转发旧凭据。设置不会进入工程包、讲义或浏览器存储。
+
+配置保存在运行后端的当前用户目录：Windows 为 `%LOCALAPPDATA%\AliceSIM\learning.json`，macOS 为 `~/Library/Application Support/AliceSIM/learning.json`，Linux 为 `$XDG_CONFIG_HOME/alicesim/learning.json`（默认 `~/.config/alicesim/learning.json`）。这是包含密钥的本机配置文件，不应分享；POSIX 文件仅当前用户可读写，Windows 继承用户目录权限。管理员可通过 `ALICESIM_CONFIG_DIR` 指定专用目录，应位于网站目录和项目目录之外。
+
+后台提供 `GET /api/learning/status`、`POST /api/learning/respond`、`GET/POST /api/learning/config` 和 `POST /api/learning/test`。配置和连接测试接口仅供后端本机访问；远程部署由管理员在后端配置，学生仍可使用已配置的学习助手。兼容接口使用标准 `messages`、`tools`、`tool_calls`；不依赖模型品牌。
+
+也可在启动 AliceSIM 的 PowerShell 中设置下面三个环境变量。**本机保存的配置优先**；没有保存配置时才使用环境变量。更改环境变量需要重启后端。
 
 ```powershell
 $env:ALICESIM_AI_URL = 'https://你的服务主机/完整路径/chat/completions'
@@ -53,7 +66,7 @@ $env:ALICESIM_AI_KEY = '你的API密钥'
 
 本地兼容服务可用 `http://127.0.0.1:端口/v1/chat/completions`，无需密钥时不设置 `ALICESIM_AI_KEY`。远程服务必须使用 HTTPS。服务要求的路径不同，不能把控制台网址或仅有域名的地址填在这里。
 
-若模型不支持工具调用，设置 `$env:ALICESIM_AI_TOOLS = '0'`。模型仍被要求返回同一 JSON 协议；普通文字回答也能显示，但不会被伪造成带标注的指导或讲义。状态“已配置”只表示配置有效，实际连通性在发送问题时验证。
+若模型不支持工具调用，也可在环境配置中设置 `$env:ALICESIM_AI_TOOLS = '0'`。模型仍被要求返回同一 JSON 协议；普通文字回答也能显示，但不会被伪造成带标注的指导或讲义。状态“已配置”只表示配置有效，实际连通性在测试连接或发送问题时验证。
 
 后端单次连接等待上限 60 秒，最多两个并发调用，不会自动重试造成重复计费。前端可取消并丢弃结果；取消浏览器请求不保证上游服务立即停止计算或计费。模型拒绝认证、限流、无效响应和缺失配置分别显示错误。
 
@@ -71,7 +84,7 @@ $env:ALICESIM_AI_KEY = '你的API密钥'
 
 ```powershell
 node --test tests/*.test.js
-.\.venv\Scripts\python.exe -m unittest discover -s tests -p test_learning_service.py
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p 'test_learning*.py'
 node scripts/build-web.mjs
 ```
 
@@ -82,6 +95,8 @@ $env:ALICESIM_QA_URL = 'http://127.0.0.1:4325'
 # Playwright 未在当前项目安装时，将该变量设置到已有 playwright 包的绝对目录。
 $env:ALICESIM_PLAYWRIGHT_PATH = '已有Playwright包目录'
 node tests/learning-browser.cjs
+# 设置界面测试会自行启动隔离后端和本机模型测试服务，不改动用户配置。
+node tests/learning-settings-browser.cjs
 ```
 
 测试中的模型响应由本地固定测试数据提供，生产模式没有演示模型或假回答。真实供应商的质量与兼容性需要在提供凭据后验证。

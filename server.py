@@ -1715,6 +1715,9 @@ class AliceSIMHandler(SimpleHTTPRequestHandler):
         self.send_error(404, "Not found")
 
     def do_GET(self):
+        if self.path == "/api/learning/config":
+            self.learning_settings()
+            return
         if self.path == "/api/learning/status":
             from learning_service import status
             self.send_json(status())
@@ -1743,6 +1746,9 @@ class AliceSIMHandler(SimpleHTTPRequestHandler):
         super().do_GET()
 
     def do_POST(self):
+        if self.path in {"/api/learning/config", "/api/learning/test"}:
+            self.learning_settings()
+            return
         if self.path == "/api/learning/respond":
             self.learning_response()
             return
@@ -1826,6 +1832,44 @@ class AliceSIMHandler(SimpleHTTPRequestHandler):
             elif datasheet_request:
                 error_payload["ok"] = False
             self.send_json(error_payload, status=400)
+
+    def learning_settings(self):
+        from learning_service import LearningError, MAX_CONFIG_BYTES, save_configuration, settings, test_connection
+        from urllib.parse import urlsplit
+        try:
+            # These settings affect the backend user's credentials, so only its local UI may edit them.
+            loopback = {"127.0.0.1", "localhost", "::1"}
+            try:
+                local_host = urlsplit("http://" + self.headers.get("Host", "")).hostname in loopback
+            except ValueError:
+                local_host = False
+            origin = self.headers.get("Origin", "")
+            local_origin = not origin or re.fullmatch(r"https?://(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?", origin, re.IGNORECASE)
+            if self.client_address[0] not in {"127.0.0.1", "::1"} or not local_host or not local_origin:
+                raise LearningError("AI_SETTINGS_LOCAL_ONLY", "模型设置仅能在运行 AliceSIM 后端的本机修改；远程部署请由管理员配置。", 403)
+            if self.command == "GET":
+                self.send_json(settings())
+                return
+            if self.headers.get_content_type() != "application/json":
+                raise LearningError("AI_BAD_REQUEST", "模型设置必须使用 application/json。", 415)
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                raise LearningError("AI_BAD_REQUEST", "请求长度无效。") from None
+            if not 0 < length <= MAX_CONFIG_BYTES:
+                raise LearningError("AI_REQUEST_TOO_LARGE", "模型设置为空或过长。", 413)
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                raise LearningError("AI_BAD_REQUEST", "模型设置不是有效的 JSON。") from None
+            result = test_connection(payload) if self.path.endswith("/test") else save_configuration(payload)
+            self.send_json(result)
+        except LearningError as exc:
+            self.send_json({"ok": False, "code": exc.code, "detail": str(exc)}, status=exc.status)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception:
+            self.send_json({"ok": False, "code": "AI_SETTINGS_ERROR", "detail": "无法处理模型设置，请检查后端服务。"}, status=500)
 
     def learning_response(self):
         from learning_service import LearningError, MAX_REQUEST_BYTES as learning_limit, respond
