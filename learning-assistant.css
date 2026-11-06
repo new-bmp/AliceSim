@@ -48,7 +48,7 @@
 #learningNotice { font-size: 11px; margin: 7px 0 0; min-height: 17px; color: #67808c; overflow-wrap: anywhere; }
 #learningNotice[data-kind="error"] { color: #aa3535; }
 #learningNotice[data-kind="warn"] { color: #966316; }
-.learning-overlay { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none !important; z-index: 1400; overflow: hidden; }
+.learning-overlay { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none !important; z-index: 1400; overflow: hidden; stroke: none; }
 .learning-overlay * { pointer-events: none !important; }
 .learning-ring { fill: none; stroke: #0d9488; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .learning-highlight { fill: #14b8a621; stroke: #0d9488; stroke-width: 2; }
