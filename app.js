@@ -1722,9 +1722,18 @@ window.AliceEditorHost = Object.freeze({
 });
 
 window.AliceLearningEvidence = Object.freeze({
+  async start(signal) {
+    if (signal?.aborted) return false;
+    const envelope = window.AliceEnvelopeAutomation?.getState?.();
+    if (state.envelopeOnly || (envelope?.mode === "envelope" && envelope.lanes?.length)) throw new Error("请先将传感器输入切换为手动模式，再运行学习验收，避免两处同时改变输入。");
+    if (!state.built && !(await buildProject())) throw new Error("当前工程尚未构建成功，请查看构建信息后重试。");
+    if (signal?.aborted) return false;
+    return state.running || await startSimulation();
+  },
+  pause() { if (state.running) stopSimulation({ silent: true }); },
   getSnapshot() {
     return {
-      runtime: { status: state.running ? "RUNNING" : state.runtimeStatus, timeMs: state.circuitTime, built: state.built },
+      runtime: { status: state.running ? "RUNNING" : state.runtimeStatus === "running" ? "PAUSED" : state.runtimeStatus, timeMs: state.circuitTime, built: state.built, error: window.AliceHalSimulator?.getRuntimeState?.()?.error?.message || "" },
       diagnostics: state.diagnostics.map(item => ({ severity: item.severity, text: item.message, file: item.file, line: item.line }))
     };
   }

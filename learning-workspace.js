@@ -28,6 +28,8 @@
     }
     const clear = () => { serial.length = 0; messages.length = 0; observations.length = 0; };
     root.addEventListener?.("alice-project-opened", clear);
+    doc?.addEventListener("alice:firmware-built", clear);
+    doc?.addEventListener("alice:firmware-state", event => { if (event.detail?.status === "idle" && Number(event.detail?.timeMs) === 0) clear(); });
     function capture() {
       const workspace = root.AliceProjectWorkspace?.getState?.() || {};
       const files = workspace.files ? [...workspace.files.entries()].map(([path, record]) => ({ path, content: record.content })) : [];
@@ -40,10 +42,12 @@
         endLine: editor.value.slice(0, editor.selectionEnd).split("\n").length
       } : null;
       const evidence = root.AliceLearningEvidence?.getSnapshot?.() || {};
+      const circuit = root.AliceSchematic?.getLearningSnapshot?.() || {};
       return core.buildContext({ project: { name: workspace.rootName || doc?.getElementById("projectMenu")?.textContent?.replace("●", "").trim() }, files, activeFile, selection,
-        circuit: root.AliceSchematic?.getLearningSnapshot?.() || {}, runtime: evidence.runtime,
+        circuit, runtime: evidence.runtime,
         diagnostics: (evidence.diagnostics || []).concat(messages.filter(m => ["error", "warn"].includes(m.severity))),
-        serial, observations, peripherals: root.AliceHalSimulator?.getSummary?.() || {}, trace: root.AliceHalSimulator?.getTrace?.() || {}, uiTargets: UI_TARGETS });
+        serial, observations, measurements: circuit.measurements || {}, controls: root.AliceSchematic?.getAutomationTargets?.() || [],
+        peripherals: root.AliceHalSimulator?.getSummary?.() || {}, trace: root.AliceHalSimulator?.getTrace?.() || {}, uiTargets: UI_TARGETS });
     }
     const find = (selector, key, value) => [...(doc?.querySelectorAll(selector) || [])].find(el => el.dataset[key] === value);
     function targetElement(target) {
@@ -103,7 +107,7 @@
       }
       return true;
     }
-    return Object.freeze({ capture, rectFor, focus, clear, targets: UI_TARGETS.map(({ id, kind, label }) => ({ id, kind, label })) });
+    return Object.freeze({ capture, rectFor, focus, clear, clearObservations: () => { serial.length = 0; observations.length = 0; }, targets: UI_TARGETS.map(({ id, kind, label }) => ({ id, kind, label })) });
   }
   return Object.freeze({ create, clipRect });
 }));

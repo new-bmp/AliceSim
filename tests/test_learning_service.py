@@ -83,6 +83,24 @@ class LearningServiceTests(unittest.TestCase):
         result = service.parse_response({"choices": [{"message": {"content": "普通说明"}}]})
         self.assertEqual(result["message"], "普通说明")
 
+    def test_coach_requests_carry_declarative_lesson_contract(self):
+        lesson = {"title": "实验", "goal": "验证", "steps": []}
+        with patch.object(service, "configuration", return_value={"model": "test"}), patch.object(service, "_request_model", return_value={"lesson": lesson}) as model:
+            response = service.respond({"question": "带我学 PWM", "mode": "coach", "context": {"revision": "a"}})
+        self.assertEqual(response["guidance"]["lesson"], lesson)
+        messages = model.call_args.args[1]
+        self.assertIn("本地确定性验收", messages[0]["content"])
+        self.assertEqual(json.loads(messages[-1]["content"])["mode"], "coach")
+        self.assertEqual(model.call_args.kwargs["max_tokens"], 12000)
+        parsed = service.parse_response({"choices": [{"message": {"content": json.dumps({"lesson": lesson})}}]})
+        self.assertEqual(parsed["lesson"], lesson)
+
+    def test_truncated_and_filtered_lessons_are_not_accepted(self):
+        for reason, code in [("length", "AI_RESPONSE_TRUNCATED"), ("content_filter", "AI_RESPONSE_FILTERED")]:
+            with self.assertRaises(service.LearningError) as caught:
+                service.parse_response({"choices": [{"finish_reason": reason, "message": {"content": '{"message":"partial"}'}}]})
+            self.assertEqual(caught.exception.code, code)
+
     def test_invalid_request_and_remote_insecure_endpoint_are_rejected(self):
         with self.assertRaises(service.LearningError):
             service.validate_request({"question": "", "context": {"revision": "a"}})

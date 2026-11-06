@@ -6,6 +6,7 @@
   const ns = "http://www.w3.org/2000/svg";
   let panel, overlay, preview, context = null, annotations = [], controller = null, requestSequence = 0, frame = 0, lastDraw = 0, generation = 0;
   let status = { configured: false, detail: "正在检查 AI 服务…" };
+  let coach = null, learningView = "ask", testing = false;
   const $ = id => document.getElementById(id);
   const notify = (message, kind = "") => { if ($("learningNotice")) { $("learningNotice").textContent = message; $("learningNotice").dataset.kind = kind; } };
   const changed = () => document.dispatchEvent(new CustomEvent("alice:learning-change"));
@@ -21,7 +22,7 @@
       item.append(element("small", "", m.role === "user" ? "我" : "学习助手"), element("p", "", m.text)); return item;
     }));
     $("learningMessages").hidden = !saved.messages.length;
-    $("learningWelcome").hidden = Boolean(saved.messages.length);
+    $("learningWelcome").hidden = Boolean(saved.messages.length) || learningView !== "ask";
     $("learningDocuments").replaceChildren(...saved.handouts.slice().reverse().map(doc => {
       const row = element("div", "learning-document-row");
       row.append(action(doc.title, () => showHandout(doc), "learning-document-title"), element("small", "", doc.origin === "local" ? "实验记录" : "讲义草稿")); return row;
@@ -100,10 +101,11 @@
   }
   function setBusy(busy) {
     if (!panel) return;
-    $("learningSend").disabled = busy || !status.configured;
+    $("learningSend").disabled = busy || testing || !status.configured;
     $("learningCancel").hidden = !busy;
     $("learningComposer").setAttribute("aria-busy", String(busy));
-    for (const button of panel.querySelectorAll("[data-learning-mode]")) button.disabled = busy || !status.configured;
+    for (const button of panel.querySelectorAll("[data-learning-mode]")) button.disabled = busy || testing || !status.configured;
+    coach?.setBusy(busy || !status.configured);
   }
   async function checkStatus() {
     try {
@@ -118,11 +120,11 @@
     if (!status.configured) $("learningSetup").open = true;
     setBusy(Boolean(controller));
   }
-  async function ask(mode = "ask") {
-    if (controller) return;
+  async function ask(mode = "ask", explicitQuestion = "") {
+    if (controller || testing) return;
     if (!status.configured) { notify("请先配置模型。可以先查看上下文、定位目标或保存本地实验记录。", "warn"); return; }
     const defaults = { explain: "请结合当前工程和选中目标解释工作原理。", debug: "请根据代码、接线和已有诊断帮我排查问题，说明依据和下一步验证方法。", handout: "请根据当前工程和对话制作一份学习讲义，包含原理、实验步骤、观测依据和练习。" };
-    const question = $("learningQuestion").value.trim() || defaults[mode];
+    const question = explicitQuestion || $("learningQuestion").value.trim() || defaults[mode];
     if (!question) { $("learningQuestion").focus(); return; }
     const captured = refreshTargets(), history = session.export().messages;
     const token = session.begin(captured), seq = ++requestSequence, projectGeneration = generation;
@@ -142,6 +144,10 @@
       const result = session.accept(token, workspace.capture().revision, payload.guidance);
       if (!result) { notify("工程已发生变化，本次回答已失效。请基于当前工程重新提问。", "warn"); return; }
       applyAnnotations(result.annotations, captured);
+      if (["coach", "challenge"].includes(mode)) {
+        if (!result.lesson) throw new Error("模型没有返回完整学习任务，请重新规划或换一个更具体的目标。");
+        coach.setPlan(result.lesson);
+      }
       if (result.handout) { const handout = core.createHandout(result.handout, captured); session.addHandout(handout); showHandout(handout); }
       renderHistory(); changed(); $("learningQuestion").value = "";
       notify(result.rejected.length ? `${result.rejected.length} 处无效标注已忽略；其余内容已显示。` : "已根据提问时的工程快照生成指导。", result.rejected.length ? "warn" : "");
@@ -193,27 +199,51 @@
     if (value) { refreshTargets(); checkStatus(); } else $("learningAssistantButton")?.focus();
   }
   function invalidate() {
+    coach?.invalidate();
     if (context && workspace.capture().revision === context.revision) return;
     clearAnnotations();
     if (controller) { cancelRequest(true); notify("工程已修改，请基于当前内容重新提问。", "warn"); }
   }
-  function restore(saved) { cancelRequest(true); clearAnnotations(); generation++; session.restore(saved); renderHistory(); if (panel && !panel.hidden) refreshTargets(); }
-  root.AliceLearningAssistant = Object.freeze({ open, exportState: () => session.export(), restore, clearAnnotations, capture: () => workspace.capture() });
+  function setView(view) {
+    learningView = ["coach", "challenge"].includes(view) ? view : "ask";
+    panel.dataset.view = learningView;
+    panel.querySelectorAll("[data-learning-view]").forEach(b => b.setAttribute("aria-selected", String(b.dataset.learningView === learningView)));
+    $("learningCoach").hidden = learningView === "ask";
+    $("learningMessages").hidden = learningView !== "ask" || !session.export().messages.length;
+    $("learningWelcome").hidden = learningView !== "ask" || Boolean(session.export().messages.length);
+    $("learningComposer").classList.toggle("coach-mode", learningView !== "ask");
+    if (learningView !== "ask") coach?.setMode(learningView);
+  }
+  function restore(saved) { cancelRequest(true); clearAnnotations(); generation++; session.restore(saved); coach?.restore(saved?.coach); renderHistory(); setView(saved?.coach?.plan ? saved.coach.mode : "ask"); if (panel && !panel.hidden) refreshTargets(); }
+  root.AliceLearningAssistant = Object.freeze({ open, exportState: () => ({ ...session.export(), coach: coach?.exportState() || null }), restore, clearAnnotations, capture: () => workspace.capture() });
   function mount() {
     if (panel) return;
     panel = element("aside", "learning-panel"); panel.id = "learningPanel"; panel.hidden = true; panel.setAttribute("aria-label", "AI 学习助手");
     panel.innerHTML = `<header class="learning-heading"><div><span>ALICE / LEARN</span><h2>学习助手</h2></div><button type="button" id="learningClose" aria-label="收起学习助手">×</button></header>
       <div class="learning-provider"><i></i><span id="learningProvider">检查服务…</span><button type="button" id="learningRefreshStatus" title="重新检查模型连接">刷新</button></div>
+      <div class="learning-tabs" role="tablist" aria-label="学习方式"><button type="button" role="tab" data-learning-view="ask" aria-selected="true">问问题</button><button type="button" role="tab" data-learning-view="coach" aria-selected="false">跟着做</button><button type="button" role="tab" data-learning-view="challenge" aria-selected="false">挑战练习</button></div>
       <div class="learning-body">
         <div id="learningWelcome" class="learning-welcome"><h3>让实验成为你的教材。</h3><p>选中一个目标，提出问题。助手结合当前代码、接线和运行记录，给出解释与位置提示。</p></div>
         <details id="learningSetup" class="learning-details"><summary>模型连接</summary><p id="learningSetupMessage"></p><button type="button" id="learningOpenSettings">配置模型</button><p>填写接口地址、模型名称和密钥，保存后直接生效。</p></details>
         <div class="learning-context-head"><span id="learningContextSummary">工程上下文</span><button type="button" id="learningInspect">查看</button></div>
         <details class="learning-details" id="learningTargetDetails"><summary>选择指导目标</summary><input id="learningTargetSearch" type="search" placeholder="搜索元件、引脚或文件" aria-label="搜索指导目标"><select id="learningTarget" aria-label="指导目标"><option value="">整个工程</option></select><div class="learning-mark-actions"><select id="learningStyle" aria-label="标注样式"><option value="circle">画圈</option><option value="arrow">箭头</option><option value="highlight">高亮</option></select><button type="button" id="learningMark">定位标注</button><button type="button" id="learningClearMarks">清除</button></div></details>
-        <div id="learningAnnotations" class="learning-annotations"></div><div id="learningMessages" class="learning-messages" aria-live="polite"></div>
+        <div id="learningAnnotations" class="learning-annotations"></div><section id="learningCoach" hidden aria-label="实验陪练"></section><div id="learningMessages" class="learning-messages" aria-live="polite"></div>
         <details class="learning-details"><summary>讲义与记录 <span id="learningDocumentCount">0</span></summary><div id="learningDocuments"></div><button type="button" id="learningLocalRecord">保存本地实验记录</button><p>对话与讲义随“保存项目”保存，也可单独下载讲义。</p></details>
       </div>
       <form id="learningComposer" class="learning-composer"><div class="learning-quick"><button type="button" data-learning-mode="explain">解释这里</button><button type="button" data-learning-mode="debug">带我排查</button><button type="button" data-learning-mode="handout">生成讲义</button></div><textarea id="learningQuestion" rows="3" maxlength="8000" placeholder="例如：这段程序和电路是怎样配合的？" aria-label="学习问题"></textarea><div class="learning-send-row"><small>发送时附带当前工程快照</small><button type="button" id="learningCancel" hidden>取消</button><button type="submit" id="learningSend">发送 ↗</button></div><p id="learningNotice" role="status"></p></form>`;
     document.body.append(panel);
+    coach = root.AliceLearningCoach.create({ host: $("learningCoach"), capture: () => workspace.capture(), changed, notify,
+      request: (mode, question) => ask(mode, question), mark: applyAnnotations,
+      setTesting: value => { testing = value; setBusy(Boolean(controller)); },
+      record: (raw, captured) => { const doc = core.createHandout(raw, captured); session.addHandout(doc); renderHistory(); changed(); showHandout(doc); }
+    });
+    panel.querySelectorAll("[data-learning-view]").forEach(b => b.addEventListener("click", () => setView(b.dataset.learningView)));
+    panel.querySelector(".learning-tabs").addEventListener("keydown", event => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault(); const tabs = [...panel.querySelectorAll("[data-learning-view]")], current = tabs.indexOf(document.activeElement);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (Math.max(0, current) + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
+      tabs[next].focus(); setView(tabs[next].dataset.learningView);
+    });
     overlay = svgNode("svg", { class: "learning-overlay", "aria-hidden": "true" }); document.documentElement.append(overlay);
     preview = element("dialog", "learning-handout"); preview.id = "learningHandout";
     preview.innerHTML = `<header><strong id="learningHandoutTitle">学习讲义</strong><div><button type="button" id="learningHandoutMd">Markdown</button><button type="button" id="learningHandoutHtml">HTML</button><button type="button" id="learningHandoutPrint">打印 / PDF</button><button type="button" id="learningHandoutClose" aria-label="关闭讲义">×</button></div></header><iframe id="learningHandoutFrame" title="学习讲义预览" sandbox="allow-same-origin allow-modals"></iframe>`;

@@ -1,9 +1,9 @@
 (function (root, factory) {
   "use strict";
-  const api = factory();
+  const api = factory(typeof module === "object" && module.exports ? require("./learning-lab.js") : root.AliceLearningLab);
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.AliceLearningCore = api;
-}(typeof window !== "undefined" ? window : globalThis, function () {
+}(typeof window !== "undefined" ? window : globalThis, function (lab) {
   "use strict";
   const list = value => Array.isArray(value) ? value : [];
   const text = (value, max = 1200) => typeof value === "string" ? value.slice(0, max) : "";
@@ -87,6 +87,8 @@
       activeFile: text(active.path, 500), selection: input.selection ? { path: text(input.selection.path, 500), startLine: number(input.selection.startLine), endLine: number(input.selection.endLine) } : null,
       files, circuit: { components, wires, nets, netsAvailable: circuit.netsAvailable !== false && Array.isArray(circuit.nets) }, targets,
       peripherals: boundedData(input.peripherals || {}), observations: boundedData(list(input.observations).slice(-20)),
+      controls: list(input.controls).slice(0, 80).map(c => ({ id: text(c.id, 200), componentId: text(c.componentId, 100), label: text(c.label, 160), unit: text(c.unit, 30), min: number(c.min), max: number(c.max), value: number(c.value) })),
+      measurements: boundedData(input.measurements || {}),
       runtime: { status: text(input.runtime?.status, 80) || "未运行", timeMs: number(input.runtime?.timeMs), built: Boolean(input.runtime?.built), error: text(input.runtime?.error, 2000) },
       diagnostics: list(input.diagnostics).filter(Boolean).slice(-30).map(d => ({ severity: text(d.severity, 40), text: text(d.text || d.message, 2000), file: text(d.file, 500), line: number(d.line) })),
       serial: list(input.serial).filter(Boolean).slice(-30).map(s => ({ instance: text(s.instance, 80), text: text(s.text, 1000), timeMs: number(s.timeMs) })),
@@ -110,8 +112,9 @@
     }
     const handout = raw.handout && typeof raw.handout === "object" ? normalizeHandoutBody(raw.handout) : null;
     const message = text(raw.message, 16000);
-    if (!message && !annotations.length && !handout) throw new Error("模型没有返回可显示的指导内容");
-    return { message, annotations, handout, rejected, revision: context.revision };
+    const lesson = raw.lesson && lab ? lab.normalizePlan(raw.lesson, context) : null;
+    if (!message && !annotations.length && !handout && !lesson) throw new Error("模型没有返回可显示的指导内容");
+    return { message, annotations, handout, lesson, rejected, revision: context.revision };
   }
   function normalizeHandoutBody(raw = {}) {
     return { title: text(raw.title, 180) || "实验学习记录", sections: list(raw.sections).slice(0, 12).map(s => ({ heading: text(s?.heading, 180), body: text(s?.body, 6000) })), exercises: list(raw.exercises).slice(0, 8).map(s => text(s, 1500)) };

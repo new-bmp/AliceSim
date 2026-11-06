@@ -13,6 +13,7 @@ const base = process.env.ALICESIM_QA_URL || "http://127.0.0.1:4325";
   const errors = [];
   page.on("pageerror", e => errors.push(e.message));
   try {
+    await page.route("**/api/learning/status", route => route.fulfill({ json: { configured: false, detail: "隔离测试：未配置模型" } }));
     await page.goto(base, { waitUntil: "networkidle" });
     await page.locator("#bootScreen").waitFor({ state: "hidden" });
     await page.locator("#learningAssistantButton").click();

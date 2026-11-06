@@ -7078,6 +7078,7 @@
       snapshot.selection = schematicState.selection ? Object.assign({}, schematicState.selection) : null;
       // Capture the last solved nets without driving devices or advancing time.
       snapshot.netsAvailable = Boolean(schematicState.compiledNetlist);
+      snapshot.measurements = { pwm: Object.fromEntries(schematicState.mcuPwm) };
       snapshot.nets = (schematicState.compiledNetlist && schematicState.compiledNetlist.nets || []).map(function (net) {
         return { id: net.id, endpoints: net.endpoints.map(function (endpoint) { return Object.assign({}, endpoint); }),
           voltage: net.voltage, level: net.level, floating: net.floating, conflict: net.conflict, analogConflict: net.analogConflict };
