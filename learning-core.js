@@ -113,8 +113,16 @@
     const handout = raw.handout && typeof raw.handout === "object" ? normalizeHandoutBody(raw.handout) : null;
     const message = text(raw.message, 16000);
     const lesson = raw.lesson && lab ? lab.normalizePlan(raw.lesson, context) : null;
-    if (!message && !annotations.length && !handout && !lesson) throw new Error("模型没有返回可显示的指导内容");
-    return { message, annotations, handout, lesson, rejected, revision: context.revision };
+    const interaction = normalizeInteraction(raw.interaction);
+    const followUps = [...new Set(list(raw.followUps).map(s => text(s, 120).trim()).filter(Boolean))].slice(0, 3);
+    if (!message && !annotations.length && !handout && !lesson && !interaction) throw new Error("模型没有返回可显示的指导内容");
+    return { message, annotations, handout, lesson, interaction, followUps, rejected, revision: context.revision };
+  }
+  function normalizeInteraction(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const question = text(raw.question, 600).trim();
+    if (!question) return null;
+    return { question, choices: [...new Set(list(raw.choices).map(s => text(s, 180).trim()).filter(Boolean))].slice(0, 4) };
   }
   function normalizeHandoutBody(raw = {}) {
     return { title: text(raw.title, 180) || "实验学习记录", sections: list(raw.sections).slice(0, 12).map(s => ({ heading: text(s?.heading, 180), body: text(s?.body, 6000) })), exercises: list(raw.exercises).slice(0, 8).map(s => text(s, 1500)) };
@@ -160,10 +168,17 @@
     return `<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(doc.title)}</title><style>body{max-width:880px;margin:36px auto;padding:0 24px;color:#243b53;font:16px/1.8 system-ui,sans-serif}h1{font-size:30px}h2{margin-top:32px;font-size:21px}p{white-space:pre-wrap}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f5f9;padding:16px;border-radius:8px;font:13px/1.7 monospace}small{color:#627d98}svg{width:100%;max-height:600px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #d9e2ec;padding:6px;text-align:left}@media print{body{margin:0;max-width:none}pre,svg{break-inside:avoid}}</style></head><body><small>AliceSIM · ${doc.origin === "local" ? "本地实验记录" : "AI 学习讲义草稿"}</small><h1>${escape(doc.title)}</h1><p>${escape(e.project)} · ${escape(e.capturedAt)}<br>修订 ${escape(e.revision)}</p>${doc.sections.map(s => `<h2>${escape(s.heading)}</h2><p>${escape(s.body)}</p>`).join("")}${doc.exercises.length ? "<h2>继续练习</h2><ol>" + doc.exercises.map(s => `<li>${escape(s)}</li>`).join("") + "</ol>" : ""}<h2>采集时的证据</h2><p>运行状态：${escape(e.runtime?.status)} · ${number(e.runtime?.timeMs)} ms</p>${circuitSvg(e.circuit)}${list(e.circuit?.wires).length ? "<table><tr><th>起点（元件 ID / 端子）</th><th>终点（元件 ID / 端子）</th></tr>" + list(e.circuit.wires).map(w => `<tr><td>${escape(w.from.componentId)} / ${escape(w.from.pin)}</td><td>${escape(w.to.componentId)} / ${escape(w.to.pin)}</td></tr>`).join("") + "</table>" : ""}${list(e.files).map(f => `<h2>${escape(f.path)}${f.truncated ? "（节选）" : ""}</h2>${pre(f.content)}`).join("")}${list(e.serial).length ? "<h2>串口记录</h2>" + pre(e.serial.map(s => `[${s.timeMs} ms ${s.instance}] ${s.text}`).join("\n")) : ""}${list(e.diagnostics).length ? "<h2>诊断记录</h2>" + pre(e.diagnostics.map(d => d.text).join("\n")) : ""}<h2>观测边界</h2><ul>${list(e.limitations).concat(list(e.omissions)).map(s => `<li>${escape(s)}</li>`).join("")}</ul></body></html>`;
   }
   function createSession() {
-    let sequence = 0, pending = null, messages = [], handouts = [];
-    function addMessage(role, value) {
+    let sequence = 0, messageSequence = 0, pending = null, messages = [], handouts = [];
+    function addMessage(role, value, extra = {}) {
       if (!["user", "assistant"].includes(role)) return;
-      messages.push({ role, text: text(value, 16000) }); messages = messages.slice(-40);
+      const message = { id: "message-" + ++messageSequence, role, text: text(value, 16000) };
+      if (role === "assistant") {
+        message.revision = text(extra.revision, 100);
+        message.interaction = normalizeInteraction(extra.interaction);
+        if (message.interaction && typeof extra.interaction.answer === "string") message.interaction.answer = text(extra.interaction.answer, 2000);
+        message.followUps = [...new Set(list(extra.followUps).map(s => text(s, 120).trim()).filter(Boolean))].slice(0, 3);
+      }
+      messages.push(message); messages = messages.slice(-40);
     }
     function addHandout(doc) { handouts.push(doc); handouts = handouts.slice(-8); }
     return {
@@ -172,15 +187,20 @@
       accept(id, revision, raw) {
         if (!pending || id !== pending.id || pending.revision !== revision) return false;
         const result = normalizeGuidance(raw, pending.context); pending = null;
-        if (result.message) addMessage("assistant", result.message);
+        if (result.message || result.interaction) addMessage("assistant", result.message, result);
         return result;
       },
       addMessage, addHandout,
+      answerInteraction(id, answer) {
+        const message = messages.at(-1);
+        if (!message || message.id !== id || !message.interaction || message.interaction.answer != null) return false;
+        message.interaction.answer = text(answer, 2000); return true;
+      },
       export() { return JSON.parse(JSON.stringify({ version: 1, messages, handouts })); },
       restore(value) {
         pending = null; sequence++; messages = []; handouts = [];
         if (value?.version !== 1) return;
-        list(value.messages).slice(-40).forEach(m => addMessage(m?.role, m?.text));
+        list(value.messages).slice(-40).forEach(m => addMessage(m?.role, m?.text, m || {}));
         for (const h of list(value.handouts).slice(-8)) {
           if (!h || typeof h !== "object") continue;
           const e = h.evidence || {};

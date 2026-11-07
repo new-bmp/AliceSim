@@ -1,4 +1,11 @@
 """Declarative teaching tasks. The model describes checks; only the client measures them."""
+INTERACTION_SCHEMA = {
+    "type": "object", "properties": {
+        "question": {"type": "string", "maxLength": 600},
+        "choices": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 180}},
+    }, "required": ["question", "choices"], "additionalProperties": False,
+}
+
 CHECK_SCHEMA = {
     "type": "object",
     "properties": {

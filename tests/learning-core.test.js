@@ -134,3 +134,27 @@ test("session ignores cancelled or superseded responses and safely bounds persis
   assert.equal(session.export().messages.length, 0);
   assert.equal(session.export().version, 1);
 });
+
+test("interactive questions are bounded plain data and cannot carry executable choices or grades", () => {
+  const context = core.buildContext(fixture());
+  const result = core.normalizeGuidance({ interaction: { question: "先预测结果", choices: [null, { code: "run()" }, "变大", "变大", "<script>doBad()</script>", "不变", "变小", "多余选项"], correctIndex: 0 }, followUps: [null, "为什么", "为什么", "怎样验证", "换个例子", "多余"] }, context);
+  assert.deepEqual(result.interaction, { question: "先预测结果", choices: ["变大", "<script>doBad()</script>", "不变", "变小"] });
+  assert.deepEqual(result.followUps, ["为什么", "怎样验证", "换个例子"]);
+  assert.equal(core.normalizeGuidance({ message: "继续", interaction: { question: null, choices: "invalid" } }, context).interaction, null);
+});
+
+test("an answer is attached only once to the latest question and survives project restoration", () => {
+  const context = core.buildContext(fixture()), session = core.createSession();
+  session.accept(session.begin(context), context.revision, { message: "先想一想", interaction: { question: "输出怎样变化？", choices: ["上升", "下降"] }, followUps: ["看哪里？"] });
+  const message = session.export().messages[0];
+  assert.equal(session.answerInteraction("wrong", "上升"), false);
+  assert.equal(session.answerInteraction(message.id, "上升"), true);
+  assert.equal(session.answerInteraction(message.id, "下降"), false);
+  session.addMessage("user", "我认为上升");
+  const restored = core.createSession(); restored.restore(session.export());
+  const saved = restored.export().messages[0];
+  assert.equal(saved.interaction.answer, "上升");
+  assert.equal(saved.revision, context.revision);
+  assert.deepEqual(saved.followUps, ["看哪里？"]);
+  assert.equal(restored.answerInteraction(saved.id, "下降"), false);
+});

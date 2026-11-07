@@ -76,6 +76,15 @@
 .coach-finish { padding: 16px; border-radius: 12px; color: #176951; background: #e1f4e8; margin: 14px 0; }
 .coach-finish p { margin: 6px 0 0; font-size: 12px; }
 .coach-save-record { width: 100%; margin: 4px 0 12px; }
+.coach-dialogue { padding: 11px; border-radius: 10px; background: #edf7f5; margin: 12px 0; }
+.coach-dialogue > strong { font-size: 11px; color: #226d61; }
+.coach-dialogue-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.coach-dialogue-actions button { font-size: 11px; padding: 6px 8px; border-color: #c7ded5; }
+.coach-reflection { margin: 13px 0; border: 1px solid #e6d9bc; background: #fffaf0; border-radius: 10px; padding: 12px; color: #785d30; }
+.coach-reflection[data-status="pass"] { background: #edf9f2; border-color: #c5e5d4; color: #246b52; }
+.coach-reflection strong { font-size: 12px; }
+.coach-reflection p { font-size: 11px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.coach-reflection button { margin-top: 9px; font-size: 11px; }
 @media (min-width:1200px) { body.learning-open:has(.learning-panel[data-view="coach"]) .app-shell, body.learning-open:has(.learning-panel[data-view="challenge"]) .app-shell { width: calc(111.111111vw - 478px); } }
 @media (max-width:700px) { .learning-panel[data-view="coach"], .learning-panel[data-view="challenge"] { width: min(450px, calc(111.111111vw - 20px)); } .coach-intro h3 { font-size: 19px; } .coach-task { padding: 12px; } }
 @media (prefers-reduced-motion: reduce) { .coach-progress-track > div { transition: none; } }

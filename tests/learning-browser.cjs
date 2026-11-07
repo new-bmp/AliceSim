@@ -19,6 +19,10 @@ const base = process.env.ALICESIM_QA_URL || "http://127.0.0.1:4325";
     await page.locator("#learningAssistantButton").click();
     await page.waitForFunction(() => document.getElementById("learningProvider").textContent.includes("尚未"));
     assert.equal(await page.locator("#learningSend").isDisabled(), true);
+    await page.locator('[data-learning-view="coach"]').click();
+    assert.equal(await page.locator(".coach-goal-form button").innerText(), "生成学习任务");
+    assert.equal(await page.locator(".coach-goal-form button").isDisabled(), true);
+    await page.locator('[data-learning-view="ask"]').click();
     const project = JSON.parse(await fs.readFile(path.join(__dirname, "../tutorials/projects/Learning02_Servo.alice.json"), "utf8"));
     await page.evaluate(async p => {
       await window.AliceProjectWorkspace.loadFiles(p.files, p.project.name);

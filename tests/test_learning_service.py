@@ -101,6 +101,20 @@ class LearningServiceTests(unittest.TestCase):
                 service.parse_response({"choices": [{"finish_reason": reason, "message": {"content": '{"message":"partial"}'}}]})
             self.assertEqual(caught.exception.code, code)
 
+    def test_interactive_round_trip_preserves_the_question_and_student_step_context(self):
+        question = {"question": "DMA 为什么停传？", "choices": ["NORMAL", "CIRCULAR"]}
+        guidance = {"message": "先核对模式", "interaction": question, "followUps": ["怎样确认计数器？"]}
+        parsed = service.parse_response({"choices": [{"message": {"content": json.dumps(guidance)}}]})
+        self.assertEqual(parsed, guidance)
+        with patch.object(service, "configuration", return_value={"model": "test"}), patch.object(service, "_request_model", return_value={"message": "继续讨论"}) as model:
+            service.respond({"question": "我猜是 NORMAL", "context": {"revision": "a", "learningStep": {"title": "检查模式", "studentPrediction": "只完成一次"}},
+                             "history": [{"role": "assistant", "text": "先观察", "interaction": question}]})
+        messages = model.call_args.args[1]
+        self.assertIn("DMA 为什么停传", messages[1]["content"])
+        self.assertIn("NORMAL / CIRCULAR", messages[1]["content"])
+        self.assertEqual(json.loads(messages[-1]["content"])["context"]["learningStep"]["studentPrediction"], "只完成一次")
+        self.assertIn("interaction", service.GUIDANCE_TOOL["function"]["parameters"]["properties"])
+
     def test_invalid_request_and_remote_insecure_endpoint_are_rejected(self):
         with self.assertRaises(service.LearningError):
             service.validate_request({"question": "", "context": {"revision": "a"}})

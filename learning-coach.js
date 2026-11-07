@@ -8,7 +8,7 @@
   const fmt = v => typeof v === "number" ? Number(v.toFixed(3)).toLocaleString("zh-CN") : String(v ?? "—");
   function create(options) {
     const host = options.host;
-    let mode = "coach", plan = null, index = 0, hints = [], answers = [], results = [], goal = "", busy = false, activeRun = null, progress = null, epoch = 0;
+    let mode = "coach", plan = null, index = 0, hints = [], answers = [], results = [], goal = "", busy = false, available = true, activeRun = null, progress = null, epoch = 0;
     let refreshTimer = null;
     const capture = options.capture;
     const runner = root.AliceLearningRunner.create({ capture, generation: () => epoch,
@@ -59,8 +59,8 @@
       intro.append(node("p", "", mode === "challenge" ? "先独立尝试，遇到困难再逐层查看提示。" : "从你的工程出发，分步操作，用运行结果验证。")); host.append(intro);
       const form = node("form", "coach-goal-form"), label = node("label", "", "这次想学什么？"), input = node("textarea");
       input.id = "coachGoal"; input.rows = 2; input.maxLength = 2000; input.placeholder = "例如：掌握 ADC 控制 PWM，并验证不同输入的输出"; input.value = goal;
-      input.oninput = () => { goal = input.value; }; label.htmlFor = input.id;
-      const generate = node("button", "coach-primary", busy ? "正在规划…" : plan ? "重新规划" : "生成学习任务"); generate.type = "submit"; generate.disabled = busy || Boolean(activeRun);
+      input.oninput = () => { goal = input.value; changed(); }; label.htmlFor = input.id;
+      const generate = node("button", "coach-primary", busy ? "正在规划…" : plan ? "重新规划" : "生成学习任务"); generate.type = "submit"; generate.disabled = busy || !available || Boolean(activeRun);
       form.append(label, input, generate); form.onsubmit = e => { e.preventDefault(); goal = input.value.trim(); if (!goal) { input.focus(); return; } options.request(mode, goal); }; host.append(form);
       if (!plan) {
         const empty = node("div", "coach-empty"); empty.append(node("span", "coach-orbit", "01 → 02 → 03"), node("strong", "", "目标 → 动手 → 验证"), node("p", "", "AI 安排步骤和提示，平台用真实接线、运行参数与串口记录验收。")); host.append(empty); return;
@@ -78,7 +78,19 @@
       card.append(node("p", "coach-instruction", step.instruction));
       if (mode === "challenge") card.append(node("small", "coach-test-note", "先独立完成，需要帮助时再逐层展开提示。"));
       if (step.targetIds.length) card.append(button("◎ 定位相关元件 / 代码", mark, "coach-locate"));
-      if (step.prediction) { const label = node("label", "coach-prediction", step.prediction), field = node("textarea"); field.rows = 2; field.maxLength = 1000; field.placeholder = "先写下你的预期，再对照实测结果…"; field.value = answers[index] || ""; field.onchange = () => { answers[index] = field.value; changed(); }; label.append(field); card.append(label); }
+      if (step.prediction) { const label = node("label", "coach-prediction", step.prediction), field = node("textarea"); field.rows = 2; field.maxLength = 1000; field.placeholder = "先写下你的预期，再对照实测结果…"; field.value = answers[index] || ""; field.oninput = () => { answers[index] = field.value; changed(); }; label.append(field); card.append(label); }
+      const dialogue = node("div", "coach-dialogue");
+      dialogue.append(node("strong", "", "和 Alice 聊聊这一步"));
+      const conversation = node("div", "coach-dialogue-actions");
+      [["我卡住了", "我卡在当前这一步了。请根据已有证据先给一个小提示，问我一个定位原因的问题，暂时不要把完整答案给出来。"],
+        ["换个说法", "这一步我还没理解，请用贴合当前工程的例子重新解释，并用一个小问题确认我的理解。"],
+        ["点评我的预测", "请讨论我对当前步骤的预测：先核对推理依据，指出需要验证的地方，再让我动手确认。不要把预测当成实测。"]].forEach(([label, prompt]) => {
+        const b = button(label, () => {
+          if (label === "点评我的预测" && !answers[index]?.trim()) { host.querySelector(".coach-prediction textarea")?.focus(); options.notify("先写一点你的预测，我才能和你讨论这条思路。"); return; }
+          options.discuss(prompt);
+        }); b.disabled = busy || !available || Boolean(activeRun); conversation.append(b);
+      });
+      dialogue.append(conversation); card.append(dialogue);
       const checks = node("div", "coach-expectations");
       for (const c of step.checks) checks.append(node("p", "", "◇ " + c.label + (Number.isFinite(c.min) ? ` · ${c.min}–${c.max} ${c.unit}` : "")));
       for (const c of step.cases) checks.append(node("p", "", `◇ ${c.label} · ${c.stimuli.map(s => `${s.label} ${s.value}${s.unit}`).join(" / ") || "当前输入"} · ${c.waitMs} ms`));
@@ -86,13 +98,20 @@
       if (progress) { const p = node("div", "coach-running"); p.setAttribute("role", "status"); p.append(node("strong", "", `正在验证 ${progress.index + 1}/${progress.count} · ${progress.label}`)); const meter = node("progress"); meter.max = 1; meter.value = progress.progress; p.append(meter); card.append(p); }
       const result = results[index];
       if (result) {
+        const reflection = node("div", "coach-reflection");
+        const fresh = !result.historical && result.revision === context.revision;
+        reflection.dataset.status = fresh ? result.status : "pending";
+        reflection.append(node("strong", "", !fresh ? "保留这次观察，再验证现在的工程。" : result.status === "pass" ? "这一步的验收条件通过了。" : result.status === "fail" ? "出现了差异，我们从这里找原因。" : result.status === "reviewed" ? "观察已经记下，说说你怎样理解它。" : "还缺一些证据，先确认观察条件。"));
+        if (answers[index]) reflection.append(node("p", "", "你先前的预测：" + answers[index]));
+        const discussResult = button(result.status === "pass" ? "为什么会得到这个结果？" : "一起分析这次结果", () => options.discuss("请结合当前步骤、我的预测和最近验收记录，解释目标与观测之间的关系。如果证据过期或不足，请先指出，并只建议下一项最有价值的验证。"));
+        discussResult.disabled = busy || !available || Boolean(activeRun); reflection.append(discussResult); card.append(reflection);
         if (result.historical || (result.revision !== context.revision && result.status !== "reviewed")) card.append(node("p", "coach-stale", "这是此前的实验记录。工程或运行状态已变化，请重新验收。"));
         if (result.cases?.length) for (const c of result.cases) { card.append(node("h4", "coach-case-title", c.label)); c.results.forEach(r => card.append(resultCard(r))); }
         else (result.results || []).forEach(r => card.append(resultCard(r)));
       }
       const actions = node("div", "coach-actions");
       const verify = button(activeRun ? "取消验收" : step.cases.length ? "▶ 运行验收" : step.checks.length ? "检查这一步" : "记录观察完成", activeRun ? cancel : verifyStep, "coach-primary"); verify.disabled = busy; actions.append(verify);
-      const hint = button(`给我一点提示${hints[index] ? ` · ${hints[index]}/3` : ""}`, () => { hints[index] = Math.min(step.hints.length, (hints[index] || 0) + 1); render(); changed(); }); hint.disabled = Boolean(activeRun) || (hints[index] || 0) >= step.hints.length; actions.append(hint); card.append(actions);
+      const hint = button(`给我一点提示${hints[index] ? ` · ${hints[index]}/${step.hints.length}` : ""}`, () => { hints[index] = Math.min(step.hints.length, (hints[index] || 0) + 1); options.feedback("help", "先看这一条提示，试着验证一个判断。需要时可以继续追问。"); render(); changed(); }); hint.disabled = Boolean(activeRun) || (hints[index] || 0) >= step.hints.length; actions.append(hint); card.append(actions);
       if (step.cases.length) card.append(node("small", "coach-test-note", "验收会临时改变上方输入并推进仿真，完成或取消后恢复输入。原本暂停的仿真将恢复暂停。"));
       step.hints.slice(0, hints[index] || 0).forEach((h, i) => { const row = node("div", "coach-hint"); row.append(node("strong", "", ["01 看哪里", "02 为什么", "03 怎么改"][i]), node("p", "", h)); card.append(row); });
       if (!step.cases.length && !step.checks.length) card.append(node("small", "coach-test-note", "此步骤由你记录观察完成，不计为自动验证。"));
@@ -107,6 +126,7 @@
       const step = plan.steps[index], stepIndex = index, context = capture();
       if (!step.cases.length) {
         results[index] = step.checks.length ? lab.evaluateAll(step.checks, context) : { status: "reviewed", results: [], revision: context.revision };
+        feedback(results[index]);
         render(); changed(); return;
       }
       const controller = new AbortController(), generation = epoch; activeRun = controller;
@@ -118,9 +138,19 @@
           if (container && container.querySelector("progress")) { container.querySelector("progress").value = p.progress; container.querySelector("strong").textContent = `正在验证 ${p.index + 1}/${p.count} · ${p.label}`; }
           else render();
         } });
-        if (generation === epoch && !controller.signal.aborted) { results[stepIndex] = result; changed(); options.notify(result.status === "pass" ? "实测验收通过。可以继续下一步。" : "已完成观测，请对照目标和实测结果。", result.status === "pass" ? "" : "warn"); }
-      } catch (error) { if (generation === epoch) options.notify(error.message, "warn"); }
+        if (generation === epoch && !controller.signal.aborted) { results[stepIndex] = result; feedback(result); changed(); options.notify(result.status === "pass" ? "实测验收通过。可以继续下一步。" : "已完成观测，请对照目标和实测结果。", result.status === "pass" ? "" : "warn"); }
+      } catch (error) { if (generation === epoch) { options.notify(error.message, "warn"); options.feedback("help", "这次验收没有得到完整结论。可以检查条件后再试。"); } }
       finally { if (activeRun === controller) { activeRun = null; progress = null; options.setTesting(false); render(); } }
+    }
+    function feedback(result) {
+      options.feedback(result.status === "pass" ? "success" : result.status === "reviewed" ? "ready" : "help", result.status === "pass" ? "本次验收通过了。试着解释结果，再换一个条件验证。" : result.status === "reviewed" ? "你的观察已记录。愿意说说它和预测有什么联系吗？" : result.status === "fail" ? "实测和目标有差异。我们可以一起找最关键的线索。" : "目前证据还不够。先检查运行状态和观测条件。");
+    }
+    function discussion() {
+      const step = plan?.steps[index]; if (!step) return null;
+      const context = capture(), result = results[index];
+      return { title: step.title, goal: plan.goal, step: index + 1, instruction: step.instruction,
+        predictionQuestion: step.prediction || "", studentPrediction: answers[index] || "", revealedHints: step.hints.slice(0, hints[index] || 0),
+        status: currentStatus(index, context), evidence: result ? { status: result.status, historical: Boolean(result.historical || result.revision !== context.revision), results: result.results, timeMs: result.timeMs } : null };
     }
     function saveRecord() {
       if (!plan) return;
@@ -129,7 +159,7 @@
       plan.steps.forEach((s, i) => { const r = results[i]; sections.push({ heading: `${i + 1}. ${s.title}`, body: [s.instruction, answers[i] ? "我的预测：" + answers[i] : "", `提示使用：${hints[i] || 0} 层`, "完成状态：" + statusText[currentStatus(i, context)], ...(r?.results || []).map(c => `${c.label}：目标 ${c.expected}；实测 ${fmt(c.actual)} ${c.unit}；${statusText[c.status]}。${c.detail}`)].filter(Boolean).join("\n") }); });
       options.record({ title: plan.title + " · 实验记录", origin: "local", sections, exercises: [] }, context);
     }
-    function invalidate() { cancel(); if (!host.hidden && !refreshTimer) refreshTimer = root.setTimeout(() => { refreshTimer = null; if (!activeRun) render(); }, 180); }
+    function invalidate() { cancel(); if (!host.hidden && !refreshTimer) refreshTimer = root.setTimeout(() => { refreshTimer = null; if (!activeRun && !host.querySelector("textarea:focus")) render(); }, 180); }
     function exportState() { return { version: 1, mode, plan, index, hints, answers, results, goal }; }
     function restore(value) {
       cancel(); epoch++; activeRun = null; progress = null; plan = null; results = []; hints = []; answers = []; index = 0; goal = ""; options.setTesting(false);
@@ -152,9 +182,9 @@
       render();
     }
     function setPlan(value) { cancel(); plan = value; index = 0; results = []; hints = []; answers = []; render(); changed(); }
-    return Object.freeze({ render, invalidate, restore, exportState, setPlan, cancel,
+    return Object.freeze({ render, invalidate, restore, exportState, setPlan, cancel, discussion,
       setMode(value) { mode = value === "challenge" ? "challenge" : "coach"; render(); },
-      setBusy(value) { busy = value; if (!host.hidden) render(); },
+      setBusy(value, configured = true) { busy = value; available = configured; if (!host.hidden) render(); },
       hasPlan: () => Boolean(plan)
     });
   }

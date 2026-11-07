@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "alicesim-shell-20261106-learning-coach";
+const CACHE_NAME = "alicesim-shell-20261107-learning-dialogue";
 const APP_SHELL = [
   "./",
   "./index.html",
