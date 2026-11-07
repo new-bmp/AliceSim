@@ -1388,7 +1388,7 @@ function handleIoc(file) {
   reader.readAsText(file);
 }
 
-document.addEventListener("alice:ioc-viewer-loaded", event => {
+window.addEventListener("alice:ioc-viewer-loaded", event => {
   if (event.detail?.clockTree) applyClockTree(event.detail.clockTree, event.detail.fileName || "IOC");
 });
 
