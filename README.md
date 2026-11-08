@@ -1,6 +1,6 @@
 <p align="center">
-  <a href="https://github.com/new-bmp/AliceSim/releases/download/v1.0.0/AliceSIM-Launch-2026-1080p.mp4">
-    <img src="docs/showcase/hero.png" alt="AliceSIM · 嵌入式仿真学习平台：写代码、接电路、看结果" width="100%" />
+  <a href="https://github.com/new-bmp/AliceSim/raw/refs/heads/main/docs/showcase/ai-companion-2026/AliceSIM-AI-Companion-2026-1080p.mp4">
+    <img src="docs/showcase/ai-companion-2026/cover.jpg" alt="AliceSIM · 有问题，一起做实验：提问、预测、动手、验证、讲义" width="100%" />
   </a>
 </p>
 
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/new-bmp/AliceSim/releases/tag/v1.0.0">观看宣传片</a> ·
+  <a href="docs/showcase/ai-companion-2026/README.md">观看新版宣传片</a> ·
   <a href="https://github.com/new-bmp/AliceSim/archive/refs/heads/main.zip">下载最新源码</a> ·
   <a href="tutorials/README.md">教程与例程</a> ·
   <a href="Drivers/AliceSIM/README.md">外设驱动</a> ·
@@ -23,7 +23,7 @@
 
 AliceSIM 是面向学生与教师的嵌入式仿真学习平台。它把工程、代码、电路和观测工具放在一起：导入 CubeMX 工程，核对 IOC 引脚和外设配置，构建固件，再让程序驱动自己连接的元件。
 
-点击顶部封面可打开 **85 秒的 1080p 宣传片**，包含中文旁白、配乐和字幕。[Release 中也提供视频、封面与 SRT 下载](https://github.com/new-bmp/AliceSim/releases/tag/v1.0.0)。以下图片均来自 AliceSIM 实际运行画面。
+点击顶部封面可打开 **90 秒的新版 1080p 宣传片**，包含中文旁白、配乐和字幕。前 22 秒展示元件联动、SPI 彩屏、PWM 波形与串口，随后介绍 AI 助手如何结合工程提问、现场标注、分步陪练、排查 DMA 故障、验收结果和生成讲义。[下载视频、封面与 SRT](docs/showcase/ai-companion-2026/README.md)。以下图片均来自 AliceSIM 实际运行画面。
 
 ![AliceSIM 工作台：工程目录、电路与运行工具](docs/showcase/workbench.png)
 
@@ -77,6 +77,10 @@ AliceSIM 是面向学生与教师的嵌入式仿真学习平台。它把工程�
 ## AI 学习助手
 
 顶部“学习助手”可结合当前代码、IOC、接线与观测记录解释问题，通过画圈、箭头、高亮指向元件、引脚、导线、代码行或波形。它使用通用工程上下文，适用于自行创建的工程。
+
+![AI 学习助手：结合当前工程提问、排查与陪练](docs/showcase/ai-companion-2026/assistant.jpg)
+
+点击“先考考我”，助手会根据工程提出预测问题；可以点选答案，也可以写下自己的思路。回答后继续追问、澄清不确定的地方。在任务中可以选择“我卡住了”“换个说法”或“点评我的预测”，讨论后返回原步骤继续操作。
 
 “跟着做”和“挑战练习”可按目标生成分步任务，提供三层提示、实验前预测、目标与实测对比。运行验收可自动改变已注册的输入，检查接线、ADC、PWM 和串口等结果，结束后恢复输入；缺少证据会明确提示。步骤、预测与历史记录随工程保存。
 
