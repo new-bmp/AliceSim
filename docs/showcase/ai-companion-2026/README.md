@@ -1,10 +1,10 @@
 # AliceSIM · 有问题，一起做实验
 
-[![观看 AliceSIM 新版宣传片](cover.jpg)](https://github.com/new-bmp/AliceSim/raw/refs/heads/main/docs/showcase/ai-companion-2026/AliceSIM-AI-Companion-2026-1080p.mp4)
+[![观看 AliceSIM 新版宣传片](cover.jpg)](https://github.com/new-bmp/AliceSim/releases/download/v1.1.0/AliceSIM-AI-Companion-2026-1080p.mp4)
 
 90 秒，1920 × 1080，30 fps，中文旁白、配乐与同步字幕。
 
-[观看 / 下载 MP4](https://github.com/new-bmp/AliceSim/raw/refs/heads/main/docs/showcase/ai-companion-2026/AliceSIM-AI-Companion-2026-1080p.mp4) · [中文字幕 SRT](subtitles.srt) · [封面](cover.jpg)
+[观看 / 下载 MP4](https://github.com/new-bmp/AliceSim/releases/download/v1.1.0/AliceSIM-AI-Companion-2026-1080p.mp4) · [中文字幕 SRT](subtitles.srt) · [封面](cover.jpg) · [完整 Release](https://github.com/new-bmp/AliceSim/releases/tag/v1.1.0)
 
 | 时间 | 内容 |
 | --- | --- |

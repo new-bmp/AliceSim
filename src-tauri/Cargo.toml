@@ -1,6 +1,6 @@
 [package]
 name = "alicesim"
-version = "0.2.0"
+version = "1.1.0"
 description = "AliceSIM cross-platform STM32 simulator"
 authors = ["AliceSIM contributors"]
 edition = "2021"

@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://github.com/new-bmp/AliceSim/raw/refs/heads/main/docs/showcase/ai-companion-2026/AliceSIM-AI-Companion-2026-1080p.mp4">
+  <a href="https://github.com/new-bmp/AliceSim/releases/download/v1.1.0/AliceSIM-AI-Companion-2026-1080p.mp4">
     <img src="docs/showcase/ai-companion-2026/cover.jpg" alt="AliceSIM · 有问题，一起做实验：提问、预测、动手、验证、讲义" width="100%" />
   </a>
 </p>
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/showcase/ai-companion-2026/README.md">观看新版宣传片</a> ·
+  <a href="https://github.com/new-bmp/AliceSim/releases/tag/v1.1.0">下载 1.1 / 观看宣传片</a> ·
   <a href="https://github.com/new-bmp/AliceSim/archive/refs/heads/main.zip">下载最新源码</a> ·
   <a href="tutorials/README.md">教程与例程</a> ·
   <a href="Drivers/AliceSIM/README.md">外设驱动</a> ·
@@ -178,6 +178,6 @@ pnpm desktop:build
 <p align="center">
   <strong>AliceSIM · 从看见现象，走向理解原理。</strong><br />
   <a href="tutorials/README.md">开始学习</a> ·
-  <a href="https://github.com/new-bmp/AliceSim/releases/tag/v1.0.0">宣传片与发布</a> ·
+  <a href="https://github.com/new-bmp/AliceSim/releases/tag/v1.1.0">宣传片与发布</a> ·
   <a href="https://github.com/new-bmp/AliceSim/issues">提交反馈</a>
 </p>
